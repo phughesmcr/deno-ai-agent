@@ -1,0 +1,105 @@
+{
+  "name": "@phughesmcr/deno-ai-agent",
+  "version": "0.0.1",
+  "license": "MIT",
+  "lock": true,
+  "exports": "./main.ts",
+  "nodeModulesDir": "auto",
+  "minimumDependencyAge": "P2D",
+  "publish": {
+    "include": [
+      "README.md",
+      "LICENSE",
+      "main.ts",
+      "src/**/*.ts"
+    ],
+    "exclude": [
+      "example/**",
+      "bench/**",
+      "test/**",
+      ".github/**",
+      ".vscode/**",
+      ".cursor/**",
+      ".claude/**"
+    ]
+  },
+  "test": {
+    "include": ["test/**/*.test.ts"]
+  },
+  "bench": {
+    "include": ["bench/**/*.bench.ts"]
+  },
+  "compilerOptions": {
+    "allowUnreachableCode": false,
+    "allowUnusedLabels": false,
+    "lib": ["esnext", "deno.ns", "deno.worker"],
+    "module": "esnext",
+    "noErrorTruncation": true,
+    "noFallthroughCasesInSwitch": true,
+    "noImplicitOverride": true,
+    "noImplicitReturns": true,
+    "noPropertyAccessFromIndexSignature": true,
+    "noUncheckedIndexedAccess": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "strict": true,
+    "verbatimModuleSyntax": true
+  },
+  "fmt": {
+    "bracePosition": "sameLine",
+    "indentWidth": 2,
+    "lineWidth": 120,
+    "newLineKind": "lf",
+    "nextControlFlowPosition": "sameLine",
+    "operatorPosition": "sameLine",
+    "proseWrap": "always",
+    "quoteProps": "consistent",
+    "semiColons": true,
+    "singleQuote": false,
+    "trailingCommas": "onlyMultiLine",
+    "useBraces": "whenNotSingleLine",
+    "useTabs": false,
+    "exclude": ["*.md", "**/*.md", "LICENSE"]
+  },
+  "lint": {
+    "rules": {
+      "tags": [
+        "recommended",
+        "jsr"
+      ],
+      "include": [
+        "camelcase",
+        "default-param-last",
+        "explicit-function-return-type",
+        "explicit-module-boundary-types",
+        "no-await-in-loop",
+        "no-await-in-sync-fn",
+        "no-console",
+        "no-const-assign",
+        "no-eval",
+        "no-non-null-asserted-optional-chain",
+        "no-sync-fn-in-async-fn",
+        "no-throw-literal",
+        "no-top-level-await",
+        "no-undef",
+        "no-useless-rename",
+        "prefer-ascii",
+        "single-var-declarator"
+      ]
+    }
+  },
+  "tasks": {
+    "check:docs": "deno doc --lint main.ts src/**/*.ts",
+    "check:fmt": "deno fmt --check",
+    "check:lint": "deno lint",
+    "check:types": "deno check --allow-import main.ts src/**/*.ts test/**/*.test.ts bench/**/*.ts",
+    "ci": "CI=1 deno task check:fmt && deno task check:lint && deno task check:types && deno task check:docs && deno task test",
+    "start": "deno run --env-file=.env --allow-read --allow-net --allow-env main.ts",
+    "test": "deno test test/**/*.test.ts"
+  },
+  "imports": {
+    "@lmstudio/sdk": "npm:@lmstudio/sdk@^1.5.0",
+    "grammy": "npm:grammy@^1.43.0",
+    "zod": "npm:zod@^4.4.3"
+  }
+}
