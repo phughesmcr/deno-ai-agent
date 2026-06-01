@@ -1,101 +1,110 @@
-import { normalizeRoot } from "./path.ts";
+import * as path from "@std/path";
 
-/** Sandbox root for all tool paths and bash cwd. */
+import {
+  type ApprovalGate,
+  type ApprovalOperation,
+  type ApprovalRequest,
+  type ApprovalRisk,
+  createDenyApprovalGate,
+  DEFAULT_APPROVAL_TIMEOUT_MS,
+  requireApproval,
+} from "../approval.ts";
+import { WorkspaceSandbox } from "../workspace-sandbox.ts";
+
+/** Workspace-scoped root for all tool I/O. */
 export interface ToolContext {
-  /** Absolute workspace directory path. */
+  /** Absolute workspace directory; all tool paths must resolve inside this tree. */
   readonly root: string;
+  /** Canonical workspace path resolver. */
+  readonly sandbox: WorkspaceSandbox;
+  /** Per-operation approval boundary for privileged tool side effects. */
+  readonly approvalGate: ApprovalGate;
+  /** Returns the current session id for approval requests. */
+  readonly getSessionId: () => string;
+  /** Returns the current turn id for approval requests. */
+  readonly getTurnId: () => string;
+  /** Abort signal for the active turn, when available. */
+  readonly signal?: AbortSignal;
 }
 
-function hasParentSegment(path: string): boolean {
-  const parts = path.split(/[/\\]/);
-  return parts.some((part) => part === "..");
+/** Options for creating a tool context. */
+export interface ToolContextOptions {
+  /** Approval gate used by privileged tool adapters. Defaults to deny. */
+  approvalGate?: ApprovalGate;
+  /** Session id or getter used in approval requests. */
+  sessionId?: string | (() => string);
+  /** Turn id or getter used in approval requests. */
+  turnId?: string | (() => string);
+  /** Abort signal for the active model turn. */
+  signal?: AbortSignal;
+  /** Pre-created sandbox, primarily for tests and shared runtime wiring. */
+  sandbox?: WorkspaceSandbox;
 }
 
-function isUnderRoot(resolved: string, root: string): boolean {
-  return resolved === root || resolved.startsWith(`${root}/`);
+/** Normalizes workspace root (no trailing separator). */
+export function normalizeRoot(root: string): string {
+  const resolved = path.resolve(root);
+  return resolved.endsWith(path.SEPARATOR) ? resolved.slice(0, -1) : resolved;
 }
 
-async function resolveWorkspaceRoot(ctx: ToolContext): Promise<string> {
-  try {
-    return normalizeRoot(await Deno.realPath(ctx.root));
-  } catch {
-    return normalizeRoot(ctx.root);
+function valueGetter(value: string | (() => string) | undefined, fallback: string): () => string {
+  if (typeof value === "function") return value;
+  return () => value ?? fallback;
+}
+
+/** Creates context with a canonical workspace root (resolves symlinks such as /var to /private/var). */
+export async function createToolContext(root: string, options: ToolContextOptions = {}): Promise<ToolContext> {
+  const sandbox = options.sandbox ?? await WorkspaceSandbox.create(root);
+  const context: ToolContext = {
+    root: sandbox.root,
+    sandbox,
+    approvalGate: options.approvalGate ?? createDenyApprovalGate(),
+    getSessionId: valueGetter(options.sessionId, "unknown-session"),
+    getTurnId: valueGetter(options.turnId, "unknown-turn"),
+  };
+  if (options.signal !== undefined) {
+    return { ...context, signal: options.signal };
   }
+  return context;
 }
 
-/** Resolve a user path against the workspace root and verify it stays inside. */
+/**
+ * Resolves a user path to an absolute path under the workspace root.
+ * @throws Error if the path escapes the workspace.
+ */
 export async function resolvePath(ctx: ToolContext, userPath: string): Promise<string> {
-  const root = await resolveWorkspaceRoot(ctx);
-  if (hasParentSegment(userPath)) {
-    throw new Error("Path escapes workspace");
-  }
-
-  const base = userPath.startsWith("/") ? userPath : `${root}/${userPath.replace(/^\.\//, "")}`;
-  const normalizedBase = normalizeRoot(base);
-
-  try {
-    const resolved = normalizeRoot(await Deno.realPath(base));
-    if (!isUnderRoot(resolved, root)) {
-      throw new Error("Path escapes workspace");
-    }
-    return resolved;
-  } catch (error) {
-    if (error instanceof Error && error.message === "Path escapes workspace") throw error;
-    if (!(error instanceof Deno.errors.NotFound)) throw error;
-  }
-
-  const slashIdx = normalizedBase.lastIndexOf("/");
-  const parent = slashIdx > 0 ? normalizedBase.slice(0, slashIdx) : "";
-  if (parent.length >= root.length) {
-    try {
-      const resolvedParent = normalizeRoot(await Deno.realPath(parent));
-      if (!isUnderRoot(resolvedParent, root)) {
-        throw new Error("Path escapes workspace");
-      }
-      const suffix = normalizedBase.slice(parent.length);
-      const resolved = normalizeRoot(`${resolvedParent}${suffix}`);
-      if (!isUnderRoot(resolved, root)) {
-        throw new Error("Path escapes workspace");
-      }
-      return resolved;
-    } catch (error) {
-      if (error instanceof Error && error.message === "Path escapes workspace") throw error;
-    }
-  }
-
-  if (!isUnderRoot(normalizedBase, root)) {
-    throw new Error("Path escapes workspace");
-  }
-  return normalizedBase;
+  return await ctx.sandbox.resolvePath(userPath);
 }
 
-/** Resolve and verify an existing path is under the workspace root. */
-export async function resolveExistingPath(ctx: ToolContext, userPath: string): Promise<string> {
-  const resolved = await resolvePath(ctx, userPath);
-  try {
-    await Deno.stat(resolved);
-  } catch {
-    throw new Error(`Path not found: ${userPath}`);
-  }
-  return resolved;
+/** @throws Error if path is not an existing directory under the workspace. */
+export async function resolveDirectoryPath(ctx: ToolContext, userPath: string): Promise<string> {
+  return await ctx.sandbox.resolveDirectoryPath(userPath || ".");
 }
 
-/** Resolve a directory path; throw if missing or not a directory. */
-export async function resolveDirectory(ctx: ToolContext, userPath: string): Promise<string> {
-  const resolved = await resolveExistingPath(ctx, userPath);
-  const stat = await Deno.stat(resolved);
-  if (!stat.isDirectory) {
-    throw new Error(`Not a directory: ${userPath}`);
-  }
-  return resolved;
+/** Converts an absolute path to a display path relative to workspace root when possible. */
+export function displayPath(ctx: ToolContext, absolutePath: string): string {
+  return ctx.sandbox.displayPath(absolutePath);
 }
 
-/** Relative path from workspace root for tool output. */
-export function relativeToRoot(ctx: ToolContext, absolutePath: string): string {
-  const root = normalizeRoot(ctx.root);
-  if (absolutePath === root) return ".";
-  if (absolutePath.startsWith(`${root}/`)) {
-    return absolutePath.slice(root.length + 1);
-  }
-  return absolutePath;
+/** Requests approval for a tool operation. */
+export async function approveToolOperation(
+  ctx: ToolContext,
+  spec: {
+    operation: ApprovalOperation;
+    target: string;
+    risk: ApprovalRisk;
+    summary?: string;
+    timeoutMs?: number;
+  },
+): Promise<void> {
+  const request: ApprovalRequest = {
+    operation: spec.operation,
+    target: spec.target,
+    risk: spec.risk,
+    sessionId: ctx.getSessionId(),
+    turnId: ctx.getTurnId(),
+    timeoutMs: spec.timeoutMs ?? DEFAULT_APPROVAL_TIMEOUT_MS,
+  };
+  if (spec.summary !== undefined) request.summary = spec.summary;
+  await requireApproval(ctx.approvalGate, request, ctx.signal);
 }

@@ -1,48 +1,53 @@
-import { assertEquals, assertRejects } from "jsr:@std/assert@1";
-import { join } from "node:path";
+import { assertEquals } from "jsr:@std/assert@1";
+
 import { createEditTool } from "../../src/tools/edit.ts";
-import { toolImplementation } from "./impl.ts";
+import { createTestWorkspace, runToolImplementation, runToolImplementationThrows } from "./helpers.ts";
 
 Deno.test("edit replaces unique text", async () => {
-  const root = await Deno.makeTempDir({ prefix: "edit-tool-" });
+  const { dir, ctx, cleanup } = await createTestWorkspace();
   try {
-    const file = join(root, "f.txt");
-    await Deno.writeTextFile(file, "alpha beta gamma");
-    const edit = toolImplementation<
-      { path: string; edits: { oldText: string; newText: string }[] },
-      string
-    >(createEditTool({ root }));
-    await edit({
+    await Deno.writeTextFile(`${dir}/f.txt`, "alpha\nbeta\ngamma");
+    const tool = createEditTool(ctx);
+    await runToolImplementation(tool, {
       path: "f.txt",
       edits: [{ oldText: "beta", newText: "BETA" }],
     });
-    assertEquals(await Deno.readTextFile(file), "alpha BETA gamma");
+    assertEquals(await Deno.readTextFile(`${dir}/f.txt`), "alpha\nBETA\ngamma");
   } finally {
-    await Deno.remove(root, { recursive: true });
+    await cleanup();
   }
 });
 
 Deno.test("edit rejects overlapping edits", async () => {
-  const root = await Deno.makeTempDir({ prefix: "edit-tool-" });
+  const { ctx, cleanup } = await createTestWorkspace();
   try {
-    await Deno.writeTextFile(join(root, "f.txt"), "abcdef");
-    const edit = toolImplementation<
-      { path: string; edits: { oldText: string; newText: string }[] },
-      string
-    >(createEditTool({ root }));
-    await assertRejects(
-      () =>
-        edit({
-          path: "f.txt",
-          edits: [
-            { oldText: "abc", newText: "1" },
-            { oldText: "bcd", newText: "2" },
-          ],
-        }),
-      Error,
-      "overlap",
-    );
+    const tool = createEditTool(ctx);
+    await Deno.writeTextFile(`${ctx.root}/o.txt`, "abcdef");
+    const err = await runToolImplementationThrows(tool, {
+      path: "o.txt",
+      edits: [
+        { oldText: "abc", newText: "x" },
+        { oldText: "bcd", newText: "y" },
+      ],
+    });
+    assertEquals(err.message.includes("overlap"), true);
   } finally {
-    await Deno.remove(root, { recursive: true });
+    await cleanup();
+  }
+});
+
+Deno.test("edit preserves CRLF line endings", async () => {
+  const { dir, ctx, cleanup } = await createTestWorkspace();
+  try {
+    await Deno.writeTextFile(`${dir}/crlf.txt`, "a\r\nb\r\n");
+    const tool = createEditTool(ctx);
+    await runToolImplementation(tool, {
+      path: "crlf.txt",
+      edits: [{ oldText: "b", newText: "B" }],
+    });
+    const content = await Deno.readTextFile(`${dir}/crlf.txt`);
+    assertEquals(content, "a\r\nB\r\n");
+  } finally {
+    await cleanup();
   }
 });

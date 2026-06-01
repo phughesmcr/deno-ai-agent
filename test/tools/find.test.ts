@@ -1,19 +1,31 @@
-import { assertStringIncludes } from "jsr:@std/assert@1";
-import { join } from "node:path";
-import { createFindTool } from "../../src/tools/find.ts";
-import { toolImplementation } from "./impl.ts";
+import { assertEquals, assertStringIncludes } from "jsr:@std/assert@1";
 
-Deno.test("find fallback matches glob", async () => {
-  const root = await Deno.makeTempDir({ prefix: "find-tool-" });
+import { createFindTool } from "../../src/tools/find.ts";
+import { createTestWorkspace, runToolImplementation } from "./helpers.ts";
+
+Deno.test("find matches glob with built-in walker", async () => {
+  const { dir, ctx, cleanup } = await createTestWorkspace();
   try {
-    await Deno.writeTextFile(join(root, "one.json"), "{}");
-    await Deno.writeTextFile(join(root, "two.txt"), "");
-    const run = toolImplementation<{ pattern: string; limit?: number }, string>(
-      createFindTool({ root }, { forceFallback: true }),
-    );
-    const out = await run({ pattern: "*.json", limit: 100 });
-    assertStringIncludes(out, "one.json");
+    await Deno.writeTextFile(`${dir}/a.json`, "{}");
+    await Deno.writeTextFile(`${dir}/b.txt`, "");
+    const tool = createFindTool(ctx);
+    const out = await runToolImplementation(tool, { pattern: "*.json" });
+    assertStringIncludes(out, "a.json");
   } finally {
-    await Deno.remove(root, { recursive: true });
+    await cleanup();
+  }
+});
+
+Deno.test("find returns files only", async () => {
+  const { dir, ctx, cleanup } = await createTestWorkspace();
+  try {
+    await Deno.mkdir(`${dir}/match.json`);
+    await Deno.writeTextFile(`${dir}/match-file.json`, "{}");
+    const tool = createFindTool(ctx);
+    const out = await runToolImplementation(tool, { pattern: "*.json" });
+    assertStringIncludes(out, "match-file.json");
+    assertEquals(out.includes("match.json/"), false);
+  } finally {
+    await cleanup();
   }
 });

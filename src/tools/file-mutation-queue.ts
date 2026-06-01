@@ -1,3 +1,5 @@
+import * as path from "@std/path";
+
 const fileMutationQueues = new Map<string, Promise<void>>();
 let registrationQueue = Promise.resolve();
 
@@ -6,15 +8,16 @@ function isMissingPathError(error: unknown): boolean {
 }
 
 async function getMutationQueueKey(filePath: string): Promise<string> {
+  const resolvedPath = path.resolve(filePath);
   try {
-    return await Deno.realPath(filePath);
+    return await Deno.realPath(resolvedPath);
   } catch (error) {
-    if (isMissingPathError(error)) return filePath;
+    if (isMissingPathError(error)) return resolvedPath;
     throw error;
   }
 }
 
-/** Serialize write/edit operations targeting the same file. */
+/** Serialize file mutations targeting the same path; different paths run in parallel. */
 export async function withFileMutationQueue<T>(filePath: string, fn: () => Promise<T>): Promise<T> {
   const registration = registrationQueue.then(async () => {
     const key = await getMutationQueueKey(filePath);
@@ -29,7 +32,10 @@ export async function withFileMutationQueue<T>(filePath: string, fn: () => Promi
 
     return { key, currentQueue, chainedQueue, releaseNext };
   });
-  registrationQueue = registration.then(() => undefined, () => undefined);
+  registrationQueue = registration.then(
+    () => undefined,
+    () => undefined,
+  );
 
   const { key, currentQueue, chainedQueue, releaseNext } = await registration;
   await currentQueue;

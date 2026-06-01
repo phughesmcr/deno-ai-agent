@@ -1,30 +1,107 @@
+import { createAgentTool } from "./agent.ts";
+import { createAskUserQuestionTool } from "./ask-user-question.ts";
 import { createBashTool } from "./bash.ts";
-import type { ToolContext } from "./context.ts";
+import { createToolContext, type ToolContext } from "./context.ts";
 import { createEditTool } from "./edit.ts";
 import { createFindTool } from "./find.ts";
 import { createGrepTool } from "./grep.ts";
 import { createLsTool } from "./ls.ts";
-import { normalizeRoot } from "./path.ts";
 import { createReadTool } from "./read.ts";
+import { createSkillTool } from "./skill.ts";
+import { createNoopTodoDisplayPort } from "./todo-display-port.ts";
+import { createTodoWriteTool, type TodoWriteDeps } from "./todo-write.ts";
+import { type AskUserQuestionPort, createUnavailableAskUserQuestionPort } from "./user-question-port.ts";
 import { createWriteTool } from "./write.ts";
+import { createSkillManager, type SkillManager } from "../skills/mod.ts";
+import { createUnavailableSubagentPort, type SubagentPort } from "../subagents.ts";
 
-/** Names of workspace-scoped tools registered with the model. */
-export type ToolName = "read" | "write" | "edit" | "bash" | "grep" | "find" | "ls";
+export { createToolContext, normalizeRoot } from "./context.ts";
+export type { ToolContext, ToolContextOptions } from "./context.ts";
+export { preprocessSystemPrompt } from "./prompt.ts";
+export { createNoopTodoDisplayPort } from "./todo-display-port.ts";
+export type { TodoDisplayPort } from "./todo-display-port.ts";
+export { type AskUserQuestionPort, createUnavailableAskUserQuestionPort } from "./user-question-port.ts";
+export { createAgentTool } from "./agent.ts";
+export type { AgentAction, AgentToolParams, AgentToolResponse } from "./agent.ts";
+export { createUnavailableSubagentPort } from "../subagents.ts";
+export type { SubagentPort, SubagentRecord, SubagentStatus } from "../subagents.ts";
 
-export type { ToolContext } from "./context.ts";
-export { prepareSystemPrompt, ToolNames } from "./prompt.ts";
+/** Pi-aligned tool identifiers registered with the model. */
+export type ToolName =
+  | "read"
+  | "write"
+  | "edit"
+  | "bash"
+  | "grep"
+  | "find"
+  | "ls"
+  | "skill"
+  | "todo_write"
+  | "ask_user_question"
+  | "agent";
 
-/** Returns the LM Studio tools available to the model, scoped to the workspace root. */
-export function getModelTools(ctx: ToolContext): unknown[] {
-  const root = normalizeRoot(ctx.root);
-  const context: ToolContext = { root };
+/** All tool names in registration order. */
+export const allToolNames: ToolName[] = [
+  "read",
+  "write",
+  "edit",
+  "bash",
+  "grep",
+  "find",
+  "ls",
+  "skill",
+  "todo_write",
+  "ask_user_question",
+  "agent",
+];
+
+/**
+ * Dependencies for building the full model tool set.
+ * @internal
+ */
+export interface ModelToolDeps {
+  workspace: ToolContext;
+  userQuestions: AskUserQuestionPort;
+  todos: TodoWriteDeps;
+  skills: {
+    manager: SkillManager;
+    getSessionId: () => string;
+  };
+  subagents: SubagentPort;
+}
+
+/** Returns all coding tools for the given workspace root. */
+export function getModelTools(deps: ModelToolDeps): unknown[] {
   return [
-    createReadTool(context),
-    createWriteTool(context),
-    createEditTool(context),
-    createBashTool(context),
-    createGrepTool(context),
-    createFindTool(context),
-    createLsTool(context),
+    createReadTool(deps.workspace),
+    createWriteTool(deps.workspace),
+    createEditTool(deps.workspace),
+    createBashTool(deps.workspace),
+    createGrepTool(deps.workspace),
+    createFindTool(deps.workspace),
+    createLsTool(deps.workspace),
+    createSkillTool(deps.skills.manager, deps.workspace),
+    createTodoWriteTool({ ...deps.todos, workspace: deps.workspace }),
+    createAskUserQuestionTool(deps.userQuestions),
+    createAgentTool(deps.subagents),
   ];
+}
+
+/** Creates tools from a workspace directory path (canonicalizes root). */
+export async function getModelToolsForRoot(root: string): Promise<unknown[]> {
+  const skills = await createSkillManager({ root });
+  return getModelTools({
+    workspace: await createToolContext(root),
+    userQuestions: createUnavailableAskUserQuestionPort(),
+    todos: {
+      getSessionId: () => "00000000-0000-4000-8000-000000000000",
+      todosDir: `${root}/todos`,
+      display: createNoopTodoDisplayPort(),
+    },
+    skills: {
+      manager: skills,
+      getSessionId: () => "00000000-0000-4000-8000-000000000000",
+    },
+    subagents: createUnavailableSubagentPort(),
+  });
 }

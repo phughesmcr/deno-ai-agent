@@ -1,7 +1,11 @@
 import { Bot, type Context, GrammyError, HttpError } from "grammy";
+import { questions, type QuestionsFlavor } from "grammy-questions";
 import type { SessionManager } from "../context/session.ts";
 import { logDebug } from "../log.ts";
+import type { TodoTelegramMeta } from "../tools/todo-write.ts";
+import type { AskUserQuestionPort } from "../tools/user-question-port.ts";
 import { SESSION_HELP, TelegramCommandHandler } from "./commands.ts";
+import { showTodosForSession } from "./grammy-todo-display-adapter.ts";
 import { replyError } from "./telegram-reply.ts";
 
 interface BotConfig {
@@ -13,12 +17,19 @@ interface BotConfig {
  * Grammy context extended with bot configuration.
  * @internal
  */
-export type TelegramContext = Context & {
-  config: BotConfig;
-};
+export type TelegramContext = QuestionsFlavor<
+  Context & {
+    config: BotConfig;
+  }
+>;
 
 interface TelegramManager {
   readonly bot: Bot<TelegramContext>;
+}
+
+interface TelegramApprovalPort {
+  isPending(): boolean;
+  handleCallback(ctx: TelegramContext): Promise<boolean>;
 }
 
 function getEnv(): { token: string; adminId: number } {
@@ -38,15 +49,29 @@ function sessionArg(ctx: TelegramContext): string | undefined {
   return ctx.message?.text?.split(/\s+/)[1];
 }
 
+const PENDING_INTERACTION_HINT = "Please resolve the pending question or approval first.";
+
 /**
  * Creates and configures the Telegram bot from environment variables.
  * @internal
  */
-export function createTelegramManager({ session }: { session: SessionManager }): TelegramManager {
+export function createTelegramManager({
+  session,
+  userQuestions,
+  approvals,
+  todosDir,
+  updateTelegramMeta,
+}: {
+  session: SessionManager;
+  userQuestions?: AskUserQuestionPort;
+  approvals?: TelegramApprovalPort;
+  todosDir?: string;
+  updateTelegramMeta?: (sessionId: string, meta: TodoTelegramMeta) => Promise<void>;
+}): TelegramManager {
   const { token, adminId } = getEnv();
 
   const bot = new Bot<TelegramContext>(token);
-  const commands = new TelegramCommandHandler(session);
+  const commands = new TelegramCommandHandler(session, todosDir);
 
   bot.catch(async (err) => {
     const ctx = err.ctx;
@@ -80,6 +105,29 @@ export function createTelegramManager({ session }: { session: SessionManager }):
     await next();
   });
 
+  bot.use(
+    questions({
+      filter: (ctx) => ctx.config.isAdmin,
+      getStorageKey: (ctx) => {
+        const threadId = ctx.message?.message_thread_id ?? ctx.callbackQuery?.message?.message_thread_id ?? 0;
+        return `silas-${ctx.chat?.id}-${threadId}`;
+      },
+    }),
+  );
+
+  bot.on("callback_query:data", async (ctx, next) => {
+    if (await approvals?.handleCallback(ctx)) return;
+    await next();
+  });
+
+  function blockIfInteractionPending(ctx: TelegramContext): boolean {
+    if (userQuestions?.isPending() || approvals?.isPending()) {
+      void ctx.reply(PENDING_INTERACTION_HINT);
+      return true;
+    }
+    return false;
+  }
+
   bot.command("start", async (ctx) => {
     if (ctx.config.isAdmin) {
       await ctx.reply(`Hello, admin!\n\n${SESSION_HELP}`);
@@ -93,22 +141,27 @@ export function createTelegramManager({ session }: { session: SessionManager }):
   });
 
   bot.command("new", async (ctx: TelegramContext) => {
+    if (blockIfInteractionPending(ctx)) return;
     await ctx.reply(commands.newSession());
   });
 
   bot.command("session", async (ctx: TelegramContext) => {
+    if (blockIfInteractionPending(ctx)) return;
     await ctx.reply(commands.session());
   });
 
   bot.command("stats", async (ctx: TelegramContext) => {
+    if (blockIfInteractionPending(ctx)) return;
     await ctx.reply(await commands.stats());
   });
 
   bot.command("fork", async (ctx: TelegramContext) => {
+    if (blockIfInteractionPending(ctx)) return;
     await ctx.reply(await commands.fork());
   });
 
   async function handleLoad(ctx: TelegramContext): Promise<void> {
+    if (blockIfInteractionPending(ctx)) return;
     await ctx.reply(await commands.load(sessionArg(ctx)));
   }
 
@@ -116,11 +169,27 @@ export function createTelegramManager({ session }: { session: SessionManager }):
   bot.command("resume", handleLoad);
 
   bot.command("save", async (ctx: TelegramContext) => {
+    if (blockIfInteractionPending(ctx)) return;
     await ctx.reply(await commands.save());
   });
 
   bot.command("list", async (ctx: TelegramContext) => {
+    if (blockIfInteractionPending(ctx)) return;
     await ctx.reply(await commands.list());
+  });
+
+  bot.command("todos", async (ctx: TelegramContext) => {
+    if (blockIfInteractionPending(ctx)) return;
+    if (!todosDir || !updateTelegramMeta) {
+      await ctx.reply("Todo list is not configured.");
+      return;
+    }
+    try {
+      await showTodosForSession(ctx, session.id, todosDir, updateTelegramMeta);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      await ctx.reply(`Failed to show todos: ${message}`);
+    }
   });
 
   return { bot };

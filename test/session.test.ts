@@ -1,6 +1,7 @@
 import { Chat, ChatMessage, type ChatMessageData, type LLM, type Tool } from "@lmstudio/sdk";
 import { assert } from "jsr:@std/assert@1/assert";
 import { assertEquals } from "jsr:@std/assert@1/equals";
+import { assertStringIncludes } from "jsr:@std/assert@1/string-includes";
 import { SessionStore } from "../src/context/session-store.ts";
 import { type ModelActObserver, SessionManager } from "../src/context/session.ts";
 
@@ -36,6 +37,7 @@ interface FakeActCall {
 
 class FakeModel {
   replies = ["reply"];
+  messages?: ChatMessage[];
   emitToolEvents = false;
   readonly actCalls: FakeActCall[] = [];
   readonly countTokenInputs: string[] = [];
@@ -54,8 +56,9 @@ class FakeModel {
       options.onToolCallRequestFinalized?.(0, 7, { toolCallRequest: { name: "read" } });
     }
 
-    for (const reply of this.replies) {
-      options.onMessage?.(ChatMessage.create("assistant", reply));
+    const messages = this.messages ?? this.replies.map((reply) => ChatMessage.create("assistant", reply));
+    for (const message of messages) {
+      options.onMessage?.(message);
     }
     options.onRoundEnd?.(0);
     return Promise.resolve();
@@ -70,6 +73,15 @@ class FakeModel {
 
 function rawMessage(role: "assistant" | "system" | "user", text: string): ChatMessageData {
   return (ChatMessage.create(role, text) as ChatMessageWithRaw).getRaw();
+}
+
+function toolMessage(text: string): ChatMessage {
+  return ChatMessage.from(
+    {
+      role: "tool",
+      content: [{ type: "toolCallResult", content: text, toolCallId: "tool-call-1" }],
+    } satisfies ChatMessageData,
+  );
 }
 
 function snapshot(chat: Chat): [string, string][] {
@@ -186,6 +198,36 @@ Deno.test("SessionManager sends prompt, user text, tools, replies, tokens, and o
       "message",
       "round-end:0",
     ]);
+  });
+});
+
+Deno.test("SessionManager keeps tool results in context without returning them as Telegram replies", async () => {
+  await withSession(async ({ session, model }) => {
+    model.messages = [
+      toolMessage('<skill_content name="docs">\nSkill body\n</skill_content>'),
+      ChatMessage.create("assistant", "visible reply"),
+    ];
+
+    const result = await session.runTurn("load docs skill", {
+      tools: [],
+      signal: new AbortController().signal,
+    });
+
+    assertEquals(result.replyTexts, ["visible reply"]);
+    assertEquals(result.turnTokens, 7);
+    assertEquals(result.totalTokens, 11);
+
+    await session.runTurn("after tool", { tools: [], signal: new AbortController().signal });
+    const call = model.actCalls[1];
+    assert(call);
+    assertEquals(snapshot(call.chat), [
+      ["system", "current system prompt"],
+      ["user", "load docs skill"],
+      ["tool", ""],
+      ["assistant", "visible reply"],
+      ["user", "after tool"],
+    ]);
+    assertStringIncludes(call.chat.getMessagesArray()[2]?.toString() ?? "", '<skill_content name="docs">');
   });
 });
 

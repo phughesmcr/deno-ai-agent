@@ -1,47 +1,54 @@
 import { tool } from "@lmstudio/sdk";
 import { z } from "zod/v3";
 
-import { resolvePath, type ToolContext } from "./context.ts";
+import { approveToolOperation, displayPath, resolvePath, type ToolContext } from "./context.ts";
 import { DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES, formatSize, truncateHead } from "./truncate.ts";
 
 const IMAGE_EXTENSIONS = new Set([".jpg", ".jpeg", ".png", ".gif", ".webp"]);
 
-function isImagePath(path: string): boolean {
-  const lower = path.toLowerCase();
+function isImagePath(filePath: string): boolean {
+  const lower = filePath.toLowerCase();
   for (const ext of IMAGE_EXTENSIONS) {
     if (lower.endsWith(ext)) return true;
   }
   return false;
 }
 
-const DESCRIPTION =
-  `Read the contents of a file. Supports text files and images (jpg, png, gif, webp). Images are sent as attachments. For text files, output is truncated to ${DEFAULT_MAX_LINES} lines or ${
-    DEFAULT_MAX_BYTES / 1024
-  }KB (whichever is hit first). Use offset/limit for large files. When you need the full file, continue with offset until complete.`;
-
-export function createReadTool(ctx: ToolContext): ReturnType<typeof tool> {
+export function createReadTool(ctx: ToolContext): unknown {
   return tool({
     name: "read",
-    description: DESCRIPTION,
+    description: `Read the contents of a file. Output is truncated to ${DEFAULT_MAX_LINES} lines or ${
+      DEFAULT_MAX_BYTES / 1024
+    }KB (whichever is hit first). Use offset/limit for large files. When you need the full file, continue with offset until complete. Images are not supported in phase 1.`,
     parameters: {
-      path: z.string().describe("Path to the file to read (relative or absolute)"),
+      path: z.string().describe("Path to the file to read (relative or absolute, under workspace)"),
       offset: z.number().optional().describe("Line number to start reading from (1-indexed)"),
       limit: z.number().optional().describe("Maximum number of lines to read"),
     },
-    implementation: async ({ path, offset, limit }) => {
-      const absolutePath = await resolvePath(ctx, path);
+    implementation: async ({ path: userPath, offset, limit }) => {
+      const absolutePath = await resolvePath(ctx, userPath);
       if (isImagePath(absolutePath)) {
-        return `Image file at ${path}. Text-only read tool cannot display binary image content.`;
+        throw new Error(`Cannot read image file as text: ${displayPath(ctx, absolutePath)}`);
       }
+      const display = displayPath(ctx, absolutePath);
+      await approveToolOperation(ctx, {
+        operation: "read",
+        target: display,
+        risk: "low",
+        summary: offset || limit ? `read text with offset=${offset ?? 1}, limit=${limit ?? "default"}` : "read text",
+      });
 
-      let textContent: string;
+      let text: string;
       try {
-        textContent = await Deno.readTextFile(absolutePath);
-      } catch {
-        throw new Error(`Path not found: ${path}`);
+        text = await Deno.readTextFile(absolutePath);
+      } catch (error) {
+        if (error instanceof Deno.errors.NotFound) {
+          throw new Error(`Path not found: ${display}`);
+        }
+        throw error;
       }
 
-      const allLines = textContent.split("\n");
+      const allLines = text.split("\n");
       const totalFileLines = allLines.length;
       const startLine = offset ? Math.max(0, offset - 1) : 0;
       const startLineDisplay = startLine + 1;
@@ -62,19 +69,18 @@ export function createReadTool(ctx: ToolContext): ReturnType<typeof tool> {
       }
 
       const truncation = truncateHead(selectedContent);
+      let outputText: string;
 
       if (truncation.firstLineExceedsLimit) {
         const firstLine = allLines[startLine] ?? "";
         const firstLineSize = formatSize(new TextEncoder().encode(firstLine).length);
-        return `[Line ${startLineDisplay} is ${firstLineSize}, exceeds ${
+        outputText = `[Line ${startLineDisplay} is ${firstLineSize}, exceeds ${
           formatSize(DEFAULT_MAX_BYTES)
-        } limit. Use bash: sed -n '${startLineDisplay}p' ${path} | head -c ${DEFAULT_MAX_BYTES}]`;
-      }
-
-      if (truncation.truncated) {
+        } limit. Use bash: sed -n '${startLineDisplay}p' '${userPath}' | head -c ${DEFAULT_MAX_BYTES}]`;
+      } else if (truncation.truncated) {
         const endLineDisplay = startLineDisplay + truncation.outputLines - 1;
         const nextOffset = endLineDisplay + 1;
-        let outputText = truncation.content;
+        outputText = truncation.content;
         if (truncation.truncatedBy === "lines") {
           outputText +=
             `\n\n[Showing lines ${startLineDisplay}-${endLineDisplay} of ${totalFileLines}. Use offset=${nextOffset} to continue.]`;
@@ -83,16 +89,16 @@ export function createReadTool(ctx: ToolContext): ReturnType<typeof tool> {
             formatSize(DEFAULT_MAX_BYTES)
           } limit). Use offset=${nextOffset} to continue.]`;
         }
-        return outputText;
-      }
-
-      if (userLimitedLines !== undefined && startLine + userLimitedLines < allLines.length) {
+      } else if (userLimitedLines !== undefined && startLine + userLimitedLines < allLines.length) {
         const remaining = allLines.length - (startLine + userLimitedLines);
         const nextOffset = startLine + userLimitedLines + 1;
-        return `${truncation.content}\n\n[${remaining} more lines in file. Use offset=${nextOffset} to continue.]`;
+        outputText =
+          `${truncation.content}\n\n[${remaining} more lines in file. Use offset=${nextOffset} to continue.]`;
+      } else {
+        outputText = truncation.content;
       }
 
-      return truncation.content;
+      return outputText;
     },
   });
 }

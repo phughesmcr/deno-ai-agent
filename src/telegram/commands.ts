@@ -1,8 +1,9 @@
 import type { SessionManager, SessionStatus } from "../context/session.ts";
+import { copyTodosForSession } from "../tools/todo-write.ts";
 
 /** One-line help text for supported session commands. */
 export const SESSION_HELP =
-  "Sessions: /new - fresh chat | /save - write to disk | /load <id> - restore | /fork - branch copy | /list - saved ids | /session - status | /stats - tokens";
+  "Sessions: /new - fresh chat | /save - write to disk | /load <id> - restore | /fork - branch copy | /list - saved ids | /session - status | /stats - tokens | /todos - task list";
 
 interface CommandSession {
   readonly id: string;
@@ -39,9 +40,11 @@ function errorMessage(error: unknown): string {
  */
 export class TelegramCommandHandler {
   readonly #session: CommandSession;
+  readonly #todosDir?: string;
 
-  constructor(session: SessionManager) {
+  constructor(session: SessionManager, todosDir?: string) {
     this.#session = session;
+    this.#todosDir = todosDir;
   }
 
   help(): string {
@@ -64,6 +67,9 @@ export class TelegramCommandHandler {
   async fork(): Promise<string> {
     try {
       const { fromId, toId } = await this.#session.fork();
+      if (this.#todosDir) {
+        await copyTodosForSession(this.#todosDir, fromId, toId);
+      }
       return `Forked.\nFrom: ${fromId}\nTo: ${toId}\n\nUse /save on the new branch when ready.`;
     } catch (error) {
       return `Fork failed: ${errorMessage(error)}`;

@@ -206,9 +206,12 @@ export class SessionManager {
     await this.#model.act(this.#snapshot(), tools, {
       onMessage: (msg) => {
         observer?.onMessage();
-        const assistant = this.#appendAssistant(msg);
-        turnTokenCounts.push(this.#model.countTokens(assistant.toString()));
-        replyTexts.push(msg.getText());
+        const message = this.#appendAssistant(msg);
+        turnTokenCounts.push(this.#model.countTokens(message.toString()));
+        if (msg.getRole() === "assistant") {
+          const text = msg.getText();
+          if (text) replyTexts.push(text);
+        }
       },
       onFirstToken: (roundIndex) => {
         const ms = performance.now() - actStarted;

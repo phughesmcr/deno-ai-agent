@@ -1,30 +1,60 @@
-import { assertEquals } from "jsr:@std/assert@1";
-import { join } from "node:path";
-import { createReadTool } from "../../src/tools/read.ts";
+import { assertEquals, assertRejects } from "jsr:@std/assert@1";
+
+import { createDenyApprovalGate } from "../../src/approval.ts";
+import { createToolContext } from "../../src/tools/context.ts";
 import { createWriteTool } from "../../src/tools/write.ts";
-import { toolImplementation } from "./impl.ts";
+import { createTestWorkspace, runToolImplementation } from "./helpers.ts";
 
 Deno.test("write creates nested file", async () => {
-  const root = await Deno.makeTempDir({ prefix: "write-tool-" });
+  const { dir, ctx, cleanup } = await createTestWorkspace();
   try {
-    const write = toolImplementation<{ path: string; content: string }, string>(createWriteTool({ root }));
-    await write({ path: "nested/a.txt", content: "hello" });
-    const text = await Deno.readTextFile(join(root, "nested", "a.txt"));
-    assertEquals(text, "hello");
+    const tool = createWriteTool(ctx);
+    const msg = await runToolImplementation(tool, { path: "nested/out.txt", content: "data" });
+    assertEquals(msg.includes("Successfully wrote"), true);
+    const text = await Deno.readTextFile(`${dir}/nested/out.txt`);
+    assertEquals(text, "data");
   } finally {
-    await Deno.remove(root, { recursive: true });
+    await cleanup();
   }
 });
 
-Deno.test("integration write then read", async () => {
-  const root = await Deno.makeTempDir({ prefix: "write-read-" });
+Deno.test("write requests approval before creating a file", async () => {
+  const dir = await Deno.makeTempDir({ prefix: "silas-tools-" });
   try {
-    const write = toolImplementation<{ path: string; content: string }, string>(createWriteTool({ root }));
-    const read = toolImplementation<{ path: string }, string>(createReadTool({ root }));
-    await write({ path: "x.txt", content: "data" });
-    const out = await read({ path: "x.txt" });
-    assertEquals(out, "data");
+    const ctx = await createToolContext(dir, {
+      approvalGate: createDenyApprovalGate("write denied"),
+      sessionId: "session-1",
+      turnId: "turn-1",
+    });
+    const tool = createWriteTool(ctx);
+
+    await assertRejects(
+      () => runToolImplementation(tool, { path: "new.txt", content: "data" }),
+      Error,
+      "write denied",
+    );
+
+    let exists = true;
+    try {
+      await Deno.stat(`${dir}/new.txt`);
+    } catch (error) {
+      if (error instanceof Deno.errors.NotFound) exists = false;
+      else throw error;
+    }
+    assertEquals(exists, false);
   } finally {
-    await Deno.remove(root, { recursive: true });
+    await Deno.remove(dir, { recursive: true });
+  }
+});
+
+Deno.test("write overwrites existing file", async () => {
+  const { dir, ctx, cleanup } = await createTestWorkspace();
+  try {
+    await Deno.writeTextFile(`${dir}/x.txt`, "old");
+    const tool = createWriteTool(ctx);
+    await runToolImplementation(tool, { path: "x.txt", content: "new" });
+    assertEquals(await Deno.readTextFile(`${dir}/x.txt`), "new");
+  } finally {
+    await cleanup();
   }
 });

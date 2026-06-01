@@ -1,93 +1,108 @@
 import { tool } from "@lmstudio/sdk";
 import { z } from "zod/v3";
 
-import type { ToolContext } from "./context.ts";
+import { approveToolOperation, type ToolContext } from "./context.ts";
 import { DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES, formatSize, truncateTail } from "./truncate.ts";
 
-const DESCRIPTION =
-  `Execute a bash command in the current working directory. Returns stdout and stderr. Output is truncated to last ${DEFAULT_MAX_LINES} lines or ${
-    DEFAULT_MAX_BYTES / 1024
-  }KB (whichever is hit first). Optionally provide a timeout in seconds.`;
-
-function getShell(): string {
-  try {
-    return Deno.env.get("SHELL") ?? "/bin/sh";
-  } catch {
-    return "/bin/sh";
+function getShellCommand(): { cmd: string; args: string[] } {
+  if (Deno.build.os === "windows") {
+    return { cmd: "cmd.exe", args: ["/c"] };
   }
+  try {
+    const shell = Deno.env.get("SHELL");
+    if (shell) {
+      const name = shell.split("/").pop() ?? "sh";
+      if (name === "bash" || name === "zsh" || name === "sh") {
+        return { cmd: shell, args: ["-c"] };
+      }
+    }
+  } catch {
+    // Deno.env may be unavailable under restricted permissions.
+  }
+  return { cmd: "/bin/sh", args: ["-c"] };
 }
 
-export function createBashTool(ctx: ToolContext): ReturnType<typeof tool> {
+async function readStream(stream: ReadableStream<Uint8Array> | null): Promise<string> {
+  if (!stream) return "";
+  return await new Response(stream).text();
+}
+
+export function createBashTool(ctx: ToolContext): unknown {
   return tool({
     name: "bash",
-    description: DESCRIPTION,
+    description:
+      `Execute a bash command in the workspace directory. Returns stdout and stderr. Output is truncated to last ${DEFAULT_MAX_LINES} lines or ${
+        DEFAULT_MAX_BYTES / 1024
+      }KB (whichever is hit first). Optionally provide a timeout in seconds.`,
     parameters: {
-      command: z.string().describe("Bash command to execute"),
-      timeout: z.number().optional().describe("Timeout in seconds (optional, no default timeout)"),
+      command: z.string().describe("Shell command to execute"),
+      timeout: z.number().optional().describe("Timeout in seconds (optional)"),
     },
     implementation: async ({ command, timeout }) => {
-      const shell = getShell();
-      try {
-        await Deno.stat(ctx.root);
-      } catch {
-        throw new Error(`Working directory does not exist: ${ctx.root}\nCannot execute bash commands.`);
-      }
-
-      const cmd = new Deno.Command(shell, {
-        args: ["-c", command],
-        cwd: ctx.root,
-        stdout: "piped",
-        stderr: "piped",
+      await approveToolOperation(ctx, {
+        operation: "shell",
+        target: command,
+        risk: "high",
+        summary: `cwd=${ctx.root}`,
       });
 
-      const child = cmd.spawn();
-      const outputPromise = child.output();
-      let output: Deno.CommandOutput;
+      const { cmd, args } = getShellCommand();
+      const abortController = new AbortController();
+      const timeoutMs = timeout !== undefined && timeout > 0 ? timeout * 1000 : undefined;
+      let timeoutId: ReturnType<typeof setTimeout> | undefined;
+      if (timeoutMs !== undefined) {
+        timeoutId = setTimeout(() => abortController.abort(), timeoutMs);
+      }
+
       try {
-        if (timeout !== undefined && timeout > 0) {
-          output = await Promise.race([
-            outputPromise,
-            new Promise<Deno.CommandOutput>((_, reject) => {
-              setTimeout(() => {
-                child.kill("SIGTERM");
-                reject(new Error(`Command timed out after ${timeout} seconds`));
-              }, timeout * 1000);
-            }),
-          ]);
-        } else {
-          output = await outputPromise;
-        }
-      } catch (error) {
-        if (error instanceof Error && error.message.startsWith("Command timed out")) throw error;
-        throw error;
-      }
+        const child = new Deno.Command(cmd, {
+          args: [...args, command],
+          cwd: ctx.root,
+          stdout: "piped",
+          stderr: "piped",
+          env: { NO_COLOR: "1", TERM: "dumb" },
+          signal: abortController.signal,
+        }).spawn();
 
-      const combined = new TextDecoder().decode(output.stdout) + new TextDecoder().decode(output.stderr);
-      const truncation = truncateTail(combined);
+        const [stdout, stderr, status] = await Promise.all([
+          readStream(child.stdout),
+          readStream(child.stderr),
+          child.status,
+        ]);
 
-      let outputText = truncation.content || "(no output)";
-      if (truncation.truncated) {
-        const startLine = truncation.totalLines - truncation.outputLines + 1;
-        const endLine = truncation.totalLines;
-        if (truncation.lastLinePartial) {
-          outputText += `\n\n[Showing last ${formatSize(truncation.outputBytes)} of line ${endLine} (line truncated).]`;
-        } else if (truncation.truncatedBy === "lines") {
-          outputText += `\n\n[Showing lines ${startLine}-${endLine} of ${truncation.totalLines}.]`;
-        } else {
-          outputText += `\n\n[Showing lines ${startLine}-${endLine} of ${truncation.totalLines} (${
-            formatSize(DEFAULT_MAX_BYTES)
-          } limit).]`;
-        }
-      }
-
-      if (!output.success) {
-        const code = output.code;
-        throw new Error(
-          outputText ? `${outputText}\n\nCommand exited with code ${code}` : `Command exited with code ${code}`,
+        let output = [stdout, stderr].filter((s) => s.length > 0).join(
+          stdout.length > 0 && stderr.length > 0 ? "\n" : "",
         );
-      }
+        if (!output) output = "(no output)";
 
-      return outputText;
+        const truncation = truncateTail(output);
+        let text = truncation.content;
+        if (truncation.truncated) {
+          const startLine = truncation.totalLines - truncation.outputLines + 1;
+          const endLine = truncation.totalLines;
+          if (truncation.truncatedBy === "lines") {
+            text += `\n\n[Showing lines ${startLine}-${endLine} of ${truncation.totalLines}. Output truncated.]`;
+          } else {
+            text += `\n\n[Showing lines ${startLine}-${endLine} of ${truncation.totalLines} (${
+              formatSize(DEFAULT_MAX_BYTES)
+            } limit). Output truncated.]`;
+          }
+        }
+
+        if (!status.success) {
+          const code = status.code;
+          throw new Error(text ? `${text}\n\nCommand exited with code ${code}` : `Command exited with code ${code}`);
+        }
+
+        return text;
+      } catch (error) {
+        if (error instanceof Error && error.name === "AbortError") {
+          throw new Error("Command aborted");
+        }
+        throw error;
+      } finally {
+        if (timeoutId !== undefined) clearTimeout(timeoutId);
+      }
     },
   });
 }

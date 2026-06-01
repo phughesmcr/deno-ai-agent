@@ -32,7 +32,7 @@
   "compilerOptions": {
     "allowUnreachableCode": false,
     "allowUnusedLabels": false,
-    "lib": ["esnext", "deno.ns", "deno.worker"],
+    "lib": ["esnext", "deno.ns", "deno.unstable", "deno.worker"],
     "module": "esnext",
     "noErrorTruncation": true,
     "noFallthroughCasesInSwitch": true,
@@ -89,16 +89,16 @@
     }
   },
   "tasks": {
-    "test": "deno test --allow-read --allow-write --allow-run --allow-env=WS_NO_BUFFER_UTIL,WS_NO_UTF_8_VALIDATE,NODE_ENV,LOG_LEVEL,SHELL test/**/*.test.ts",
+    "test": "deno test --unstable-kv --allow-read --allow-write --allow-run --allow-env=WS_NO_BUFFER_UTIL,WS_NO_UTF_8_VALIDATE,NODE_ENV,LOG_LEVEL test/**/*.test.ts",
 
-    "start": "deno run --env-file=.env --allow-read --allow-write --allow-net --allow-run --allow-env main.ts",
-    "start:otel": "OTEL_DENO=true OTEL_SERVICE_NAME=deno-ai-agent deno run --env-file=.env --allow-read --allow-write --allow-net --allow-run --allow-env main.ts",
-    "start:otel:console": "OTEL_DENO=true OTEL_SERVICE_NAME=deno-ai-agent OTEL_EXPORTER_OTLP_PROTOCOL=console deno run --env-file=.env --allow-read --allow-write --allow-net --allow-run --allow-env main.ts",
+    "start": "deno run --unstable-kv --env-file=.env --allow-read --allow-write --allow-run --allow-net --allow-env main.ts",
+    "start:otel": "OTEL_DENO=true OTEL_SERVICE_NAME=deno-ai-agent deno run --unstable-kv --env-file=.env --allow-read --allow-write --allow-run --allow-net --allow-env main.ts",
+    "start:otel:console": "OTEL_DENO=true OTEL_SERVICE_NAME=deno-ai-agent OTEL_EXPORTER_OTLP_PROTOCOL=console deno run --unstable-kv --env-file=.env --allow-read --allow-write --allow-run --allow-net --allow-env main.ts",
 
-    "check:docs": "deno doc --lint main.ts src/tools.ts src/tools/index.ts src/agent.ts src/context/compactor.ts src/context/session-store.ts src/context/session.ts src/lmstudio.ts src/log.ts src/markdown.ts src/otel.ts src/telegram/commands.ts src/telegram/model-reply.ts src/telegram/telegram-reply.ts src/telegram/telegram.ts src/workspace.ts",
+    "check:docs": "deno doc --unstable-kv --lint main.ts src/*.ts src/context/*.ts src/telegram/*.ts",
     "check:fmt": "deno fmt --check",
     "check:lint": "deno lint",
-    "check:types": "deno check --allow-import main.ts src/**/*.ts test/**/*.test.ts bench/**/*.ts",
+    "check:types": "deno check --unstable-kv --allow-import main.ts src/**/*.ts test/**/*.test.ts bench/**/*.ts",
     "ci": "CI=1 deno task check:fmt && deno task check:lint && deno task check:types && deno task check:docs && deno task test",
 
     "otel:collector:install": "bash otel/download-otelcol.sh",
@@ -108,11 +108,15 @@
   },
   "imports": {
     "@std/async/debounce": "jsr:@std/async/debounce",
-    "@std/path/glob-to-regexp": "jsr:@std/path/glob-to-regexp",
-    "@std/path/glob-to-regexp": "jsr:@std/path@^1.0.0/glob-to-regexp",
+    "@std/path": "jsr:@std/path@^1.1.0",
     "@opentelemetry/api": "npm:@opentelemetry/api@^1.9.1",
     "@lmstudio/sdk": "npm:@lmstudio/sdk@^1.5.0",
+    "@std/yaml": "jsr:@std/yaml@^1.1.1",
     "grammy": "npm:grammy@^1.43.0",
+    "grammy-questions": "npm:grammy-questions@0.1.9",
     "zod": "npm:zod@^4.4.3"
-  }
+  },
+  "unstable": [
+    "kv"
+  ]
 }

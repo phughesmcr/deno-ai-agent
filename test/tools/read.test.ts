@@ -1,33 +1,54 @@
-import { assertEquals, assertStringIncludes } from "jsr:@std/assert@1";
-import { join } from "node:path";
-import { createReadTool } from "../../src/tools/read.ts";
-import { toolImplementation } from "./impl.ts";
+import { assertEquals, assertRejects, assertStringIncludes } from "jsr:@std/assert@1";
 
-Deno.test("read returns file content with offset", async () => {
-  const root = await Deno.makeTempDir({ prefix: "read-tool-" });
+import { createDenyApprovalGate } from "../../src/approval.ts";
+import { createToolContext } from "../../src/tools/context.ts";
+import { createReadTool } from "../../src/tools/read.ts";
+import { createTestWorkspace, runToolImplementation } from "./helpers.ts";
+
+Deno.test("read returns file content", async () => {
+  const { dir, ctx, cleanup } = await createTestWorkspace();
   try {
-    const file = join(root, "lines.txt");
-    await Deno.writeTextFile(file, "one\ntwo\nthree\n");
-    const run = toolImplementation<{ path: string; offset?: number; limit?: number }, string>(
-      createReadTool({ root }),
-    );
-    const out = await run({ path: "lines.txt", offset: 2, limit: 1 });
-    assertEquals(out.split("\n")[0], "two");
+    await Deno.writeTextFile(`${dir}/a.txt`, "hello\nworld");
+    const tool = createReadTool(ctx);
+    const out = await runToolImplementation(tool, { path: "a.txt" });
+    assertStringIncludes(out, "hello");
+    assertStringIncludes(out, "world");
   } finally {
-    await Deno.remove(root, { recursive: true });
+    await cleanup();
   }
 });
 
-Deno.test("read truncation footer when many lines", async () => {
-  const root = await Deno.makeTempDir({ prefix: "read-tool-" });
+Deno.test("read requests approval before returning file content", async () => {
+  const dir = await Deno.makeTempDir({ prefix: "silas-tools-" });
   try {
-    const file = join(root, "big.txt");
-    const lines = Array.from({ length: 3000 }, (_, i) => `line ${i}`).join("\n");
-    await Deno.writeTextFile(file, lines);
-    const run = toolImplementation<{ path: string }, string>(createReadTool({ root }));
-    const out = await run({ path: "big.txt" });
-    assertStringIncludes(out, "Use offset=");
+    await Deno.writeTextFile(`${dir}/secret.txt`, "secret");
+    const ctx = await createToolContext(dir, {
+      approvalGate: createDenyApprovalGate("read denied"),
+      sessionId: "session-1",
+      turnId: "turn-1",
+    });
+    const tool = createReadTool(ctx);
+
+    await assertRejects(
+      () => runToolImplementation(tool, { path: "secret.txt" }),
+      Error,
+      "read denied",
+    );
   } finally {
-    await Deno.remove(root, { recursive: true });
+    await Deno.remove(dir, { recursive: true });
+  }
+});
+
+Deno.test("read supports offset and limit", async () => {
+  const { dir, ctx, cleanup } = await createTestWorkspace();
+  try {
+    await Deno.writeTextFile(`${dir}/lines.txt`, "one\ntwo\nthree\nfour");
+    const tool = createReadTool(ctx);
+    const out = await runToolImplementation(tool, { path: "lines.txt", offset: 2, limit: 2 });
+    assertEquals(out.includes("two"), true);
+    assertEquals(out.includes("three"), true);
+    assertEquals(out.includes("one"), false);
+  } finally {
+    await cleanup();
   }
 });

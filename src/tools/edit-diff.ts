@@ -1,3 +1,5 @@
+/** Edit matching and application (ported from pi edit-diff, without diff display). */
+
 export function detectLineEnding(content: string): "\r\n" | "\n" {
   const crlfIdx = content.indexOf("\r\n");
   const lfIdx = content.indexOf("\n");
@@ -135,7 +137,7 @@ function getNoChangeError(path: string, totalEdits: number): Error {
 export function applyEditsToNormalizedContent(
   normalizedContent: string,
   edits: Edit[],
-  path: string,
+  filePath: string,
 ): AppliedEditsResult {
   const normalizedEdits = edits.map((edit) => ({
     oldText: normalizeToLF(edit.oldText),
@@ -144,7 +146,7 @@ export function applyEditsToNormalizedContent(
 
   for (let i = 0; i < normalizedEdits.length; i++) {
     if (normalizedEdits[i]!.oldText.length === 0) {
-      throw getEmptyOldTextError(path, i, normalizedEdits.length);
+      throw getEmptyOldTextError(filePath, i, normalizedEdits.length);
     }
   }
 
@@ -157,10 +159,10 @@ export function applyEditsToNormalizedContent(
   for (let i = 0; i < normalizedEdits.length; i++) {
     const edit = normalizedEdits[i]!;
     const matchResult = fuzzyFindText(baseContent, edit.oldText);
-    if (!matchResult.found) throw getNotFoundError(path, i, normalizedEdits.length);
+    if (!matchResult.found) throw getNotFoundError(filePath, i, normalizedEdits.length);
 
     const occurrences = countOccurrences(baseContent, edit.oldText);
-    if (occurrences > 1) throw getDuplicateError(path, i, normalizedEdits.length, occurrences);
+    if (occurrences > 1) throw getDuplicateError(filePath, i, normalizedEdits.length, occurrences);
 
     matchedEdits.push({
       editIndex: i,
@@ -176,7 +178,7 @@ export function applyEditsToNormalizedContent(
     const current = matchedEdits[i]!;
     if (previous.matchIndex + previous.matchLength > current.matchIndex) {
       throw new Error(
-        `edits[${previous.editIndex}] and edits[${current.editIndex}] overlap in ${path}. Merge them into one edit or target disjoint regions.`,
+        `edits[${previous.editIndex}] and edits[${current.editIndex}] overlap in ${filePath}. Merge them into one edit or target disjoint regions.`,
       );
     }
   }
@@ -189,7 +191,7 @@ export function applyEditsToNormalizedContent(
       newContent.substring(edit.matchIndex + edit.matchLength);
   }
 
-  if (baseContent === newContent) throw getNoChangeError(path, normalizedEdits.length);
+  if (baseContent === newContent) throw getNoChangeError(filePath, normalizedEdits.length);
 
   return { baseContent, newContent };
 }

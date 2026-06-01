@@ -75,23 +75,15 @@ flowchart LR
 4. Changes to `SYSTEM.md` in the workspace reload the system prompt without restarting.
 5. When context exceeds ~75% of `CONTEXT_LENGTH`, older turns are summarized via LM Studio and replaced with a compact summary.
 
-### Model tools (workspace sandbox)
+### Model tools
 
-Silas registers seven tools for LM Studio: `read`, `write`, `edit`, `bash`, `grep`, `find`, and `ls`. All file and shell access is confined to `WORKSPACE_PATH` (for example `.silas/`). The model cannot read or modify the application source tree outside that directory.
+Silas exposes eleven tools: seven filesystem/shell tools (pi-aligned) — `read`, `write`, `edit`, `bash`, `grep`, `find`, `ls` — plus `skill` for activating AgentSkills under `{WORKSPACE_PATH}/skills/<name>/SKILL.md`, `todo_write` for session-scoped task tracking (shown in Telegram as an edited status message), `ask_user_question` for structured clarification via Telegram inline keyboards ([grammy-questions](https://github.com/z44d/grammy-questions)), and `agent` for spawning asynchronous read-only subagent jobs. Users can pick question options, type a custom answer (**Other**), or **Cancel**.
 
-| Tool | Purpose |
-| ---- | ------- |
-| `read` | Read text files (`offset` / `limit` for large files) |
-| `write` | Create or overwrite files |
-| `edit` | Exact text replacements (`edits[]`) |
-| `bash` | Shell commands with cwd set to the workspace (`--allow-run` required) |
-| `grep` | Search contents (`rg` when installed; built-in fallback otherwise) |
-| `find` | Find files by glob (`fd` when installed; built-in fallback otherwise) |
-| `ls` | List directory entries |
+The `skill` tool lists available workspace skills in its description, returns the selected skill body wrapped as protected context, and lists files under that skill's `scripts/`, `references/`, and `assets/` directories without reading them eagerly. `allowed-tools` is metadata only; it does not pre-approve shell or file actions. Bundled TypeScript scripts should be run explicitly by the agent with `deno run --allow-*` permissions and `jsr:`/`npm:` imports.
 
-Optional: install [ripgrep](https://github.com/BurntSushi/ripgrep) and [fd](https://github.com/sharkdp/fd) for faster search. The built-in grep fallback does not fully honor `.gitignore`.
+All file and shell operations are scoped to `WORKSPACE_PATH` (e.g. `.silas/`) — the bot cannot modify application source under `src/` via tools. `bash` requires `--allow-run` (included in `deno task start`). Optional `rg` and `fd` on PATH speed up search; built-in fallbacks work without them.
 
-Future: a `TOOL_ROOT` env var could widen the sandbox to the repo root for coding tasks (not implemented in v1).
+The `agent` tool tracks subagents per current session with in-memory Deno KV. Subagents can only use `read`, `grep`, `find`, `ls`, and `skill`; they cannot mutate files, run shell commands, ask the user, manage todos, or spawn nested agents. Jobs survive only for the current bot process.
 
 ### Session commands (admin)
 
@@ -104,6 +96,7 @@ Future: a `TOOL_ROOT` env var could widen the sandbox to the repo root for codin
 | `/list` | List saved session ids |
 | `/session` | Current id, save state, message and token counts |
 | `/stats` | Same as `/session` but refreshes token count first |
+| `/todos` | Show or refresh the current session task list in Telegram |
 | `/help` | Session command summary |
 
 Custom OpenTelemetry spans: `telegram.message` (root span per turn), `lmstudio.act`, and `context.compact`. Deno also auto-instruments `fetch` and `console.*` when `OTEL_DENO=true`. The collector redacts Telegram bot tokens in `url.full` before export.
@@ -162,6 +155,8 @@ src/
     session.ts       Chat state, model turns, tokens, compaction, session API
     session-store.ts Session JSON on disk
     compactor.ts     Summarize-and-trim context compaction
+  skills/
+    mod.ts           AgentSkills discovery, parsing, catalog diagnostics
   lmstudio.ts        LM Studio client and model handle
   telegram/
     telegram.ts      Grammy bot and admin gate
@@ -171,8 +166,9 @@ src/
   workspace.ts       SYSTEM.md load and file watch
   otel.ts            Custom spans and metrics
   log.ts             Debug logging (`LOG_LEVEL=debug`)
-  tools.ts           Re-exports getModelTools from tools/
-  tools/             read, write, edit, bash, grep, find, ls (pi-aligned)
+  tools.ts           Re-exports tool registry
+  subagents.ts       Async read-only subagent job manager
+  tools/             read, write, edit, bash, grep, find, ls, skill, todo_write, agent (workspace-scoped)
   markdown.ts        Reply formatting (thinking strip, etc.)
 otel/
   otel-collector.jaeger.yaml

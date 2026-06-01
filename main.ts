@@ -4,9 +4,16 @@ import { createAgent, runTurn } from "./src/agent.ts";
 import { createLMStudioManager } from "./src/lmstudio.ts";
 import { logDebug } from "./src/log.ts";
 import { recordActDuration, recordTelegramMessage, traceSpan } from "./src/otel.ts";
+import { SubagentManager } from "./src/subagents.ts";
+import { createTelegramAskUserQuestionPort } from "./src/telegram/grammy-questions-adapter.ts";
+import { createTelegramTodoDisplayPort } from "./src/telegram/grammy-todo-display-adapter.ts";
+import { createTelegramApprovalGate } from "./src/telegram/approval-gate.ts";
+import { isBotCommand } from "./src/telegram/is-bot-command.ts";
 import { replyWithModelText } from "./src/telegram/telegram-reply.ts";
 import { createTelegramManager, type TelegramContext } from "./src/telegram/telegram.ts";
-import { getModelTools } from "./src/tools.ts";
+import { withTurnMutex } from "./src/telegram/turn-gate.ts";
+import { createSkillManager, createToolContext, getModelTools } from "./src/tools.ts";
+import { updateTelegramMeta } from "./src/tools/todo-write.ts";
 import { createWorkspace } from "./src/workspace.ts";
 
 function getEnv(): { maxContextLength: number } {
@@ -33,17 +40,65 @@ async function main(): Promise<void> {
   const workspace = await createWorkspace(new URL(".", import.meta.url));
   const lmstudio = await createLMStudioManager({ signal: controller.signal, maxContextLength });
   const agent = await createAgent({ workspace, lmstudio, maxContextLength, signal: controller.signal });
+  const subagentKv = await Deno.openKv(":memory:");
 
-  const toolsList = getModelTools({ root: workspace.path }) as Tool[];
+  const userQuestions = createTelegramAskUserQuestionPort();
+  const approvals = createTelegramApprovalGate();
+  const bindUpdateTelegramMeta = (sessionId: string, meta: Parameters<typeof updateTelegramMeta>[2]) =>
+    updateTelegramMeta(workspace.todosDir, sessionId, meta);
+  const todoDisplay = createTelegramTodoDisplayPort({ updateTelegramMeta: bindUpdateTelegramMeta });
+  let activeTurnId = "no-active-turn";
+  const toolContext = await createToolContext(workspace.path, {
+    approvalGate: approvals,
+    sessionId: () => agent.session.id,
+    turnId: () => activeTurnId,
+    signal: controller.signal,
+  });
+  const skills = await createSkillManager({ root: workspace.path });
+  const subagents = new SubagentManager({
+    kv: subagentKv,
+    model: lmstudio.model,
+    workspace: toolContext,
+    skills,
+    getSessionId: () => agent.session.id,
+  });
+  const createTurnTools = async (): Promise<Tool[]> => {
+    await skills.refresh();
+    return getModelTools({
+      workspace: toolContext,
+      userQuestions,
+      todos: {
+        getSessionId: () => agent.session.id,
+        todosDir: workspace.todosDir,
+        display: todoDisplay,
+        updateTelegramMeta: bindUpdateTelegramMeta,
+      },
+      skills: {
+        manager: skills,
+        getSessionId: () => agent.session.id,
+      },
+      subagents,
+    }) as Tool[];
+  };
 
-  const telegram = createTelegramManager({ session: agent.session });
+  const telegram = createTelegramManager({
+    session: agent.session,
+    userQuestions,
+    approvals,
+    todosDir: workspace.todosDir,
+    updateTelegramMeta: bindUpdateTelegramMeta,
+  });
 
   registerShutdown(controller, async () => {
     await telegram.bot.stop();
+    await subagents.shutdown();
+    subagentKv.close();
     workspace[Symbol.dispose]();
   });
 
   telegram.bot.on("message", async (ctx: TelegramContext) => {
+    if (userQuestions.isPending()) return;
+
     let outcome: "error" | "ok" = "ok";
     let skipped = false;
     let actMs = 0;
@@ -60,35 +115,53 @@ async function main(): Promise<void> {
             return;
           }
 
+          if (isBotCommand(ctx.message)) {
+            skipped = true;
+            span.setAttribute("skipped", true);
+            span.setAttribute("skip.reason", "bot_command");
+            return;
+          }
+
           span.setAttributes({
             "telegram.update_id": ctx.update.update_id,
             "message.length": message.length,
             "session.id": agent.session.id,
-            "tools.count": toolsList.length,
           });
 
-          const actStarted = performance.now();
-          try {
-            const { replyTexts, compacted } = await runTurn(agent, message, {
-              tools: toolsList,
-              signal: controller.signal,
-            });
+          await withTurnMutex(async () => {
+            const toolsList = await createTurnTools();
+            span.setAttribute("tools.count", toolsList.length);
+            activeTurnId = String(ctx.update.update_id);
+            userQuestions.setTurnContext({ ctx, signal: controller.signal });
+            todoDisplay.setTurnContext({ ctx, signal: controller.signal });
+            approvals.setTurnContext({ ctx, signal: controller.signal });
+            const actStarted = performance.now();
+            try {
+              const { replyTexts, compacted } = await runTurn(agent, message, {
+                tools: toolsList,
+                signal: controller.signal,
+              });
 
-            if (replyTexts.length > 0) {
-              await replyWithModelText(
-                ctx,
-                replyTexts.join("\n"),
-                ctx.message.message_id,
-                ctx.message.message_thread_id,
-              );
-            }
+              if (replyTexts.length > 0 && ctx.message) {
+                await replyWithModelText(
+                  ctx,
+                  replyTexts.join("\n"),
+                  ctx.message.message_id,
+                  ctx.message.message_thread_id,
+                );
+              }
 
-            if (compacted) {
-              logDebug("session.compacted", { sessionId: agent.session.id });
+              if (compacted) {
+                logDebug("session.compacted", { sessionId: agent.session.id });
+              }
+            } finally {
+              actMs = performance.now() - actStarted;
+              userQuestions.clearTurnContext();
+              todoDisplay.clearTurnContext();
+              approvals.clearTurnContext();
+              activeTurnId = "no-active-turn";
             }
-          } finally {
-            actMs = performance.now() - actStarted;
-          }
+          });
         },
         { root: true },
       );
