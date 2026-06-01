@@ -5,6 +5,10 @@ interface BotConfig {
   isAdmin: boolean;
 }
 
+/**
+ * Grammy context extended with bot configuration.
+ * @internal
+ */
 export type TelegramContext = Context & {
   config: BotConfig;
 };
@@ -26,6 +30,10 @@ function getEnv(): { token: string; adminId: number } {
   return { token, adminId };
 }
 
+/**
+ * Creates and configures the Telegram bot from environment variables.
+ * @internal
+ */
 export function createTelegramManager(): TelegramManager {
   const { token, adminId } = getEnv();
 

@@ -12,7 +12,10 @@ interface ContextManagerOptions {
   compactor: (chat: Chat) => Promise<Chat>;
 }
 
-/** Manages chat history with token counting and compaction. */
+/**
+ * Manages chat history with token counting and compaction.
+ * @internal
+ */
 export class ContextManager {
   private complete: Chat;
   private current: Chat;
@@ -36,6 +39,7 @@ export class ContextManager {
     this.compactor = compactor;
   }
 
+  /** Whether the current token count exceeds the compaction threshold. */
   get shouldCompact(): boolean {
     return this.currentTokenCount > this.maxContextLength * this.compactPercentage;
   }
@@ -57,13 +61,16 @@ export class ContextManager {
     return this;
   }
 
+  /** Adds a message's token count to the running total. */
   async appendTokenCount(chat: ChatMessage): Promise<ContextManager> {
     const tokenCount = await this.model.countTokens(chat.getText());
     this.currentTokenCount += tokenCount;
     return this;
   }
 
+  /** Appends a chat message to the current and complete history. */
   append(chat: ChatMessage): void;
+  /** Appends a message with the given role and content. */
   append(role: "user" | "assistant" | "system", content: string): void;
   append(chatOrRole: ChatMessage | ("user" | "assistant" | "system"), content?: string): void {
     const chat = chatOrRole instanceof ChatMessage ? chatOrRole : ChatMessage.create(chatOrRole, content ?? "");

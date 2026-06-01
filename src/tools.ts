@@ -1,10 +1,13 @@
-import { type Tool, tool } from "@lmstudio/sdk";
+import { tool } from "@lmstudio/sdk";
 import { z } from "zod/v3";
 
-/** Manages LM Studio tool definitions available to the model. */
+/**
+ * Manages LM Studio tool definitions available to the model.
+ * @internal
+ */
 export class ToolsManager {
   /** An array of all tools. */
-  readonly tools: Tool[] = [
+  readonly tools = [
     tool({
       name: "multiply",
       description: "Given two numbers a and b. Returns the product of them.",
@@ -14,11 +17,11 @@ export class ToolsManager {
   ];
 
   /** Returns an array of all tools. */
-  get(): Tool[] | undefined;
+  get(): typeof this.tools | undefined;
   /** Returns a tool by name. */
-  get(name: string): Tool | undefined;
+  get(name: string): (typeof this.tools)[number] | undefined;
   /** Returns a tool by name or an array of all tools. */
-  get(name?: string): Tool[] | Tool | undefined {
+  get(name?: string): typeof this.tools | (typeof this.tools)[number] | undefined {
     if (name) {
       return this.tools.find((tool) => tool.name === name);
     }

@@ -3,7 +3,10 @@ import { type Context, GrammyError } from "grammy";
 
 import { escapeMarkdownV2, plainReply, stripThinking } from "../markdown.ts";
 
-/** Sends the model reply; falls back to plain text if MarkdownV2 is rejected. */
+/**
+ * Sends the model reply; falls back to plain text if MarkdownV2 is rejected.
+ * @internal
+ */
 export async function replyWithModelText(
   ctx: Context,
   raw: string,
@@ -24,7 +27,10 @@ export async function replyWithModelText(
   }
 }
 
-/** Notifies the user that handling failed (plain text, always deliverable). */
+/**
+ * Notifies the user that handling failed (plain text, always deliverable).
+ * @internal
+ */
 export async function replyError(ctx: Context, messageThreadId?: number): Promise<void> {
   const text = escapeMarkdownV2("Something went wrong while handling your message. Please try again.");
   try {

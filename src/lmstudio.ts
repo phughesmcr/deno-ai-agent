@@ -10,7 +10,10 @@ interface LMStudioManagerOptions {
   maxContextLength: number;
 }
 
-/** Creates an {@link LMStudioManager} connected to the configured local model. */
+/**
+ * Creates an LM Studio client and loads the configured local model.
+ * @internal
+ */
 export async function createLMStudioManager(spec: LMStudioManagerOptions): Promise<LMStudioManager> {
   const { signal, maxContextLength } = spec;
   const modelName = Deno.env.get("MODEL");

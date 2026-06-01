@@ -1,9 +1,13 @@
 import { debounce } from "@std/async/debounce";
 import { Result } from "./utils.ts";
 
-interface Workspace {
+/** Workspace directory and loaded system prompt. */
+export interface Workspace {
+  /** Absolute path to the workspace directory. */
   readonly path: string;
+  /** Contents of `SYSTEM.md` in the workspace. */
   readonly systemPrompt: string;
+  /** Closes the filesystem watcher when the workspace is disposed. */
   [Symbol.dispose]: () => void;
 }
 
@@ -13,6 +17,7 @@ function getEnv(): { workspacePath: string } {
   return { workspacePath };
 }
 
+/** Creates a workspace from `WORKSPACE_PATH` and watches for file changes. */
 export async function createWorkspace(rootDir: URL, onWatchEvent: (event: Deno.FsEvent) => void): Promise<Workspace> {
   const { workspacePath } = getEnv();
 

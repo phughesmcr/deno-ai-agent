@@ -1,4 +1,6 @@
+/** Result type for fallible synchronous or asynchronous operations. */
 export class Result {
+  /** Runs `fn` and returns `{ success, value }` or `{ success: false, error }`. */
   static async try<T, E = Error>(
     fn: () => T | Promise<T>,
   ): Promise<{ success: true; value: T } | { success: false; error: E }> {

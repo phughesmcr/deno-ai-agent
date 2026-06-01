@@ -5,7 +5,10 @@ const KEEP_RECENT_MESSAGES = 6;
 const SUMMARY_PROMPT =
   "Summarize the following conversation history concisely. Preserve facts, decisions, and open questions. Output only the summary.";
 
-/** Compacts chat history by summarizing older turns and keeping recent messages. */
+/**
+ * Compacts chat history by summarizing older turns and keeping recent messages.
+ * @internal
+ */
 export function createSummaryCompactor(model: LLM, signal?: AbortSignal): (chat: Chat) => Promise<Chat> {
   return async (chat: Chat): Promise<Chat> => {
     const messages = chat.getMessagesArray();
