@@ -68,15 +68,25 @@ export function traceEvent(name: string, attributes?: Record<string, string | nu
 
 /** Tracks child spans and events for `model.act()` lifecycle callbacks. */
 export interface ActSpanTracker {
+  /** Records an assistant message event. */
   onMessage(): void;
+  /** Records time to first token for a round. */
   onFirstToken(roundIndex: number, ms?: number): void;
+  /** Starts a span for an act round. */
   onRoundStart(roundIndex: number): void;
+  /** Ends the span for an act round. */
   onRoundEnd(roundIndex: number): void;
+  /** Starts a span when the model requests a tool call. */
   onToolCallRequestStart(roundIndex: number, callId: number, toolCallId?: string): void;
+  /** Records the resolved tool name for a pending call. */
   onToolCallRequestNameReceived(callId: number, name: string): void;
+  /** Records that a tool call request finished streaming. */
   onToolCallRequestEnd(roundIndex: number, callId: number, name: string, isQueued: boolean): void;
+  /** Ends a tool call span after a request failure. */
   onToolCallRequestFailure(callId: number, message: string): void;
+  /** Ends a tool call span after the request is finalized. */
   onToolCallRequestFinalized(callId: number, name: string): void;
+  /** Records that a queued tool call started executing. */
   onToolCallRequestDequeued(roundIndex: number, callId: number): void;
 }
 
@@ -114,22 +124,22 @@ export function createActSpanTracker(): ActSpanTracker {
   };
 
   return {
-    onMessage() {
+    onMessage(): void {
       addEvent("lmstudio.act.message");
     },
-    onFirstToken(roundIndex, ms) {
+    onFirstToken(roundIndex: number, ms?: number): void {
       const attributes: Record<string, string | number | boolean> = { "round.index": roundIndex };
       if (ms !== undefined) attributes["first_token.ms"] = Math.round(ms);
       addEvent("lmstudio.act.first_token", attributes);
     },
-    onRoundStart(roundIndex) {
+    onRoundStart(roundIndex: number): void {
       roundSpans.set(roundIndex, startChild("lmstudio.act.round", { "round.index": roundIndex }));
     },
-    onRoundEnd(roundIndex) {
+    onRoundEnd(roundIndex: number): void {
       endSpan(roundSpans.get(roundIndex));
       roundSpans.delete(roundIndex);
     },
-    onToolCallRequestStart(roundIndex, callId, toolCallId) {
+    onToolCallRequestStart(roundIndex: number, callId: number, toolCallId?: string): void {
       const attributes: Record<string, string | number | boolean> = {
         "round.index": roundIndex,
         "tool.call_id": callId,
@@ -137,11 +147,11 @@ export function createActSpanTracker(): ActSpanTracker {
       if (toolCallId) attributes["tool.llm_call_id"] = toolCallId;
       toolCallSpans.set(callId, startChild("lmstudio.act.tool_call", attributes, roundIndex));
     },
-    onToolCallRequestNameReceived(callId, name) {
+    onToolCallRequestNameReceived(callId: number, name: string): void {
       toolCallSpans.get(callId)?.setAttribute("tool.name", name);
       addEvent("lmstudio.act.tool_call.name", { "tool.call_id": callId, "tool.name": name });
     },
-    onToolCallRequestEnd(roundIndex, callId, name, isQueued) {
+    onToolCallRequestEnd(roundIndex: number, callId: number, name: string, isQueued: boolean): void {
       toolCallSpans.get(callId)?.setAttributes({ "tool.name": name, "tool.queued": isQueued });
       addEvent("lmstudio.act.tool_call.request_end", {
         "round.index": roundIndex,
@@ -150,16 +160,16 @@ export function createActSpanTracker(): ActSpanTracker {
         "tool.queued": isQueued,
       });
     },
-    onToolCallRequestFailure(callId, message) {
+    onToolCallRequestFailure(callId: number, message: string): void {
       endSpan(toolCallSpans.get(callId), new Error(message));
       toolCallSpans.delete(callId);
     },
-    onToolCallRequestFinalized(callId, name) {
+    onToolCallRequestFinalized(callId: number, name: string): void {
       toolCallSpans.get(callId)?.setAttribute("tool.name", name);
       endSpan(toolCallSpans.get(callId));
       toolCallSpans.delete(callId);
     },
-    onToolCallRequestDequeued(roundIndex, callId) {
+    onToolCallRequestDequeued(roundIndex: number, callId: number): void {
       addEvent("lmstudio.act.tool_call.dequeued", { "round.index": roundIndex, "tool.call_id": callId });
     },
   };

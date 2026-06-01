@@ -8,15 +8,23 @@ import type { LMStudioManager } from "./lmstudio.ts";
 import { createActSpanTracker, tokenBucket, traceSpan } from "./otel.ts";
 import type { Workspace } from "./workspace.ts";
 
+/** Wired agent: session state and LM Studio model. */
 export interface Agent {
+  /** Conversation session manager. */
   readonly session: SessionManager;
+  /** LM Studio client and model. */
   readonly lmstudio: LMStudioManager;
 }
 
-interface CreateAgentOptions {
+/** Options for {@link createAgent}. */
+export interface CreateAgentOptions {
+  /** Workspace directory and system prompt. */
   workspace: Workspace;
+  /** Connected LM Studio client and model. */
   lmstudio: LMStudioManager;
+  /** Model context window size. */
   maxContextLength: number;
+  /** Abort signal for startup operations. */
   signal: AbortSignal;
 }
 
@@ -45,10 +53,15 @@ export async function createAgent(spec: CreateAgentOptions): Promise<Agent> {
   return { session, lmstudio };
 }
 
+/** Result of a single user turn through the model. */
 export interface TurnResult {
+  /** Assistant reply texts from this turn. */
   replyTexts: string[];
+  /** Tokens used by assistant messages this turn. */
   turnTokens: number;
+  /** Whether context was compacted after this turn. */
   compacted: boolean;
+  /** Total context token count after finalization. */
   totalTokens: number;
 }
 
@@ -57,7 +70,10 @@ interface RunTurnOptions {
   signal: AbortSignal;
 }
 
-/** Appends the user message, runs `model.act`, finalizes context. */
+/**
+ * Appends the user message, runs `model.act`, finalizes context.
+ * @internal
+ */
 export async function runTurn(agent: Agent, userText: string, options: RunTurnOptions): Promise<TurnResult> {
   const { session, lmstudio } = agent;
   const { tools, signal } = options;

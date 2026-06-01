@@ -4,17 +4,27 @@ import type { Workspace } from "../workspace.ts";
 import type { ChatContext } from "./chat-context.ts";
 import type { SessionStore } from "./session-store.ts";
 
+/** Snapshot of session state for status commands. */
 export interface SessionStatus {
+  /** Current session id. */
   id: string;
+  /** Whether unsaved changes exist in memory. */
   dirty: boolean;
+  /** Whether the current id has been written to disk. */
   saved: boolean;
+  /** Number of messages in context. */
   messageCount: number;
+  /** Estimated token count for the context. */
   tokenCount: number;
+  /** Model context window size. */
   maxContextLength: number;
 }
 
+/** Result of {@link SessionManager.finalizeTurn}. */
 export interface TurnResult {
+  /** Context token count after refresh or compaction. */
   tokenCount: number;
+  /** Whether compaction ran this turn. */
   compacted: boolean;
 }
 

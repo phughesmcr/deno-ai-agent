@@ -1,7 +1,13 @@
 import { type LLM, LMStudioClient } from "@lmstudio/sdk";
 
+/**
+ * Connected LM Studio client and loaded model.
+ * @internal
+ */
 export interface LMStudioManager {
+  /** LM Studio SDK client. */
   readonly client: LMStudioClient;
+  /** Loaded chat model. */
   readonly model: LLM;
 }
 

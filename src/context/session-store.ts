@@ -1,12 +1,20 @@
 import type { ChatMessageData } from "@lmstudio/sdk";
 
-const FORMAT_VERSION = 1 as const;
+/** Session file format version. */
+export const FORMAT_VERSION = 1 as const;
 
-/** On-disk session file (version 1). */
+/**
+ * On-disk session file (version 1).
+ * @internal
+ */
 export interface SessionFile {
+  /** File format version. */
   version: typeof FORMAT_VERSION;
+  /** Session identifier. */
   id: string;
+  /** ISO timestamp when the file was written. */
   savedAt: string;
+  /** Serialized chat messages. */
   messages: ChatMessageData[];
 }
 
@@ -19,14 +27,19 @@ interface LegacyMessagesOnly {
   messages: ChatMessageData[];
 }
 
-/** Reads and writes `{workspace}/sessions/{id}.json`. */
+/**
+ * Reads and writes `{workspace}/sessions/{id}.json`.
+ * @internal
+ */
 export class SessionStore {
   readonly #dir: string;
 
+  /** @param sessionsDir Directory containing `{id}.json` session files. */
   constructor(sessionsDir: string) {
     this.#dir = sessionsDir;
   }
 
+  /** Writes messages to `{id}.json`. */
   async save(id: string, messages: ChatMessageData[]): Promise<void> {
     const file: SessionFile = {
       version: FORMAT_VERSION,
@@ -37,11 +50,13 @@ export class SessionStore {
     await Deno.writeTextFile(this.#path(id), JSON.stringify(file, null, 2));
   }
 
+  /** Reads messages from `{id}.json`. */
   async load(id: string): Promise<ChatMessageData[]> {
     const json = await Deno.readTextFile(this.#path(id));
     return parseSessionFile(json, id);
   }
 
+  /** Lists session ids (filenames without `.json`). */
   async list(): Promise<string[]> {
     const entries = await Array.fromAsync(Deno.readDir(this.#dir));
     return entries
@@ -50,6 +65,7 @@ export class SessionStore {
       .toSorted();
   }
 
+  /** Returns whether `{id}.json` exists. */
   async exists(id: string): Promise<boolean> {
     try {
       await Deno.stat(this.#path(id));
@@ -65,7 +81,10 @@ export class SessionStore {
   }
 }
 
-/** Parses v1 session files and legacy exports. */
+/**
+ * Parses v1 session files and legacy exports.
+ * @internal
+ */
 export function parseSessionFile(json: string, expectedId?: string): ChatMessageData[] {
   const parsed: unknown = JSON.parse(json);
 
