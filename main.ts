@@ -71,6 +71,15 @@ async function main(): Promise<void> {
     }
   });
 
+  telegram.bot.command("new", async (ctx: TelegramContext) => {
+    if (!ctx.config.isAdmin) {
+      await ctx.reply("Sorry, you are not authorized to use this bot.");
+      return;
+    }
+    context.reset();
+    await ctx.reply("Context reset.");
+  });
+
   telegram.bot.on("message", async (ctx: TelegramContext) => {
     let outcome: "error" | "ok" = "ok";
     let skipped = false;
@@ -94,8 +103,7 @@ async function main(): Promise<void> {
             "tools.count": toolsList.length,
           });
 
-          await context.append("user", message);
-          span.setAttribute("context.tokens", tokenBucket(context.getTokenCount()));
+          const userMessage = context.append("user", message);
 
           const typingInterval = setInterval(() => {
             ctx.replyWithChatAction("typing").catch(() => {});
@@ -104,7 +112,7 @@ async function main(): Promise<void> {
             message_thread_id: ctx.message?.message_thread_id,
           });
 
-          const tokenCountPromises: Promise<ContextManager>[] = [];
+          const tokenCountPromises: Promise<number>[] = [context.appendTokenCount(userMessage)];
           let replies = 0;
           const actStarted = performance.now();
           let firstTokenMs: number | undefined;
@@ -119,8 +127,8 @@ async function main(): Promise<void> {
                   {
                     onMessage: (msg) => {
                       replies++;
-                      context.append(msg);
-                      tokenCountPromises.push(context.appendTokenCount(msg));
+                      const assistantMessage = context.append(msg);
+                      tokenCountPromises.push(context.appendTokenCount(assistantMessage));
                     },
                     onFirstToken: () => {
                       if (firstTokenMs === undefined) firstTokenMs = performance.now() - actStarted;
@@ -128,9 +136,11 @@ async function main(): Promise<void> {
                     signal: controller.signal,
                   },
                 );
-                if (replies > 0) {
-                  await Promise.all(tokenCountPromises);
-                }
+                const totalTokens = await Promise.all(tokenCountPromises);
+                actSpan.setAttribute(
+                  "context.tokens",
+                  tokenBucket(totalTokens.reduce((acc, count) => acc + count, 0)),
+                );
                 actSpan.setAttribute("reply.count", replies);
                 if (firstTokenMs !== undefined) actSpan.setAttribute("first_token.ms", Math.round(firstTokenMs));
               },

@@ -62,17 +62,17 @@ export class ContextManager {
   }
 
   /** Adds a message's token count to the running total. */
-  async appendTokenCount(chat: ChatMessage): Promise<ContextManager> {
+  async appendTokenCount(chat: ChatMessage): Promise<number> {
     const tokenCount = await this.model.countTokens(chat.getText());
     this.currentTokenCount += tokenCount;
-    return this;
+    return tokenCount;
   }
 
   /** Appends a chat message to the current and complete history. */
-  append(chat: ChatMessage): void;
+  append(chat: ChatMessage): ChatMessage;
   /** Appends a message with the given role and content. */
-  append(role: "user" | "assistant" | "system", content: string): void;
-  append(chatOrRole: ChatMessage | ("user" | "assistant" | "system"), content?: string): void {
+  append(role: "user" | "assistant" | "system", content: string): ChatMessage;
+  append(chatOrRole: ChatMessage | ("user" | "assistant" | "system"), content?: string): ChatMessage {
     const chat = chatOrRole instanceof ChatMessage ? chatOrRole : ChatMessage.create(chatOrRole, content ?? "");
     this.complete.append(chat);
     this.current.append(chat);
@@ -85,6 +85,7 @@ export class ContextManager {
       isAssistantMessage: chat.isAssistantMessage() ? "yes" : "no",
       isSystemPrompt: chat.isSystemPrompt() ? "yes" : "no",
     });
+    return chat;
   }
 
   /** Recalculates the current token count. */
@@ -108,5 +109,12 @@ export class ContextManager {
       logDebug("context.compact", { before, after: this.currentTokenCount });
     });
     return this;
+  }
+
+  /** Resets the current and complete history. */
+  reset(): void {
+    this.current = Chat.empty();
+    this.complete = Chat.empty();
+    this.currentTokenCount = 0;
   }
 }
