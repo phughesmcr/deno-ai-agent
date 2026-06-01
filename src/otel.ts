@@ -36,12 +36,12 @@ export function tokenBucket(count: number): string {
   if (count < 1_000) return "lt_1k";
   if (count < 2_000) return "1k_2k";
   if (count < 4_000) return "2k_4k";
-  if (count < 8_000) return "1k_8k";
+  if (count < 8_000) return "4k_8k";
   if (count < 16_000) return "8k_16k";
-  if (count < 32_000) return "8k_32k";
+  if (count < 32_000) return "16k_32k";
   if (count < 64_000) return "32k_64k";
   if (count < 128_000) return "64k_128k";
-  return "gte_64k";
+  return "gte_128k";
 }
 
 /** Records one handled Telegram message. */

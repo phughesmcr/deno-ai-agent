@@ -6,6 +6,10 @@
     "source.fixAll.eslint": "explicit",
     "source.organizeImports": "explicit"
   },
+  "[markdown]": {
+    "editor.defaultFormatter": null,
+    "editor.formatOnSave": false
+  },
   "cSpell.words": [
     "lmstudio",
     "qwen"

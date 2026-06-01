@@ -4,7 +4,10 @@
     "jsr:@std/assert@1": "1.0.19",
     "jsr:@std/async@*": "1.4.0",
     "jsr:@std/internal@^1.0.12": "1.0.14",
+    "jsr:@std/internal@^1.0.14": "1.0.14",
+    "jsr:@std/path@1": "1.1.5",
     "npm:@lmstudio/sdk@*": "1.5.0",
+    "npm:@lmstudio/sdk@1.5.0": "1.5.0",
     "npm:@lmstudio/sdk@^1.5.0": "1.5.0",
     "npm:@opentelemetry/api@^1.9.1": "1.9.1",
     "npm:grammy@^1.43.0": "1.43.0",
@@ -14,7 +17,7 @@
     "@std/assert@1.0.19": {
       "integrity": "eaada96ee120cb980bc47e040f82814d786fe8162ecc53c91d8df60b8755991e",
       "dependencies": [
-        "jsr:@std/internal"
+        "jsr:@std/internal@^1.0.12"
       ]
     },
     "@std/async@1.4.0": {
@@ -22,6 +25,12 @@
     },
     "@std/internal@1.0.14": {
       "integrity": "291516b3d4c35024d6ffbc0a9df5bf4c64116e05b50012cf846710152d2ffdf7"
+    },
+    "@std/path@1.1.5": {
+      "integrity": "ccea00982ea28c36becaf6e62f855406c76a8c32d462f66f415bbb7d83a271bc",
+      "dependencies": [
+        "jsr:@std/internal@^1.0.14"
+      ]
     }
   },
   "npm": {
@@ -146,6 +155,7 @@
   "workspace": {
     "dependencies": [
       "jsr:@std/async@*",
+      "jsr:@std/path@1",
       "npm:@lmstudio/sdk@^1.5.0",
       "npm:@opentelemetry/api@^1.9.1",
       "npm:grammy@^1.43.0",

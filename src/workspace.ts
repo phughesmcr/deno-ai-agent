@@ -1,5 +1,12 @@
 import { debounce } from "@std/async/debounce";
-import { Result } from "./utils.ts";
+import { logDebug } from "./log.ts";
+import { prepareSystemPrompt } from "./tools/prompt.ts";
+
+/**
+ * Filesystem watcher subscriber callback.
+ * @internal
+ */
+export type FsSubscriber = (event: Deno.FsEvent) => void | Promise<void>;
 
 /** Workspace directory, system prompt, and session storage path. */
 export interface Workspace {
@@ -12,7 +19,7 @@ export interface Workspace {
   /** Re-reads `SYSTEM.md` from disk. */
   reloadSystemPrompt(): Promise<string>;
   /** Subscribes to filesystem events. */
-  subscribeToFsEvents(onWatchEvent: (event: Deno.FsEvent) => void | Promise<void>): () => void;
+  subscribeToFsEvents(onWatchEvent: FsSubscriber): () => void;
   /** Closes the filesystem watcher when the workspace is disposed. */
   [Symbol.dispose]: () => void;
 }
@@ -23,23 +30,42 @@ function getEnv(): { workspacePath: string } {
   return { workspacePath };
 }
 
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+/**
+ * Notifies filesystem watcher subscribers without letting one failure stop the watcher.
+ * @internal
+ */
+export async function notifyWorkspaceSubscribers(
+  subscribers: Iterable<FsSubscriber>,
+  event: Deno.FsEvent,
+): Promise<void> {
+  const settled = await Promise.allSettled([...subscribers].map((subscriber) => Promise.try(subscriber, event)));
+  for (const result of settled) {
+    if (result.status === "rejected") {
+      logDebug("workspace.subscriber.error", { message: errorMessage(result.reason) });
+    }
+  }
+}
+
 /** Creates a workspace from `WORKSPACE_PATH` and watches for file changes. */
 export async function createWorkspace(rootDir: URL): Promise<Workspace> {
   const { workspacePath } = getEnv();
 
   const dir = new URL(workspacePath, rootDir);
   const path = dir.pathname;
-  const result = await Result.try(() => Deno.mkdirSync(path, { recursive: true }));
-  if (!result.success) throw result.error;
+  await Deno.mkdir(path, { recursive: true });
 
   const systemPromptPath = `${path}/SYSTEM.md`;
-  let systemPrompt = await readSystemPrompt(systemPromptPath);
+  let systemPrompt = await readSystemPrompt(systemPromptPath, path);
 
   const sessionsDir = `${path}/sessions`;
   await Deno.mkdir(sessionsDir, { recursive: true });
 
-  const subscribers = new Set<(event: Deno.FsEvent) => void>();
-  const subscribeToFsEvents = (onWatchEvent: (event: Deno.FsEvent) => void | Promise<void>): () => void => {
+  const subscribers = new Set<FsSubscriber>();
+  const subscribeToFsEvents = (onWatchEvent: FsSubscriber): () => void => {
     const debouncedOnWatchEvent = debounce(onWatchEvent, 200);
     subscribers.add(debouncedOnWatchEvent);
     return () => {
@@ -49,8 +75,12 @@ export async function createWorkspace(rootDir: URL): Promise<Workspace> {
 
   const watcher = Deno.watchFs([path], { recursive: true });
   void (async () => {
-    for await (const event of watcher) {
-      await Promise.all([...subscribers].map((subscriber) => Promise.try(subscriber, event)));
+    try {
+      for await (const event of watcher) {
+        await notifyWorkspaceSubscribers(subscribers, event);
+      }
+    } catch (error) {
+      logDebug("workspace.watch.error", { message: errorMessage(error) });
     }
   })();
 
@@ -61,7 +91,7 @@ export async function createWorkspace(rootDir: URL): Promise<Workspace> {
       return systemPrompt;
     },
     async reloadSystemPrompt(): Promise<string> {
-      systemPrompt = await readSystemPrompt(systemPromptPath);
+      systemPrompt = await readSystemPrompt(systemPromptPath, path);
       return systemPrompt;
     },
     subscribeToFsEvents,
@@ -69,8 +99,7 @@ export async function createWorkspace(rootDir: URL): Promise<Workspace> {
   };
 }
 
-async function readSystemPrompt(path: string): Promise<string> {
-  const result = await Result.try(() => Deno.readTextFile(path));
-  if (!result.success) throw result.error;
-  return result.value;
+async function readSystemPrompt(systemPromptPath: string, workspaceRoot: string): Promise<string> {
+  const raw = await Deno.readTextFile(systemPromptPath);
+  return prepareSystemPrompt(raw, workspaceRoot);
 }

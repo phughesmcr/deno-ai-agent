@@ -18,13 +18,14 @@ export interface SessionFile {
   messages: ChatMessageData[];
 }
 
-/** @internal SDK exposes getRaw() at runtime but not in public types. */
-interface LegacyWrappedMessage {
-  data: ChatMessageData;
+const SESSION_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
+
+function isValidSessionId(id: string): boolean {
+  return SESSION_ID_PATTERN.test(id);
 }
 
-interface LegacyMessagesOnly {
-  messages: ChatMessageData[];
+function assertValidSessionId(id: string): void {
+  if (!isValidSessionId(id)) throw new Error("Invalid session id");
 }
 
 /**
@@ -41,6 +42,7 @@ export class SessionStore {
 
   /** Writes messages to `{id}.json`. */
   async save(id: string, messages: ChatMessageData[]): Promise<void> {
+    assertValidSessionId(id);
     const file: SessionFile = {
       version: FORMAT_VERSION,
       id,
@@ -52,8 +54,9 @@ export class SessionStore {
 
   /** Reads messages from `{id}.json`. */
   async load(id: string): Promise<ChatMessageData[]> {
+    assertValidSessionId(id);
     const json = await Deno.readTextFile(this.#path(id));
-    return parseSessionFile(json, id);
+    return decodeSessionFile(json, id);
   }
 
   /** Lists session ids (filenames without `.json`). */
@@ -62,11 +65,13 @@ export class SessionStore {
     return entries
       .filter((entry) => entry.isFile && entry.name.endsWith(".json"))
       .map((entry) => entry.name.replace(/\.json$/, ""))
+      .filter(isValidSessionId)
       .toSorted();
   }
 
   /** Returns whether `{id}.json` exists. */
   async exists(id: string): Promise<boolean> {
+    assertValidSessionId(id);
     try {
       await Deno.stat(this.#path(id));
       return true;
@@ -82,30 +87,19 @@ export class SessionStore {
 }
 
 /**
- * Parses v1 session files and legacy exports.
+ * Parses v1 session files.
  * @internal
  */
-export function parseSessionFile(json: string, expectedId?: string): ChatMessageData[] {
+function decodeSessionFile(json: string, expectedId: string): ChatMessageData[] {
   const parsed: unknown = JSON.parse(json);
 
   if (parsed && typeof parsed === "object" && "version" in parsed && parsed.version === FORMAT_VERSION) {
     const file = parsed as SessionFile;
-    if (expectedId && file.id !== expectedId) {
+    if (file.id !== expectedId) {
       throw new Error(`Session file id mismatch: expected ${expectedId}, got ${file.id}`);
     }
+    if (!Array.isArray(file.messages)) throw new Error("Invalid session JSON");
     return file.messages;
-  }
-
-  if (Array.isArray(parsed)) {
-    const first = parsed[0];
-    if (first && typeof first === "object" && "data" in first) {
-      return (parsed as LegacyWrappedMessage[]).map((item) => item.data);
-    }
-    return parsed as ChatMessageData[];
-  }
-
-  if (parsed && typeof parsed === "object" && "messages" in parsed && Array.isArray(parsed.messages)) {
-    return (parsed as LegacyMessagesOnly).messages;
   }
 
   throw new Error("Invalid session JSON");

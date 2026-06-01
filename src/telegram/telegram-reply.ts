@@ -1,7 +1,7 @@
-// deno-lint-ignore-file camelcase -- Grammy API uses snake_case keys
-import { type Context, GrammyError } from "grammy";
+import type { Context } from "grammy";
 
-import { escapeMarkdownV2, plainReply, stripThinking } from "../markdown.ts";
+import { escapeMarkdownV2 } from "../markdown.ts";
+import { sendModelTextReply } from "./model-reply.ts";
 
 /**
  * Sends the model reply; falls back to plain text if MarkdownV2 is rejected.
@@ -13,18 +13,14 @@ export async function replyWithModelText(
   replyToMessageId: number,
   messageThreadId?: number,
 ): Promise<void> {
-  const formatted = stripThinking(raw);
-  const params = {
-    reply_parameters: { message_id: replyToMessageId },
-    message_thread_id: messageThreadId,
-  };
-
-  try {
-    await ctx.reply(formatted, { ...params, parse_mode: "MarkdownV2" as const });
-  } catch (error) {
-    if (!(error instanceof GrammyError) || error.error_code !== 400) throw error;
-    await ctx.reply(plainReply(raw), params);
-  }
+  await sendModelTextReply(
+    {
+      reply: (text, options) => ctx.reply(text, options),
+    },
+    raw,
+    replyToMessageId,
+    messageThreadId,
+  );
 }
 
 /**

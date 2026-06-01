@@ -60,20 +60,38 @@ Copy `.env.example` to `.env` and fill in values.
 ```mermaid
 flowchart LR
   TG[Telegram] --> Bot[Grammy bot]
-  Bot --> Sess[SessionManager]
-  Sess --> Chat[ChatContext]
-  Chat --> LM[LM Studio SDK]
-  LM --> Chat
+  Bot --> Agent[agent.ts]
+  Agent --> Sess[SessionManager]
+  Sess --> LM[LM Studio SDK]
+  LM --> Sess
   Sess --> Store[SessionStore]
   Bot --> TG
   WS[Workspace SYSTEM.md] -.->|watch| Sess
 ```
 
-1. An incoming Telegram message is appended to the chat context.
+1. An incoming Telegram message is appended to the current session.
 2. `model.act()` runs against LM Studio with the current history and tools.
 3. Assistant text is streamed into context and sent back as a MarkdownV2 reply (`stripThinking` removes model “thinking” blocks).
 4. Changes to `SYSTEM.md` in the workspace reload the system prompt without restarting.
 5. When context exceeds ~75% of `CONTEXT_LENGTH`, older turns are summarized via LM Studio and replaced with a compact summary.
+
+### Model tools (workspace sandbox)
+
+Silas registers seven tools for LM Studio: `read`, `write`, `edit`, `bash`, `grep`, `find`, and `ls`. All file and shell access is confined to `WORKSPACE_PATH` (for example `.silas/`). The model cannot read or modify the application source tree outside that directory.
+
+| Tool | Purpose |
+| ---- | ------- |
+| `read` | Read text files (`offset` / `limit` for large files) |
+| `write` | Create or overwrite files |
+| `edit` | Exact text replacements (`edits[]`) |
+| `bash` | Shell commands with cwd set to the workspace (`--allow-run` required) |
+| `grep` | Search contents (`rg` when installed; built-in fallback otherwise) |
+| `find` | Find files by glob (`fd` when installed; built-in fallback otherwise) |
+| `ls` | List directory entries |
+
+Optional: install [ripgrep](https://github.com/BurntSushi/ripgrep) and [fd](https://github.com/sharkdp/fd) for faster search. The built-in grep fallback does not fully honor `.gitignore`.
+
+Future: a `TOOL_ROOT` env var could widen the sandbox to the repo root for coding tasks (not implemented in v1).
 
 ### Session commands (admin)
 
@@ -114,7 +132,7 @@ After messaging the bot, open Jaeger → **Search** → service **`deno-ai-agent
 | Task | Use when |
 | ---- | -------- |
 | `deno task start:otel:console` | Print spans/metrics/logs to stderr; no collector |
-| `deno task otel:collector` + `deno task start:otel` | Collector debug logs only; no web UI |
+| `deno task otel:collector:jaeger` + `deno task start:otel` | Forward traces to Jaeger and print collector debug logs |
 
 Install the OpenTelemetry Collector **contrib** binary once (not the minimal `otelcol` core build):
 
@@ -141,22 +159,25 @@ main.ts              Entry point: wires agent, workspace, Telegram
 src/
   agent.ts           Turn runner and app wiring
   context/
-    chat-context.ts  LM Studio chat history, tokens, compaction
-    session.ts       Session new / save / load / fork API
+    session.ts       Chat state, model turns, tokens, compaction, session API
     session-store.ts Session JSON on disk
     compactor.ts     Summarize-and-trim context compaction
   lmstudio.ts        LM Studio client and model handle
-  telegram/          Grammy bot, admin gate, session commands
+  telegram/
+    telegram.ts      Grammy bot and admin gate
+    commands.ts      Session command behavior and formatting
+    model-reply.ts   MarkdownV2 model reply helper
+    telegram-reply.ts Grammy reply adapter and error reply
   workspace.ts       SYSTEM.md load and file watch
   otel.ts            Custom spans and metrics
   log.ts             Debug logging (`LOG_LEVEL=debug`)
-  telegram-reply.ts  MarkdownV2 reply with plain fallback
-  tools.ts           Tool definitions for model.act
+  tools.ts           Re-exports getModelTools from tools/
+  tools/             read, write, edit, bash, grep, find, ls (pi-aligned)
   markdown.ts        Reply formatting (thinking strip, etc.)
 otel/
-  otel-collector.yaml
   otel-collector.jaeger.yaml
   download-jaeger.sh
+  download-otelcol.sh
   README.md
 ```
 

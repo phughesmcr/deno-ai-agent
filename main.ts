@@ -1,10 +1,12 @@
+import type { Tool } from "@lmstudio/sdk";
+
 import { createAgent, runTurn } from "./src/agent.ts";
 import { createLMStudioManager } from "./src/lmstudio.ts";
 import { logDebug } from "./src/log.ts";
 import { recordActDuration, recordTelegramMessage, traceSpan } from "./src/otel.ts";
-import { replyError, replyWithModelText } from "./src/telegram/telegram-reply.ts";
+import { replyWithModelText } from "./src/telegram/telegram-reply.ts";
 import { createTelegramManager, type TelegramContext } from "./src/telegram/telegram.ts";
-import { ToolsManager } from "./src/tools.ts";
+import { getModelTools } from "./src/tools.ts";
 import { createWorkspace } from "./src/workspace.ts";
 
 function getEnv(): { maxContextLength: number } {
@@ -32,8 +34,7 @@ async function main(): Promise<void> {
   const lmstudio = await createLMStudioManager({ signal: controller.signal, maxContextLength });
   const agent = await createAgent({ workspace, lmstudio, maxContextLength, signal: controller.signal });
 
-  const tools = new ToolsManager();
-  const toolsList = tools.get() ?? [];
+  const toolsList = getModelTools({ root: workspace.path }) as Tool[];
 
   const telegram = createTelegramManager({ session: agent.session });
 
@@ -93,13 +94,6 @@ async function main(): Promise<void> {
       );
     } catch (error) {
       outcome = "error";
-      if (ctx.message?.text && ctx.config.isAdmin) {
-        try {
-          await replyError(ctx, ctx.message.message_thread_id);
-        } catch {
-          // bot.catch will handle a second failure
-        }
-      }
       throw error;
     } finally {
       recordTelegramMessage(outcome, skipped);

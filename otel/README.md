@@ -37,13 +37,6 @@ If you see `unknown type: "transform"`, re-run the install task to replace `otel
 
 Telegram bot tokens in trace `url.full` are redacted to `/bot***` in the collector before export.
 
-## No UI (collector logs only)
-
-```sh
-deno task otel:collector    # terminal 1
-deno task start:otel        # terminal 2
-```
-
 ## No collector (stderr)
 
 ```sh
