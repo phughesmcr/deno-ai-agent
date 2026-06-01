@@ -1,5 +1,8 @@
 import { Chat, type LLM } from "@lmstudio/sdk";
 
+import { logDebug } from "./log.ts";
+import { traceSpan } from "./otel.ts";
+
 interface ContextManagerOptions {
   model: LLM;
   maxContextLength: number;
@@ -33,11 +36,14 @@ export class ContextManager {
     return this.current.asMutableCopy();
   }
 
+  /** Approximate token count for the current chat (for telemetry). */
+  getTokenCount(): number {
+    return this.currentTokenCount;
+  }
+
   /** Replaces the system prompt in the current and complete history. */
   replaceSystemPrompt(prompt: string): ContextManager {
-    // replace the system prompt in current
     this.current.replaceSystemPrompt(prompt);
-    // add a new system message in complete
     this.complete.append({ role: "system", content: prompt });
     return this;
   }
@@ -48,15 +54,14 @@ export class ContextManager {
     this.complete.append(role, content);
     this.current.append(role, content);
 
-    // if the current token count is greater than the max context length, we need to compact
     const tokenCount = await this.model.countTokens(chat.content);
-    console.log(`Token count: ${tokenCount}, string: ${chat.content}`);
     this.currentTokenCount += tokenCount;
-    console.log(
-      `Current token count: ${this.currentTokenCount} (${
-        Math.round((this.currentTokenCount / this.maxContextLength) * 100)
-      }%)`,
-    );
+    logDebug("context.append", {
+      role,
+      tokens: tokenCount,
+      total: this.currentTokenCount,
+      pct: Math.round((this.currentTokenCount / this.maxContextLength) * 100),
+    });
 
     if (this.currentTokenCount > this.maxContextLength * this.compactPercentage) {
       await this.compact();
@@ -74,8 +79,16 @@ export class ContextManager {
 
   /** Compacts the current chat via the configured compactor. */
   async compact(): Promise<ContextManager> {
-    this.current = await this.compactor(this.current);
-    await this.refreshTokenCount();
+    await traceSpan("context.compact", async (span) => {
+      const before = this.currentTokenCount;
+      this.current = await this.compactor(this.current);
+      await this.refreshTokenCount();
+      span.setAttributes({
+        "context.tokens.before": before,
+        "context.tokens.after": this.currentTokenCount,
+      });
+      logDebug("context.compact", { before, after: this.currentTokenCount });
+    });
     return this;
   }
 }

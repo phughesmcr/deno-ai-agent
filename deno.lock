@@ -5,6 +5,7 @@
     "jsr:@std/async@*": "1.4.0",
     "jsr:@std/internal@^1.0.12": "1.0.14",
     "npm:@lmstudio/sdk@^1.5.0": "1.5.0",
+    "npm:@opentelemetry/api@^1.9.1": "1.9.1",
     "npm:grammy@^1.43.0": "1.43.0",
     "npm:zod@^4.4.3": "4.4.3"
   },
@@ -41,6 +42,9 @@
         "zod@3.25.76",
         "zod-to-json-schema"
       ]
+    },
+    "@opentelemetry/api@1.9.1": {
+      "integrity": "sha512-gLyJlPHPZYdAk1JENA9LeHejZe1Ti77/pTeFm/nMXmQH/HFZlcS/O2XJB+L8fkbrNSqhdtlvjBVjxwUYanNH5Q=="
     },
     "abort-controller@3.0.0": {
       "integrity": "sha512-h8lQ8tacZYnR3vNQTgibj+tODHI5/+l06Au2Pcriv/Gmet0eaj4TwWH41sO9wnHDiQsEj19q0drzdWdeAHtweg==",
@@ -142,6 +146,7 @@
     "dependencies": [
       "jsr:@std/async@*",
       "npm:@lmstudio/sdk@^1.5.0",
+      "npm:@opentelemetry/api@^1.9.1",
       "npm:grammy@^1.43.0",
       "npm:zod@^4.4.3"
     ]

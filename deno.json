@@ -89,16 +89,26 @@
     }
   },
   "tasks": {
+    "test": "deno test test/**/*.test.ts",
+
+    "start": "deno run --env-file=.env --allow-read --allow-write --allow-net --allow-env main.ts",
+    "start:otel": "OTEL_DENO=true OTEL_SERVICE_NAME=deno-ai-agent deno run --env-file=.env --allow-read --allow-write --allow-net --allow-env main.ts",
+    "start:otel:console": "OTEL_DENO=true OTEL_SERVICE_NAME=deno-ai-agent OTEL_EXPORTER_OTLP_PROTOCOL=console deno run --env-file=.env --allow-read --allow-write --allow-net --allow-env main.ts",
+
     "check:docs": "deno doc --lint main.ts src/**/*.ts",
     "check:fmt": "deno fmt --check",
     "check:lint": "deno lint",
     "check:types": "deno check --allow-import main.ts src/**/*.ts test/**/*.test.ts bench/**/*.ts",
     "ci": "CI=1 deno task check:fmt && deno task check:lint && deno task check:types && deno task check:docs && deno task test",
-    "start": "deno run --env-file=.env --allow-read --allow-write --allow-net --allow-env main.ts",
-    "test": "deno test test/**/*.test.ts"
+
+    "otel:collector:install": "bash otel/download-otelcol.sh",
+    "otel:collector:jaeger": "./otel/otelcol --config=otel/otel-collector.jaeger.yaml",
+    "otel:jaeger:install": "bash otel/download-jaeger.sh",
+    "otel:jaeger": "./otel/jaeger-all-in-one --collector.otlp.http.host-port=:14318"
   },
   "imports": {
     "@std/async/debounce": "jsr:@std/async/debounce",
+    "@opentelemetry/api": "npm:@opentelemetry/api@^1.9.1",
     "@lmstudio/sdk": "npm:@lmstudio/sdk@^1.5.0",
     "grammy": "npm:grammy@^1.43.0",
     "zod": "npm:zod@^4.4.3"
