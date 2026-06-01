@@ -1,4 +1,4 @@
-import { Chat, type ChatMessageLike, type LLM } from "@lmstudio/sdk";
+import { Chat, type LLM } from "@lmstudio/sdk";
 
 interface ContextManagerOptions {
   model: LLM;
@@ -13,8 +13,10 @@ export class ContextManager {
 
   private maxContextLength: number;
   private currentTokenCount: number;
-  private model: LLM;
+  private compactPercentage: number = 0.75; // compact when the current token count is greater than 75% of the max context length
   private compactor: (chat: Chat) => Promise<Chat>;
+
+  private model: LLM;
 
   /** Creates a context manager. */
   constructor({ model, maxContextLength, compactor }: ContextManagerOptions) {
@@ -26,7 +28,7 @@ export class ContextManager {
     this.compactor = compactor;
   }
 
-  /** @internal */
+  /** Returns a mutable copy of the current chat. */
   get(): Chat {
     return this.current.asMutableCopy();
   }
@@ -40,28 +42,40 @@ export class ContextManager {
     return this;
   }
 
-  /** @internal */
-  async append(chat: ChatMessageLike): Promise<ContextManager> {
-    // complete gets everything
-    this.complete.append(chat);
-
-    // count the tokens in the current chat
-    const tokenCount = await this.model.countTokens(chat.toString());
-    this.currentTokenCount += tokenCount;
+  /** Appends a message to the current chat. */
+  async append(role: "user" | "assistant" | "system", content: string): Promise<ContextManager> {
+    const chat = { role, content };
+    this.complete.append(role, content);
+    this.current.append(role, content);
 
     // if the current token count is greater than the max context length, we need to compact
-    if (this.currentTokenCount > this.maxContextLength) {
+    const tokenCount = await this.model.countTokens(chat.content);
+    console.log(`Token count: ${tokenCount}, string: ${chat.content}`);
+    this.currentTokenCount += tokenCount;
+    console.log(
+      `Current token count: ${this.currentTokenCount} (${
+        Math.round((this.currentTokenCount / this.maxContextLength) * 100)
+      }%)`,
+    );
+
+    if (this.currentTokenCount > this.maxContextLength * this.compactPercentage) {
       await this.compact();
     }
 
-    this.current.append(chat);
-
     return this;
+  }
+
+  private async refreshTokenCount(): Promise<void> {
+    const messages = this.current.getMessagesArray();
+    const promises = messages.map((message) => this.model.countTokens(message.toString()));
+    const counts = await Promise.all(promises);
+    this.currentTokenCount = counts.reduce((acc, count) => acc + count, 0);
   }
 
   /** Compacts the current chat via the configured compactor. */
   async compact(): Promise<ContextManager> {
     this.current = await this.compactor(this.current);
+    await this.refreshTokenCount();
     return this;
   }
 }

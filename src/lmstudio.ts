@@ -1,24 +1,21 @@
 import { type LLM, LMStudioClient } from "@lmstudio/sdk";
 
-/** Creates an {@link LMStudioManager} connected to the configured local model. */
-export async function createLMStudioManager(
-  { signal, maxContextLength }: { signal?: AbortSignal; maxContextLength: number },
-): Promise<LMStudioManager> {
-  const client = new LMStudioClient();
-  const model = await client.llm.model("qwen3.6-27b", { signal, config: { contextLength: maxContextLength } });
-  return new LMStudioManager(client, model);
+interface LMStudioManager {
+  readonly client: LMStudioClient;
+  readonly model: LLM;
 }
 
-/** Wraps an LM Studio client and loaded LLM model. */
-export class LMStudioManager {
-  /** @internal */
-  readonly client: LMStudioClient;
-  /** @internal */
-  readonly model: LLM;
+interface LMStudioManagerOptions {
+  signal?: AbortSignal;
+  maxContextLength: number;
+}
 
-  /** Creates a manager from a client and model. */
-  constructor(client: LMStudioClient, model: LLM) {
-    this.client = client;
-    this.model = model;
-  }
+/** Creates an {@link LMStudioManager} connected to the configured local model. */
+export async function createLMStudioManager(spec: LMStudioManagerOptions): Promise<LMStudioManager> {
+  const { signal, maxContextLength } = spec;
+  const modelName = Deno.env.get("MODEL");
+  if (!modelName) throw new Error("MODEL is not set");
+  const client = new LMStudioClient();
+  const model = await client.llm.model(modelName, { signal, config: { contextLength: maxContextLength } });
+  return { client, model };
 }

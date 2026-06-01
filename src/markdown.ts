@@ -3,9 +3,11 @@ export function escapeMarkdownV2(text: string): string {
   return text.replace(/([_*\[\]()~`>#+\-=|{}.!\\])/g, "\\$1");
 }
 
+/** Creates a collapsible thinking block in MarkdownV2. */
 function formatThinking(thinking: string): string {
-  const lines = thinking.trim().split("\n");
+  const lines = thinking.replace("<think>", "").replace("</think>", "").trim().split("\n");
   return lines
+    .map((line) => line.trim())
     .map((line, i) => (i === 0 ? `**>${escapeMarkdownV2(line)}` : `>${escapeMarkdownV2(line)}`))
     .join("\n") + "||";
 }

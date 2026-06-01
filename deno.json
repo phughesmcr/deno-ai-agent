@@ -94,10 +94,11 @@
     "check:lint": "deno lint",
     "check:types": "deno check --allow-import main.ts src/**/*.ts test/**/*.test.ts bench/**/*.ts",
     "ci": "CI=1 deno task check:fmt && deno task check:lint && deno task check:types && deno task check:docs && deno task test",
-    "start": "deno run --env-file=.env --allow-read --allow-net --allow-env main.ts",
+    "start": "deno run --env-file=.env --allow-read --allow-write --allow-net --allow-env main.ts",
     "test": "deno test test/**/*.test.ts"
   },
   "imports": {
+    "@std/async/debounce": "jsr:@std/async/debounce",
     "@lmstudio/sdk": "npm:@lmstudio/sdk@^1.5.0",
     "grammy": "npm:grammy@^1.43.0",
     "zod": "npm:zod@^4.4.3"
