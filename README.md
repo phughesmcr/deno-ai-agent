@@ -60,11 +60,13 @@ Copy `.env.example` to `.env` and fill in values.
 ```mermaid
 flowchart LR
   TG[Telegram] --> Bot[Grammy bot]
-  Bot --> Ctx[ContextManager]
-  Ctx --> LM[LM Studio SDK]
-  LM --> Ctx
+  Bot --> Sess[SessionManager]
+  Sess --> Chat[ChatContext]
+  Chat --> LM[LM Studio SDK]
+  LM --> Chat
+  Sess --> Store[SessionStore]
   Bot --> TG
-  WS[Workspace SYSTEM.md] -.->|watch| Ctx
+  WS[Workspace SYSTEM.md] -.->|watch| Sess
 ```
 
 1. An incoming Telegram message is appended to the chat context.
@@ -72,6 +74,19 @@ flowchart LR
 3. Assistant text is streamed into context and sent back as a MarkdownV2 reply (`stripThinking` removes model “thinking” blocks).
 4. Changes to `SYSTEM.md` in the workspace reload the system prompt without restarting.
 5. When context exceeds ~75% of `CONTEXT_LENGTH`, older turns are summarized via LM Studio and replaced with a compact summary.
+
+### Session commands (admin)
+
+| Command | Action |
+| ------- | ------ |
+| `/new` | Fresh in-memory session (new id; does not save the previous one) |
+| `/save` | Write current chat to `{WORKSPACE_PATH}/sessions/{id}.json` |
+| `/load <id>` | Restore a saved session (`/resume` is an alias) |
+| `/fork` | Save current session, then branch into a new id with the same history |
+| `/list` | List saved session ids |
+| `/session` | Current id, save state, message and token counts |
+| `/stats` | Same as `/session` but refreshes token count first |
+| `/help` | Session command summary |
 
 Custom OpenTelemetry spans: `telegram.message` (root span per turn), `lmstudio.act`, and `context.compact`. Deno also auto-instruments `fetch` and `console.*` when `OTEL_DENO=true`. The collector redacts Telegram bot tokens in `url.full` before export.
 
@@ -122,14 +137,18 @@ deno task ci          # all checks + tests
 ## Project layout
 
 ```
-main.ts              Entry point: wires LM Studio, context, workspace, Telegram
+main.ts              Entry point: wires agent, workspace, Telegram
 src/
-  context.ts         Chat history and system prompt
+  agent.ts           Turn runner and app wiring
+  context/
+    chat-context.ts  LM Studio chat history, tokens, compaction
+    session.ts       Session new / save / load / fork API
+    session-store.ts Session JSON on disk
+    compactor.ts     Summarize-and-trim context compaction
   lmstudio.ts        LM Studio client and model handle
-  telegram.ts        Grammy bot and admin gate
+  telegram/          Grammy bot, admin gate, session commands
   workspace.ts       SYSTEM.md load and file watch
   otel.ts            Custom spans and metrics
-  compactor.ts       Summarize-and-trim context compaction
   log.ts             Debug logging (`LOG_LEVEL=debug`)
   telegram-reply.ts  MarkdownV2 reply with plain fallback
   tools.ts           Tool definitions for model.act

@@ -89,7 +89,7 @@
     }
   },
   "tasks": {
-    "test": "deno test test/**/*.test.ts",
+    "test": "deno test --allow-read --allow-write test/**/*.test.ts",
 
     "start": "deno run --env-file=.env --allow-read --allow-write --allow-net --allow-env main.ts",
     "start:otel": "OTEL_DENO=true OTEL_SERVICE_NAME=deno-ai-agent deno run --env-file=.env --allow-read --allow-write --allow-net --allow-env main.ts",

@@ -1,6 +1,6 @@
 import { type LLM, LMStudioClient } from "@lmstudio/sdk";
 
-interface LMStudioManager {
+export interface LMStudioManager {
   readonly client: LMStudioClient;
   readonly model: LLM;
 }

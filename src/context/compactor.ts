@@ -35,10 +35,7 @@ export function createSummaryCompactor(model: LLM, signal?: AbortSignal): (chat:
     if (systemPrompt) compacted.replaceSystemPrompt(systemPrompt);
     compacted.append("user", `[Earlier conversation summary]\n${summary.trim()}`);
     for (const message of recent) {
-      const role = message.getRole();
-      if (role === "user" || role === "assistant" || role === "system") {
-        compacted.append(role, message.getText());
-      }
+      compacted.append(message);
     }
     return compacted;
   };
