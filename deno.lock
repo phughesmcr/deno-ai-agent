@@ -4,6 +4,7 @@
     "jsr:@std/assert@1": "1.0.19",
     "jsr:@std/async@*": "1.4.0",
     "jsr:@std/internal@^1.0.12": "1.0.14",
+    "npm:@lmstudio/sdk@*": "1.5.0",
     "npm:@lmstudio/sdk@^1.5.0": "1.5.0",
     "npm:@opentelemetry/api@^1.9.1": "1.9.1",
     "npm:grammy@^1.43.0": "1.43.0",

@@ -1,10 +1,9 @@
 import { GrammyError, HttpError } from "grammy";
-
 import { createSummaryCompactor } from "./src/context/compactor.ts";
 import { ContextManager } from "./src/context/context.ts";
 import { createLMStudioManager } from "./src/lmstudio.ts";
 import { logDebug } from "./src/log.ts";
-import { recordActDuration, recordTelegramMessage, tokenBucket, traceSpan } from "./src/otel.ts";
+import { createActSpanTracker, recordActDuration, recordTelegramMessage, tokenBucket, traceSpan } from "./src/otel.ts";
 import { replyError, replyWithModelText } from "./src/telegram/telegram-reply.ts";
 import { createTelegramManager, type TelegramContext } from "./src/telegram/telegram.ts";
 import { ToolsManager } from "./src/tools.ts";
@@ -121,17 +120,50 @@ async function main(): Promise<void> {
             await traceSpan(
               "lmstudio.act",
               async (actSpan) => {
+                const actTelemetry = createActSpanTracker();
                 await lmstudio.model.act(
                   context.get(),
                   toolsList,
                   {
                     onMessage: (msg) => {
+                      actTelemetry.onMessage();
                       replies++;
                       const assistantMessage = context.append(msg);
                       tokenCountPromises.push(context.appendTokenCount(assistantMessage));
                     },
-                    onFirstToken: () => {
-                      if (firstTokenMs === undefined) firstTokenMs = performance.now() - actStarted;
+                    onFirstToken: (roundIndex) => {
+                      const ms = performance.now() - actStarted;
+                      if (firstTokenMs === undefined) firstTokenMs = ms;
+                      actTelemetry.onFirstToken(roundIndex, ms);
+                    },
+                    onRoundStart: (roundIndex) => {
+                      actTelemetry.onRoundStart(roundIndex);
+                    },
+                    onRoundEnd: (roundIndex) => {
+                      actTelemetry.onRoundEnd(roundIndex);
+                    },
+                    onToolCallRequestDequeued: (roundIndex, callId) => {
+                      actTelemetry.onToolCallRequestDequeued(roundIndex, callId);
+                    },
+                    onToolCallRequestEnd: (roundIndex, callId, info) => {
+                      actTelemetry.onToolCallRequestEnd(
+                        roundIndex,
+                        callId,
+                        info.toolCallRequest.name,
+                        info.isQueued,
+                      );
+                    },
+                    onToolCallRequestFailure: (_roundIndex, callId, error) => {
+                      actTelemetry.onToolCallRequestFailure(callId, error.message);
+                    },
+                    onToolCallRequestFinalized: (_roundIndex, callId, info) => {
+                      actTelemetry.onToolCallRequestFinalized(callId, info.toolCallRequest.name);
+                    },
+                    onToolCallRequestNameReceived: (_roundIndex, callId, name) => {
+                      actTelemetry.onToolCallRequestNameReceived(callId, name);
+                    },
+                    onToolCallRequestStart: (roundIndex, callId, info) => {
+                      actTelemetry.onToolCallRequestStart(roundIndex, callId, info.toolCallId);
                     },
                     signal: controller.signal,
                   },
