@@ -79,6 +79,23 @@ async function main(): Promise<void> {
     await ctx.reply("Context reset.");
   });
 
+  telegram.bot.command("stats", async (ctx: TelegramContext) => {
+    if (!ctx.config.isAdmin) {
+      await ctx.reply("Sorry, you are not authorized to use this bot.");
+      return;
+    }
+    const tokenCount = context.getTokenCount();
+    await ctx.reply(JSON.stringify(
+      {
+        "context.filled": Math.round((tokenCount / maxContextLength) * 100),
+        "context.tokens": tokenCount,
+        "tools.count": toolsList.length,
+      },
+      null,
+      2,
+    ));
+  });
+
   telegram.bot.on("message", async (ctx: TelegramContext) => {
     let outcome: "error" | "ok" = "ok";
     let skipped = false;
