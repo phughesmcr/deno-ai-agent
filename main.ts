@@ -113,6 +113,7 @@ async function main(): Promise<void> {
 
           const tokenCountPromises: Promise<number>[] = [context.appendTokenCount(userMessage)];
           let replies = 0;
+          const actReplies: string[] = [];
           const actStarted = performance.now();
           let firstTokenMs: number | undefined;
 
@@ -130,6 +131,7 @@ async function main(): Promise<void> {
                       replies++;
                       const assistantMessage = context.append(msg);
                       tokenCountPromises.push(context.appendTokenCount(assistantMessage));
+                      actReplies.push(msg.getText());
                     },
                     onFirstToken: (roundIndex) => {
                       const ms = performance.now() - actStarted;
@@ -183,12 +185,14 @@ async function main(): Promise<void> {
             clearInterval(typingInterval);
           }
 
-          await replyWithModelText(
-            ctx,
-            context.get().getMessagesArray().map((msg) => msg.getText()).join("\n"),
-            ctx.message.message_id,
-            ctx.message.message_thread_id,
-          );
+          if (actReplies.length > 0) {
+            await replyWithModelText(
+              ctx,
+              actReplies.join("\n"),
+              ctx.message.message_id,
+              ctx.message.message_thread_id,
+            );
+          }
 
           if (context.shouldCompact) {
             await context.compact();
