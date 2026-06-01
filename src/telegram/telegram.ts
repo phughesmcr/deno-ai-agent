@@ -1,4 +1,7 @@
-import { Bot, type Context } from "grammy";
+import { Bot, type Context, GrammyError, HttpError } from "grammy";
+import type { ContextManager } from "../context/context.ts";
+import { logDebug } from "../log.ts";
+import { replyError } from "./telegram-reply.ts";
 
 interface BotConfig {
   adminId: number;
@@ -34,10 +37,26 @@ function getEnv(): { token: string; adminId: number } {
  * Creates and configures the Telegram bot from environment variables.
  * @internal
  */
-export function createTelegramManager(): TelegramManager {
+export function createTelegramManager({ context }: { context: ContextManager }): TelegramManager {
   const { token, adminId } = getEnv();
 
   const bot = new Bot<TelegramContext>(token);
+
+  bot.catch(async (err) => {
+    const ctx = err.ctx;
+    logDebug("telegram.error", { update_id: ctx.update.update_id });
+    const e = err.error;
+    if (e instanceof GrammyError) {
+      logDebug("telegram.grammy_error", { description: e.description });
+    } else if (e instanceof HttpError) {
+      logDebug("telegram.http_error", { message: String(e) });
+    } else {
+      logDebug("telegram.unknown_error", { message: String(e) });
+    }
+    if (ctx.config.isAdmin && ctx.message) {
+      await replyError(ctx, ctx.message.message_thread_id);
+    }
+  });
 
   bot.use(async (ctx, next) => {
     ctx.config = {
@@ -61,6 +80,25 @@ export function createTelegramManager(): TelegramManager {
     } else {
       await ctx.reply("Sorry, you are not authorized to use this bot.");
     }
+  });
+
+  bot.command("new", async (ctx: TelegramContext) => {
+    if (!ctx.config.isAdmin) {
+      await ctx.reply("Sorry, you are not authorized to use this bot.");
+      return;
+    }
+    context.reset();
+    await ctx.reply("Context reset.");
+  });
+
+  bot.command("stats", async (ctx: TelegramContext) => {
+    if (!ctx.config.isAdmin) {
+      await ctx.reply("Sorry, you are not authorized to use this bot.");
+      return;
+    }
+    const tokenCount = context.currentTokenCount;
+    const filled = Math.round((tokenCount / context.maxContextLength) * 100);
+    await ctx.reply(`Context: ${tokenCount} tokens (${filled}% filled)`);
   });
 
   return { bot };

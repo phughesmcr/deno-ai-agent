@@ -20,8 +20,8 @@ export class ContextManager {
   private complete: Chat;
   private current: Chat;
 
-  private maxContextLength: number;
-  private currentTokenCount: number;
+  #maxContextLength: number;
+  #currentTokenCount: number;
   private compactPercentage: number; // compact when the current token count is greater than 75% of the max context length
   private compactor: (chat: Chat) => Promise<Chat>;
 
@@ -31,17 +31,17 @@ export class ContextManager {
   constructor(spec: ContextManagerOptions) {
     const { complete, current, compactPercentage, model, maxContextLength, compactor } = spec;
     this.model = model;
-    this.maxContextLength = maxContextLength;
+    this.#maxContextLength = maxContextLength;
     this.complete = complete ?? Chat.empty();
     this.current = current ?? Chat.empty();
-    this.currentTokenCount = 0;
+    this.#currentTokenCount = 0;
     this.compactPercentage = compactPercentage ?? 0.75;
     this.compactor = compactor;
   }
 
   /** Whether the current token count exceeds the compaction threshold. */
   get shouldCompact(): boolean {
-    return this.currentTokenCount > this.maxContextLength * this.compactPercentage;
+    return this.#currentTokenCount > this.#maxContextLength * this.compactPercentage;
   }
 
   /** Returns a mutable copy of the current chat. */
@@ -49,9 +49,17 @@ export class ContextManager {
     return this.current.asMutableCopy();
   }
 
+  get currentTokenCount(): number {
+    return this.#currentTokenCount;
+  }
+
+  get maxContextLength(): number {
+    return this.#maxContextLength;
+  }
+
   /** Approximate token count for the current chat (for telemetry). */
   getTokenCount(): number {
-    return this.currentTokenCount;
+    return this.#currentTokenCount;
   }
 
   /** Replaces the system prompt in the current and complete history. */
@@ -64,7 +72,7 @@ export class ContextManager {
   /** Adds a message's token count to the running total. */
   async appendTokenCount(chat: ChatMessage): Promise<number> {
     const tokenCount = await this.model.countTokens(chat.getText());
-    this.currentTokenCount += tokenCount;
+    this.#currentTokenCount += tokenCount;
     return tokenCount;
   }
 
@@ -93,20 +101,20 @@ export class ContextManager {
     const messages = this.current.getMessagesArray();
     const promises = messages.map((message) => this.model.countTokens(message.toString()));
     const counts = await Promise.all(promises);
-    this.currentTokenCount = counts.reduce((acc, count) => acc + count, 0);
+    this.#currentTokenCount = counts.reduce((acc, count) => acc + count, 0);
   }
 
   /** Compacts the current chat via the configured compactor. */
   async compact(): Promise<ContextManager> {
     await traceSpan("context.compact", async (span) => {
-      const before = this.currentTokenCount;
+      const before = this.#currentTokenCount;
       this.current = await this.compactor(this.current);
       await this.refreshTokenCount();
       span.setAttributes({
         "context.tokens.before": before,
-        "context.tokens.after": this.currentTokenCount,
+        "context.tokens.after": this.#currentTokenCount,
       });
-      logDebug("context.compact", { before, after: this.currentTokenCount });
+      logDebug("context.compact", { before, after: this.#currentTokenCount });
     });
     return this;
   }
@@ -115,6 +123,6 @@ export class ContextManager {
   reset(): void {
     this.current = Chat.empty();
     this.complete = Chat.empty();
-    this.currentTokenCount = 0;
+    this.#currentTokenCount = 0;
   }
 }

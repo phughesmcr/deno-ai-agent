@@ -1,4 +1,3 @@
-import { GrammyError, HttpError } from "grammy";
 import { createSummaryCompactor } from "./src/context/compactor.ts";
 import { ContextManager } from "./src/context/context.ts";
 import { createLMStudioManager } from "./src/lmstudio.ts";
@@ -50,51 +49,9 @@ async function main(): Promise<void> {
   const tools = new ToolsManager();
   const toolsList = tools.get() ?? [];
 
-  const telegram = createTelegramManager();
+  const telegram = createTelegramManager({ context });
 
   registerShutdown(controller, () => telegram.bot.stop());
-
-  telegram.bot.catch(async (err) => {
-    const ctx = err.ctx;
-    logDebug("telegram.error", { update_id: ctx.update.update_id });
-    const e = err.error;
-    if (e instanceof GrammyError) {
-      logDebug("telegram.grammy_error", { description: e.description });
-    } else if (e instanceof HttpError) {
-      logDebug("telegram.http_error", { message: String(e) });
-    } else {
-      logDebug("telegram.unknown_error", { message: String(e) });
-    }
-    if (ctx.config.isAdmin && ctx.message) {
-      await replyError(ctx, ctx.message.message_thread_id);
-    }
-  });
-
-  telegram.bot.command("new", async (ctx: TelegramContext) => {
-    if (!ctx.config.isAdmin) {
-      await ctx.reply("Sorry, you are not authorized to use this bot.");
-      return;
-    }
-    context.reset();
-    await ctx.reply("Context reset.");
-  });
-
-  telegram.bot.command("stats", async (ctx: TelegramContext) => {
-    if (!ctx.config.isAdmin) {
-      await ctx.reply("Sorry, you are not authorized to use this bot.");
-      return;
-    }
-    const tokenCount = context.getTokenCount();
-    await ctx.reply(JSON.stringify(
-      {
-        "context.filled": Math.round((tokenCount / maxContextLength) * 100),
-        "context.tokens": tokenCount,
-        "tools.count": toolsList.length,
-      },
-      null,
-      2,
-    ));
-  });
 
   telegram.bot.on("message", async (ctx: TelegramContext) => {
     let outcome: "error" | "ok" = "ok";
@@ -120,13 +77,6 @@ async function main(): Promise<void> {
           });
 
           const userMessage = context.append("user", message);
-
-          const typingInterval = setInterval(() => {
-            ctx.replyWithChatAction("typing").catch(() => {});
-          }, 4000);
-          await ctx.replyWithChatAction("typing", {
-            message_thread_id: ctx.message?.message_thread_id,
-          });
 
           const tokenCountPromises: Promise<number>[] = [context.appendTokenCount(userMessage)];
           let replies = 0;
@@ -199,7 +149,6 @@ async function main(): Promise<void> {
             );
           } finally {
             actMs = performance.now() - actStarted;
-            clearInterval(typingInterval);
           }
 
           if (actReplies.length > 0) {
