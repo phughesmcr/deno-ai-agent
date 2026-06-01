@@ -1,9 +1,12 @@
-import { Chat, type LLM } from "@lmstudio/sdk";
+import { Chat, ChatMessage, type LLM } from "@lmstudio/sdk";
 
 import { logDebug } from "./log.ts";
 import { traceSpan } from "./otel.ts";
 
 interface ContextManagerOptions {
+  complete?: Chat;
+  current?: Chat;
+  compactPercentage?: number;
   model: LLM;
   maxContextLength: number;
   compactor: (chat: Chat) => Promise<Chat>;
@@ -16,19 +19,25 @@ export class ContextManager {
 
   private maxContextLength: number;
   private currentTokenCount: number;
-  private compactPercentage: number = 0.75; // compact when the current token count is greater than 75% of the max context length
+  private compactPercentage: number; // compact when the current token count is greater than 75% of the max context length
   private compactor: (chat: Chat) => Promise<Chat>;
 
   private model: LLM;
 
   /** Creates a context manager. */
-  constructor({ model, maxContextLength, compactor }: ContextManagerOptions) {
+  constructor(spec: ContextManagerOptions) {
+    const { complete, current, compactPercentage, model, maxContextLength, compactor } = spec;
     this.model = model;
     this.maxContextLength = maxContextLength;
+    this.complete = complete ?? Chat.empty();
+    this.current = current ?? Chat.empty();
     this.currentTokenCount = 0;
-    this.complete = Chat.empty();
-    this.current = Chat.empty();
+    this.compactPercentage = compactPercentage ?? 0.75;
     this.compactor = compactor;
+  }
+
+  get shouldCompact(): boolean {
+    return this.currentTokenCount > this.maxContextLength * this.compactPercentage;
   }
 
   /** Returns a mutable copy of the current chat. */
@@ -48,29 +57,32 @@ export class ContextManager {
     return this;
   }
 
-  /** Appends a message to the current chat. */
-  async append(role: "user" | "assistant" | "system", content: string): Promise<ContextManager> {
-    const chat = { role, content };
-    this.complete.append(role, content);
-    this.current.append(role, content);
-
-    const tokenCount = await this.model.countTokens(chat.content);
+  async appendTokenCount(chat: ChatMessage): Promise<ContextManager> {
+    const tokenCount = await this.model.countTokens(chat.getText());
     this.currentTokenCount += tokenCount;
-    logDebug("context.append", {
-      role,
-      tokens: tokenCount,
-      total: this.currentTokenCount,
-      pct: Math.round((this.currentTokenCount / this.maxContextLength) * 100),
-    });
-
-    if (this.currentTokenCount > this.maxContextLength * this.compactPercentage) {
-      await this.compact();
-    }
-
     return this;
   }
 
-  private async refreshTokenCount(): Promise<void> {
+  async append(chat: ChatMessage): Promise<ContextManager>;
+  async append(role: "user" | "assistant" | "system", content: string): Promise<ContextManager>;
+  async append(chatOrRole: ChatMessage | ("user" | "assistant" | "system"), content?: string): Promise<ContextManager> {
+    const chat = chatOrRole instanceof ChatMessage ? chatOrRole : ChatMessage.create(chatOrRole, content ?? "");
+    this.complete.append(chat);
+    this.current.append(chat);
+    logDebug("context.append", {
+      role: chat.getRole(),
+      text: chat.getText(),
+      toolCallRequests: chat.getToolCallRequests().map((request) => JSON.stringify(request)).join(","),
+      toolCallResults: chat.getToolCallResults().map((result) => JSON.stringify(result)).join(","),
+      isUserMessage: chat.isUserMessage() ? "yes" : "no",
+      isAssistantMessage: chat.isAssistantMessage() ? "yes" : "no",
+      isSystemPrompt: chat.isSystemPrompt() ? "yes" : "no",
+    });
+    return this;
+  }
+
+  /** Recalculates the current token count. */
+  async refreshTokenCount(): Promise<void> {
     const messages = this.current.getMessagesArray();
     const promises = messages.map((message) => this.model.countTokens(message.toString()));
     const counts = await Promise.all(promises);

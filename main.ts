@@ -97,7 +97,15 @@ async function main(): Promise<void> {
           await context.append("user", message);
           span.setAttribute("context.tokens", tokenBucket(context.getTokenCount()));
 
-          const replies: string[] = [];
+          const typingInterval = setInterval(() => {
+            ctx.replyWithChatAction("typing").catch(() => {});
+          }, 4000);
+          await ctx.replyWithChatAction("typing", {
+            message_thread_id: ctx.message?.message_thread_id,
+          });
+
+          const tokenCountPromises: Promise<ContextManager>[] = [];
+          let replies = 0;
           const actStarted = performance.now();
           let firstTokenMs: number | undefined;
 
@@ -110,35 +118,40 @@ async function main(): Promise<void> {
                   toolsList,
                   {
                     onMessage: (msg) => {
-                      replies.push(msg.getText());
+                      replies++;
+                      context.append(msg);
+                      tokenCountPromises.push(context.appendTokenCount(msg));
                     },
                     onFirstToken: () => {
                       if (firstTokenMs === undefined) firstTokenMs = performance.now() - actStarted;
-                      void ctx.replyWithChatAction("typing", {
-                        message_thread_id: ctx.message?.message_thread_id,
-                      });
                     },
                     signal: controller.signal,
                   },
                 );
-                if (replies.length > 0) {
-                  await context.append("assistant", replies.join("\n"));
+                if (replies > 0) {
+                  await Promise.all(tokenCountPromises);
                 }
-                actSpan.setAttribute("reply.count", replies.length);
+                actSpan.setAttribute("reply.count", replies);
                 if (firstTokenMs !== undefined) actSpan.setAttribute("first_token.ms", Math.round(firstTokenMs));
               },
               { attributes: { "tools.count": toolsList.length } },
             );
           } finally {
             actMs = performance.now() - actStarted;
+            clearInterval(typingInterval);
           }
 
           await replyWithModelText(
             ctx,
-            replies.join("\n"),
+            context.get().getMessagesArray().map((msg) => msg.getText()).join("\n"),
             ctx.message.message_id,
             ctx.message.message_thread_id,
           );
+
+          if (context.shouldCompact) {
+            await context.compact();
+            // TODO: notify user of compaction
+          }
         },
         { root: true },
       );
