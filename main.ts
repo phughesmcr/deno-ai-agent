@@ -1,7 +1,7 @@
 import { GrammyError, HttpError } from "grammy";
 
-import { createSummaryCompactor } from "./src/compactor.ts";
-import { ContextManager } from "./src/context.ts";
+import { createSummaryCompactor } from "./src/context/compactor.ts";
+import { ContextManager } from "./src/context/context.ts";
 import { createLMStudioManager } from "./src/lmstudio.ts";
 import { logDebug } from "./src/log.ts";
 import { recordActDuration, recordTelegramMessage, tokenBucket, traceSpan } from "./src/otel.ts";

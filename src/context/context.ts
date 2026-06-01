@@ -1,7 +1,7 @@
 import { Chat, ChatMessage, type LLM } from "@lmstudio/sdk";
 
-import { logDebug } from "./log.ts";
-import { traceSpan } from "./otel.ts";
+import { logDebug } from "../log.ts";
+import { traceSpan } from "../otel.ts";
 
 interface ContextManagerOptions {
   complete?: Chat;
@@ -63,9 +63,9 @@ export class ContextManager {
     return this;
   }
 
-  async append(chat: ChatMessage): Promise<ContextManager>;
-  async append(role: "user" | "assistant" | "system", content: string): Promise<ContextManager>;
-  async append(chatOrRole: ChatMessage | ("user" | "assistant" | "system"), content?: string): Promise<ContextManager> {
+  append(chat: ChatMessage): void;
+  append(role: "user" | "assistant" | "system", content: string): void;
+  append(chatOrRole: ChatMessage | ("user" | "assistant" | "system"), content?: string): void {
     const chat = chatOrRole instanceof ChatMessage ? chatOrRole : ChatMessage.create(chatOrRole, content ?? "");
     this.complete.append(chat);
     this.current.append(chat);
@@ -78,7 +78,6 @@ export class ContextManager {
       isAssistantMessage: chat.isAssistantMessage() ? "yes" : "no",
       isSystemPrompt: chat.isSystemPrompt() ? "yes" : "no",
     });
-    return this;
   }
 
   /** Recalculates the current token count. */
