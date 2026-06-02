@@ -1,4 +1,4 @@
-import { tool } from "@lmstudio/sdk";
+import { type Tool, tool } from "@lmstudio/sdk";
 import { z } from "zod/v3";
 
 import type { AskUserQuestionPort } from "./user-question-port.ts";
@@ -152,7 +152,7 @@ export function formatAnswers(questions: Question[], answers: Record<string, str
  * LM Studio tool that asks the user structured questions via the configured port.
  * @internal
  */
-export function createAskUserQuestionTool(port: AskUserQuestionPort): unknown {
+export function createAskUserQuestionTool(port: AskUserQuestionPort): Tool {
   return tool({
     name: "ask_user_question",
     description: TOOL_DESCRIPTION,

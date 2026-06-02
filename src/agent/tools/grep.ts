@@ -1,22 +1,18 @@
-import { tool } from "@lmstudio/sdk";
+import { type Tool, tool } from "@lmstudio/sdk";
 import * as path from "@std/path";
 import { z } from "zod/v3";
 
 import { approveToolOperation, displayPath, resolvePath, type ToolContext } from "./context.ts";
+import {
+  appendSearchNotices,
+  commandExists,
+  readStreamToString,
+  SEARCH_SKIP_DIRS,
+  toPosixPath,
+} from "./search-support.ts";
 import { DEFAULT_MAX_BYTES, formatSize, truncateHead, truncateLine } from "./truncate.ts";
 
 const DEFAULT_LIMIT = 100;
-const SKIP_DIRS = new Set([".git", "node_modules"]);
-
-async function commandExists(name: string): Promise<boolean> {
-  try {
-    const check = new Deno.Command("which", { args: [name], stdout: "null", stderr: "null" });
-    const { success } = await check.output();
-    return success;
-  } catch {
-    return false;
-  }
-}
 
 async function grepWithRg(
   searchPath: string,
@@ -76,7 +72,7 @@ async function grepWithRg(
 
     const relativePath = options.targetIsFile ?
       path.basename(filePath) :
-      path.relative(searchPath, filePath).split(path.SEPARATOR).join("/") || path.basename(filePath);
+      toPosixPath(path.relative(searchPath, filePath)) || path.basename(filePath);
     const sanitized = (lineText ?? "").replace(/\r\n/g, "\n").replace(/\r/g, "").replace(/\n$/, "");
     const { text: truncatedText, wasTruncated } = truncateLine(sanitized);
     if (wasTruncated) linesTruncated = true;
@@ -90,11 +86,6 @@ async function grepWithRg(
     linesTruncated,
     matchLimitReached: matchCount >= options.limit,
   };
-}
-
-async function readStreamToString(stream: ReadableStream<Uint8Array> | null): Promise<string> {
-  if (!stream) return "";
-  return await new Response(stream).text();
 }
 
 async function walkGrep(
@@ -140,11 +131,11 @@ async function walkGrep(
       if (matchCount >= options.limit) return;
       const fullPath = path.join(dir, entry.name);
       if (entry.isDirectory) {
-        if (!SKIP_DIRS.has(entry.name)) await walk(fullPath);
+        if (!SEARCH_SKIP_DIRS.has(entry.name)) await walk(fullPath);
         continue;
       }
       if (!entry.isFile) continue;
-      const rel = path.relative(searchPath, fullPath).split(path.SEPARATOR).join("/");
+      const rel = toPosixPath(path.relative(searchPath, fullPath));
       if (globRe && !globRe.test(rel) && !globRe.test(entry.name)) continue;
       await grepFile(fullPath, rel);
     }
@@ -158,7 +149,7 @@ async function walkGrep(
   return { output: outputLines.join("\n"), linesTruncated, matchLimitReached: matchCount >= options.limit };
 }
 
-export function createGrepTool(ctx: ToolContext): unknown {
+export function createGrepTool(ctx: ToolContext): Tool {
   return tool({
     name: "grep",
     description:
@@ -238,8 +229,7 @@ export function createGrepTool(ctx: ToolContext): unknown {
       }
       if (truncation.truncated) notices.push(`${formatSize(DEFAULT_MAX_BYTES)} limit reached`);
       if (linesTruncated) notices.push("some lines truncated");
-      if (notices.length > 0) resultOutput += `\n\n[${notices.join(". ")}]`;
-      return resultOutput;
+      return appendSearchNotices(resultOutput, notices);
     },
   });
 }

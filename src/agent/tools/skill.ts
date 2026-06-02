@@ -1,4 +1,4 @@
-import { tool } from "@lmstudio/sdk";
+import { type Tool, tool } from "@lmstudio/sdk";
 import * as path from "@std/path";
 import { z } from "zod/v3";
 
@@ -112,7 +112,7 @@ function missingSkillMessage(manager: SkillManager, name: string): string {
 }
 
 /** LM Studio tool that activates a discovered AgentSkill. */
-export function createSkillTool(manager: SkillManager, ctx?: ToolContext): unknown {
+export function createSkillTool(manager: SkillManager, ctx?: ToolContext): Tool {
   return tool({
     name: "skill",
     description: createDescription(manager),

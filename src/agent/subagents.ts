@@ -1,4 +1,4 @@
-import { Chat } from "@lmstudio/sdk";
+import { Chat, type Tool } from "@lmstudio/sdk";
 
 import type { SkillManager } from "./skills/mod.ts";
 import { createFindTool } from "./tools/find.ts";
@@ -76,7 +76,7 @@ export interface SubagentActOptions {
 /** Minimal structural model interface needed to run a subagent chat. */
 export interface SubagentModel {
   /** Runs one model act over a chat-like object and model tools. */
-  act(chat: unknown, tools: unknown[], options: SubagentActOptions): Promise<unknown>;
+  act(chat: unknown, tools: Tool[], options: SubagentActOptions): Promise<unknown>;
 }
 
 /** Options for {@link SubagentManager}. */
@@ -146,7 +146,7 @@ export function createUnavailableSubagentPort(): SubagentPort {
 }
 
 /** Builds the read-only tool set available inside subagent jobs. */
-export function createReadOnlySubagentTools(workspace: ToolContext, skills: SkillManager): unknown[] {
+export function createReadOnlySubagentTools(workspace: ToolContext, skills: SkillManager): Tool[] {
   return [
     createReadTool(workspace),
     createGrepTool(workspace),

@@ -164,6 +164,47 @@ Deno.test("updateTelegramMeta merges without clobbering todos", async () => {
   }
 });
 
+Deno.test("createTodoWriteTool does not clobber concurrent telegram metadata updates", async () => {
+  const { dir, cleanup } = await createTestWorkspace();
+  const todosDir = `${dir}/todos`;
+  await Deno.mkdir(todosDir, { recursive: true });
+  const originalReadTextFile = Deno.readTextFile;
+  try {
+    await updateTelegramMeta(todosDir, SESSION_ID, { chatId: 1, messageId: 1 });
+    const todoPath = `${todosDir}/${SESSION_ID}.json`;
+    let scheduled = false;
+    let concurrentUpdate: Promise<void> | undefined;
+    Deno.readTextFile = ((path: string | URL, options?: Deno.ReadFileOptions) => {
+      const result = originalReadTextFile(path, options);
+      if (!scheduled && String(path) === todoPath) {
+        scheduled = true;
+        result.then(() => {
+          queueMicrotask(() => {
+            concurrentUpdate = updateTelegramMeta(todosDir, SESSION_ID, { chatId: 2, messageId: 2 });
+          });
+        });
+      }
+      return result;
+    }) as typeof Deno.readTextFile;
+
+    const tool = createTodoWriteTool({
+      getSessionId: () => SESSION_ID,
+      todosDir,
+      display: createNoopTodoDisplayPort(),
+    });
+
+    await runTool(tool, { todos: sampleTodos() });
+    await concurrentUpdate;
+
+    const file = await readTodoFile(todosDir, SESSION_ID);
+    assertEquals(file.todos, sampleTodos());
+    assertEquals(file.telegram, { chatId: 2, messageId: 2 });
+  } finally {
+    Deno.readTextFile = originalReadTextFile;
+    await cleanup();
+  }
+});
+
 Deno.test("copyTodosForSession copies todos without telegram meta", async () => {
   const { dir, cleanup } = await createTestWorkspace();
   const todosDir = `${dir}/todos`;

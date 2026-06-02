@@ -1,4 +1,4 @@
-import { tool } from "@lmstudio/sdk";
+import { type Tool, tool } from "@lmstudio/sdk";
 import { z } from "zod/v3";
 
 import { grantBrokerReadPaths, shouldRunPermissionControlClient } from "../../permission-broker/mod.ts";
@@ -16,7 +16,7 @@ function isImagePath(filePath: string): boolean {
   return false;
 }
 
-export function createReadTool(ctx: ToolContext): unknown {
+export function createReadTool(ctx: ToolContext): Tool {
   return tool({
     name: "read",
     description: `Read the contents of a file. Output is truncated to ${DEFAULT_MAX_LINES} lines or ${

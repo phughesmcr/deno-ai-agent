@@ -1,4 +1,4 @@
-import { tool } from "@lmstudio/sdk";
+import { type Tool, tool } from "@lmstudio/sdk";
 import { z } from "zod/v3";
 
 import { approveToolOperation, type ToolContext } from "./context.ts";
@@ -10,7 +10,7 @@ async function readStream(stream: ReadableStream<Uint8Array> | null): Promise<st
   return await new Response(stream).text();
 }
 
-export function createBashTool(ctx: ToolContext): unknown {
+export function createBashTool(ctx: ToolContext): Tool {
   return tool({
     name: "bash",
     description:

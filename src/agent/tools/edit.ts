@@ -1,4 +1,4 @@
-import { tool } from "@lmstudio/sdk";
+import { type Tool, tool } from "@lmstudio/sdk";
 import { z } from "zod/v3";
 
 import { approveToolOperation, displayPath, resolvePath, type ToolContext } from "./context.ts";
@@ -35,7 +35,7 @@ function prepareEditInput(input: EditInput): { path: string; edits: Edit[] } {
   return { path: input.path, edits };
 }
 
-export function createEditTool(ctx: ToolContext): unknown {
+export function createEditTool(ctx: ToolContext): Tool {
   return tool({
     name: "edit",
     description:

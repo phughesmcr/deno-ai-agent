@@ -1,11 +1,11 @@
-import { tool } from "@lmstudio/sdk";
+import { type Tool, tool } from "@lmstudio/sdk";
 import * as path from "@std/path";
 import { z } from "zod/v3";
 
 import { approveToolOperation, displayPath, resolvePath, type ToolContext } from "./context.ts";
 import { withFileMutationQueue } from "./file-mutation-queue.ts";
 
-export function createWriteTool(ctx: ToolContext): unknown {
+export function createWriteTool(ctx: ToolContext): Tool {
   return tool({
     name: "write",
     description:

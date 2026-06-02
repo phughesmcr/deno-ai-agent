@@ -1,4 +1,4 @@
-import { tool } from "@lmstudio/sdk";
+import { type Tool, tool } from "@lmstudio/sdk";
 import { z } from "zod/v3";
 
 import { logDebug } from "../../shared/log.ts";
@@ -141,16 +141,33 @@ async function writeTodoFileRaw(todosDir: string, file: TodoFile): Promise<void>
   await Deno.rename(tempPath, path);
 }
 
+async function updateTodoFileRaw<T>(
+  todosDir: string,
+  sessionId: string,
+  update: (existing: TodoFile) => { file: TodoFile; result: T } | Promise<{ file: TodoFile; result: T }>,
+): Promise<T> {
+  return await withFileMutationQueue(todoFilePath(todosDir, sessionId), async () => {
+    const existing = await readTodoFileRaw(todosDir, sessionId);
+    const { file, result } = await update(existing);
+    await writeTodoFileRaw(todosDir, {
+      sessionId,
+      todos: file.todos,
+      telegram: file.telegram,
+    });
+    return result;
+  });
+}
+
 /** Writes todos to disk, preserving optional telegram metadata when omitted. */
 export function writeTodoFile(todosDir: string, file: TodoFile): Promise<void> {
-  return withFileMutationQueue(todoFilePath(todosDir, file.sessionId), async () => {
-    const existing = await readTodoFileRaw(todosDir, file.sessionId);
-    await writeTodoFileRaw(todosDir, {
+  return updateTodoFileRaw(todosDir, file.sessionId, (existing) => ({
+    file: {
       sessionId: file.sessionId,
       todos: file.todos,
       telegram: file.telegram ?? existing.telegram,
-    });
-  });
+    },
+    result: undefined,
+  }));
 }
 
 /** Merges telegram metadata into the session todo file without changing todos. */
@@ -159,14 +176,14 @@ export function updateTelegramMeta(
   sessionId: string,
   meta: TodoTelegramMeta,
 ): Promise<void> {
-  return withFileMutationQueue(todoFilePath(todosDir, sessionId), async () => {
-    const existing = await readTodoFileRaw(todosDir, sessionId);
-    await writeTodoFileRaw(todosDir, {
+  return updateTodoFileRaw(todosDir, sessionId, (existing) => ({
+    file: {
       ...existing,
       sessionId,
       telegram: meta,
-    });
-  });
+    },
+    result: undefined,
+  }));
 }
 
 /** Returns todos for a session (empty array if no file). */
@@ -184,19 +201,23 @@ export async function copyTodosForSession(
   assertValidSessionId(fromId);
   assertValidSessionId(toId);
   const fromPath = todoFilePath(todosDir, fromId);
+  let source: TodoFile;
   try {
     await withFileMutationQueue(fromPath, async () => {
-      const source = await readTodoFileRaw(todosDir, fromId);
-      await writeTodoFileRaw(todosDir, {
-        sessionId: toId,
-        todos: source.todos,
-        telegram: undefined,
-      });
+      source = await readTodoFileRaw(todosDir, fromId);
     });
   } catch (error) {
     if (error instanceof Deno.errors.NotFound) return;
     throw error;
   }
+  await updateTodoFileRaw(todosDir, toId, () => ({
+    file: {
+      sessionId: toId,
+      todos: source.todos,
+      telegram: undefined,
+    },
+    result: undefined,
+  }));
 }
 
 /** Formats the LLM-facing tool result with system-reminder blocks (Qwen-aligned). */
@@ -278,7 +299,7 @@ const todoItemSchema = z.object({
 });
 
 /** LM Studio tool that persists session-scoped todos and optionally updates Telegram display. */
-export function createTodoWriteTool(deps: TodoWriteDeps): unknown {
+export function createTodoWriteTool(deps: TodoWriteDeps): Tool {
   return tool({
     name: "todo_write",
     description: TODO_WRITE_DESCRIPTION,
@@ -300,26 +321,22 @@ export function createTodoWriteTool(deps: TodoWriteDeps): unknown {
           summary: `write ${params.todos.length} todo item(s)`,
         });
       }
-      let existingFile: TodoFile;
+      let updateResult: { changes: TodoChanges; telegram?: TodoTelegramMeta };
 
       try {
-        existingFile = await readTodoFile(deps.todosDir, sessionId);
-      } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
-        return `Failed to modify todos. An error occurred during the operation.
-
-<system-reminder>
-Todo list modification failed with error: ${message}. You may need to retry or handle this error appropriately.
-</system-reminder>`;
-      }
-
-      const changes = detectTodoChanges(existingFile.todos, params.todos);
-
-      try {
-        await writeTodoFile(deps.todosDir, {
-          sessionId,
-          todos: params.todos,
-          telegram: existingFile.telegram,
+        updateResult = await updateTodoFileRaw(deps.todosDir, sessionId, (existingFile) => {
+          const changes = detectTodoChanges(existingFile.todos, params.todos);
+          return {
+            file: {
+              sessionId,
+              todos: params.todos,
+              telegram: existingFile.telegram,
+            },
+            result: {
+              changes,
+              telegram: existingFile.telegram,
+            },
+          };
         });
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
@@ -336,8 +353,8 @@ Todo list modification failed with error: ${message}. You may need to retry or h
           await deps.display.onTodosUpdated({
             sessionId,
             todos: params.todos,
-            changes,
-            telegram: existingFile.telegram,
+            changes: updateResult.changes,
+            telegram: updateResult.telegram,
           });
         } catch (error) {
           const message = error instanceof Error ? error.message : String(error);

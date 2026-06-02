@@ -1,4 +1,4 @@
-import { tool } from "@lmstudio/sdk";
+import { type Tool, tool } from "@lmstudio/sdk";
 import { z } from "zod/v3";
 
 import type { SubagentPort, SubagentRecord } from "../subagents.ts";
@@ -69,7 +69,7 @@ async function getRecord(
 }
 
 /** LM Studio tool that spawns and tracks read-only subagent jobs. */
-export function createAgentTool(port: SubagentPort): unknown {
+export function createAgentTool(port: SubagentPort): Tool {
   return tool({
     name: "agent",
     description:

@@ -1,3 +1,5 @@
+import type { Tool } from "@lmstudio/sdk";
+
 import { createAgentTool } from "./agent.ts";
 import { createAskUserQuestionTool } from "./ask-user-question.ts";
 import { createBashTool } from "./bash.ts";
@@ -104,7 +106,7 @@ export interface ModelToolDeps {
 }
 
 /** Returns all coding tools for the given workspace root. */
-export function getModelTools(deps: ModelToolDeps): unknown[] {
+export function getModelTools(deps: ModelToolDeps): Tool[] {
   return [
     createReadTool(deps.workspace),
     createWriteTool(deps.workspace),
@@ -121,7 +123,7 @@ export function getModelTools(deps: ModelToolDeps): unknown[] {
 }
 
 /** Creates tools from a workspace directory path (canonicalizes root). */
-export async function getModelToolsForRoot(root: string): Promise<unknown[]> {
+export async function getModelToolsForRoot(root: string): Promise<Tool[]> {
   const skills = await createSkillManager({ root });
   return getModelTools({
     workspace: await createToolContext(root),

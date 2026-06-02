@@ -1,4 +1,4 @@
-import { tool } from "@lmstudio/sdk";
+import { type Tool, tool } from "@lmstudio/sdk";
 import * as path from "@std/path";
 import { z } from "zod/v3";
 
@@ -7,7 +7,7 @@ import { DEFAULT_MAX_BYTES, formatSize, truncateHead } from "./truncate.ts";
 
 const DEFAULT_LIMIT = 500;
 
-export function createLsTool(ctx: ToolContext): unknown {
+export function createLsTool(ctx: ToolContext): Tool {
   return tool({
     name: "ls",
     description:

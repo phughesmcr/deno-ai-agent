@@ -1,25 +1,18 @@
-import { tool } from "@lmstudio/sdk";
+import { type Tool, tool } from "@lmstudio/sdk";
 import * as path from "@std/path";
 import { z } from "zod/v3";
 
 import { approveToolOperation, displayPath, resolveDirectoryPath, type ToolContext } from "./context.ts";
+import {
+  appendSearchNotices,
+  commandExists,
+  readStreamToString,
+  SEARCH_SKIP_DIRS,
+  toPosixPath,
+} from "./search-support.ts";
 import { DEFAULT_MAX_BYTES, formatSize, truncateHead } from "./truncate.ts";
 
 const DEFAULT_LIMIT = 1000;
-const SKIP_DIRS = new Set([".git", "node_modules"]);
-
-function toPosixPath(value: string): string {
-  return value.split(path.SEPARATOR).join("/");
-}
-
-async function commandExists(name: string): Promise<boolean> {
-  try {
-    const { success } = await new Deno.Command("which", { args: [name], stdout: "null", stderr: "null" }).output();
-    return success;
-  } catch {
-    return false;
-  }
-}
 
 function prepareGlobPattern(pattern: string): { pattern: string; fullPath: boolean } {
   if (pattern.includes("/")) {
@@ -44,12 +37,12 @@ async function findWithFd(
 
   const child = new Deno.Command("fd", { args, stdout: "piped", stderr: "piped" }).spawn();
   const [stdout, status] = await Promise.all([
-    new Response(child.stdout).text(),
+    readStreamToString(child.stdout),
     child.status,
   ]);
 
   if (!status.success && !stdout.trim()) {
-    const err = await new Response(child.stderr).text();
+    const err = await readStreamToString(child.stderr);
     throw new Error(err.trim() || `fd exited with code ${status.code}`);
   }
 
@@ -80,15 +73,14 @@ async function walkFind(searchPath: string, globPattern: string, limit: number):
       const rel = prefix ? `${prefix}/${entry.name}` : entry.name;
       const fullPath = path.join(dir, entry.name);
       const posixRel = toPosixPath(rel);
-      const candidate = fullPath ? toPosixPath(fullPath) : posixRel;
-      const matchTarget = fullPath ? candidate : posixRel;
 
       if (entry.isDirectory) {
-        if (!SKIP_DIRS.has(entry.name)) await walk(fullPath, posixRel);
+        if (!SEARCH_SKIP_DIRS.has(entry.name)) await walk(fullPath, posixRel);
         continue;
       }
       if (entry.isFile) {
-        if (re.test(matchTarget) || re.test(posixRel) || (!fullPath && re.test(entry.name))) {
+        const absoluteCandidate = toPosixPath(fullPath);
+        if (re.test(absoluteCandidate) || re.test(posixRel)) {
           results.push(posixRel);
         }
       }
@@ -99,7 +91,7 @@ async function walkFind(searchPath: string, globPattern: string, limit: number):
   return results;
 }
 
-export function createFindTool(ctx: ToolContext): unknown {
+export function createFindTool(ctx: ToolContext): Tool {
   return tool({
     name: "find",
     description:
@@ -143,8 +135,7 @@ export function createFindTool(ctx: ToolContext): unknown {
         notices.push(`${effectiveLimit} results limit reached. Use limit=${effectiveLimit * 2} for more`);
       }
       if (truncation.truncated) notices.push(`${formatSize(DEFAULT_MAX_BYTES)} limit reached`);
-      if (notices.length > 0) output += `\n\n[${notices.join(". ")}]`;
-      return output;
+      return appendSearchNotices(output, notices);
     },
   });
 }
