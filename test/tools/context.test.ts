@@ -55,6 +55,24 @@ Deno.test("resolveReadPath marks host absolute paths as outside workspace", asyn
   }
 });
 
+Deno.test("resolveReadPath rejects absolute in-workspace symlink escapes", async () => {
+  const outside = await Deno.makeTempDir({ prefix: "silas-outside-" });
+  const { ctx, cleanup } = await createTestWorkspace();
+  try {
+    await Deno.writeTextFile(`${outside}/secret.txt`, "secret");
+    await Deno.symlink(outside, `${ctx.root}/escape`);
+
+    await assertRejects(
+      () => resolveReadPath(ctx, `${ctx.root}/escape/secret.txt`),
+      Error,
+      "Path escapes workspace",
+    );
+  } finally {
+    await cleanup();
+    await Deno.remove(outside, { recursive: true });
+  }
+});
+
 Deno.test("normalizeUserPath strips quotes so tilde host reads resolve", () => {
   assertEquals(normalizeUserPath("'~/.codex/config.toml'"), "~/.codex/config.toml");
   assertEquals(isHostReadPath("'~/.codex/config.toml'"), true);

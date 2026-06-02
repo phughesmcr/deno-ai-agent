@@ -100,11 +100,13 @@ export async function resolveReadPath(
   userPath: string,
 ): Promise<{ absolutePath: string; outsideWorkspace: boolean }> {
   const normalized = normalizeUserPath(userPath);
+  const expanded = expandTilde(normalized);
+  if (path.isAbsolute(expanded) && ctx.sandbox.containsPath(path.resolve(expanded))) {
+    return { absolutePath: await ctx.sandbox.resolvePath(expanded), outsideWorkspace: false };
+  }
   // Host paths: expand only. Avoid Deno.realPath here — the permission broker would
   // prompt before the Telegram tool-approval step (resolveHostPath uses realPath).
-  const absolutePath = isHostReadPath(normalized) ?
-    path.resolve(expandTilde(normalized)) :
-    await ctx.sandbox.resolvePath(normalized);
+  const absolutePath = isHostReadPath(normalized) ? path.resolve(expanded) : await ctx.sandbox.resolvePath(normalized);
   return { absolutePath, outsideWorkspace: !ctx.sandbox.containsPath(absolutePath) };
 }
 
