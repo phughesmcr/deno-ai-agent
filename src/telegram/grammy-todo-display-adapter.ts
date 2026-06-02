@@ -1,7 +1,6 @@
 import type { Context } from "grammy";
-import { logDebug } from "../log.ts";
-import type { TodoDisplayPort, TodoUpdatePayload } from "../tools/todo-display-port.ts";
-import { readTodoFile } from "../tools/todo-write.ts";
+import { readTodoFile, type TodoDisplayPort, type TodoUpdatePayload } from "../agent/mod.ts";
+import { logDebug } from "../shared/mod.ts";
 import { formatTodoListMarkdown, formatTodoListPlain } from "./todo-list-format.ts";
 import type { TelegramContext } from "./telegram.ts";
 

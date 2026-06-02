@@ -1,6 +1,6 @@
 import { assertEquals, assertStringIncludes } from "jsr:@std/assert@1";
 
-import { createFindTool } from "../../src/tools/find.ts";
+import { createFindTool } from "../../src/agent/tools/find.ts";
 import { createTestWorkspace, runToolImplementation } from "./helpers.ts";
 
 Deno.test("find matches glob with built-in walker", async () => {

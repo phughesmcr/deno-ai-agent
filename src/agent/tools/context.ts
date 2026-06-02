@@ -8,7 +8,7 @@ import {
   createDenyApprovalGate,
   DEFAULT_APPROVAL_TIMEOUT_MS,
   requireApproval,
-} from "../approval.ts";
+} from "../../shared/approval.ts";
 import { expandTilde, WorkspaceSandbox } from "../workspace-sandbox.ts";
 
 /** Workspace-scoped root for all tool I/O. */

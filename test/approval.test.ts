@@ -8,7 +8,7 @@ import {
   createAutoApprovalGate,
   createDenyApprovalGate,
   requireApproval,
-} from "../src/approval.ts";
+} from "../src/shared/approval.ts";
 
 Deno.test("requireApproval resolves approved decisions", async () => {
   const gate = createAutoApprovalGate("admin");

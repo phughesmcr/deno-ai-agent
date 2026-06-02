@@ -19,10 +19,43 @@ export { createToolContext, normalizeRoot } from "./context.ts";
 export type { ToolContext, ToolContextOptions } from "./context.ts";
 export { preprocessSystemPrompt } from "./prompt.ts";
 export { createNoopTodoDisplayPort } from "./todo-display-port.ts";
-export type { TodoDisplayPort } from "./todo-display-port.ts";
-export { type AskUserQuestionPort, createUnavailableAskUserQuestionPort } from "./user-question-port.ts";
+export type { TodoDisplayPort, TodoUpdatePayload } from "./todo-display-port.ts";
+export {
+  type AskUserQuestionParams,
+  createAskUserQuestionTool,
+  formatAnswers,
+  type Question,
+  type QuestionOption,
+  UserQuestionAbortedError,
+  UserQuestionDeclinedError,
+  validateAskUserQuestionParams,
+} from "./ask-user-question.ts";
+export {
+  type AskUserQuestionPort,
+  createUnavailableAskUserQuestionPort,
+  type TurnTarget,
+} from "./user-question-port.ts";
 export { createAgentTool } from "./agent.ts";
 export type { AgentAction, AgentToolParams, AgentToolResponse } from "./agent.ts";
+export { getShellCommand } from "./shell-command.ts";
+export {
+  copyTodosForSession,
+  createTodoWriteTool,
+  detectTodoChanges,
+  formatTodoWriteResult,
+  readTodoFile,
+  readTodosForSession,
+  type TodoChanges,
+  type TodoFile,
+  type TodoItem,
+  type TodoStatus,
+  type TodoTelegramMeta,
+  type TodoWriteDeps,
+  type TodoWriteParams,
+  updateTelegramMeta,
+  validateTodoWriteParams,
+  writeTodoFile,
+} from "./todo-write.ts";
 export { createUnavailableSubagentPort } from "../subagents.ts";
 export type { SubagentPort, SubagentRecord, SubagentStatus } from "../subagents.ts";
 

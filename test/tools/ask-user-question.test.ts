@@ -5,8 +5,8 @@ import {
   formatAnswers,
   UserQuestionDeclinedError,
   validateAskUserQuestionParams,
-} from "../../src/tools/ask-user-question.ts";
-import type { AskUserQuestionPort } from "../../src/tools/user-question-port.ts";
+} from "../../src/agent/tools/ask-user-question.ts";
+import type { AskUserQuestionPort } from "../../src/agent/tools/user-question-port.ts";
 import { runTool, runToolImplementationThrows } from "./helpers.ts";
 
 function mockPort(answers: Record<string, string>): AskUserQuestionPort {

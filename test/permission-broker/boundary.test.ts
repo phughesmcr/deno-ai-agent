@@ -14,15 +14,14 @@ async function collectTsFiles(dir: string): Promise<string[]> {
   return files;
 }
 
-Deno.test("src/agent does not import Telegram", async () => {
-  const root = path.resolve("src/agent");
+Deno.test("src/permission-broker does not use upward relative imports", async () => {
+  const root = path.resolve("src/permission-broker");
   const offenders: string[] = [];
+  const upwardImport = /\bfrom\s+["']\.\.\/|import\s*["']\.\.\//;
 
   await Promise.all((await collectTsFiles(root)).map(async (file) => {
     const text = await Deno.readTextFile(file);
-    if (text.includes('"grammy"') || text.includes('"grammy-questions"') || text.includes("/telegram/")) {
-      offenders.push(path.relative(Deno.cwd(), file));
-    }
+    if (upwardImport.test(text)) offenders.push(path.relative(Deno.cwd(), file));
   }));
 
   assertEquals(offenders, []);

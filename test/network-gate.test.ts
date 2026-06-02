@@ -1,7 +1,7 @@
 import { assertEquals, assertRejects } from "jsr:@std/assert@1";
 
-import { type ApprovalGate, createAutoApprovalGate, createDenyApprovalGate } from "../src/approval.ts";
-import { NetworkGate } from "../src/network-gate.ts";
+import { type ApprovalGate, createAutoApprovalGate, createDenyApprovalGate } from "../src/shared/approval.ts";
+import { NetworkGate } from "../src/shared/network-gate.ts";
 
 Deno.test("NetworkGate allows configured internal hosts without approval", async () => {
   let calls = 0;

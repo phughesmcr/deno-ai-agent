@@ -1,5 +1,3 @@
-import { logDebug } from "../log.ts";
-import type { PermissionPromptPort } from "../tools/permission-prompt-port.ts";
 import { attachControlConnection, detachControlConnection } from "./control-channel.ts";
 import {
   type ControlDecision,
@@ -7,7 +5,9 @@ import {
   formatControlMessage,
   parseControlMessage,
 } from "./control-protocol.ts";
+import { logDebug } from "./debug-log.ts";
 import { readJsonlLine, writeJsonlLine } from "./jsonl.ts";
+import type { PermissionPromptPort } from "./permission-prompt-port.ts";
 
 /** Options for the permission broker control client. */
 export interface ControlClientOptions {

@@ -4,7 +4,7 @@ import { createSummaryCompactor } from "./context/compactor.ts";
 import { SessionStore } from "./context/session-store.ts";
 import { type ModelActObserver, SessionManager, type SessionTurnResult } from "./context/session.ts";
 import type { LMStudioManager } from "./lmstudio.ts";
-import { createActSpanTracker, tokenBucket, traceSpan } from "./otel.ts";
+import { createActSpanTracker, tokenBucket, traceSpan } from "../shared/otel.ts";
 import type { Workspace } from "./workspace.ts";
 
 /** Wired agent: session state and LM Studio model. */
@@ -55,8 +55,11 @@ export async function createAgent(spec: CreateAgentOptions): Promise<Agent> {
 /** Result of a single user turn through the model. */
 export type TurnResult = SessionTurnResult;
 
-interface RunTurnOptions {
+/** Options for one model turn. */
+export interface RunTurnOptions {
+  /** Tools available to the model during this turn. */
   tools: Tool[];
+  /** Signal that cancels the active turn. */
   signal: AbortSignal;
 }
 

@@ -1,29 +1,42 @@
 import type { Tool } from "@lmstudio/sdk";
 
-import { createAgent, runTurn } from "./src/agent.ts";
-import { ApprovalDeniedError } from "./src/approval.ts";
-import { createLMStudioManager } from "./src/lmstudio.ts";
-import { logDebug } from "./src/log.ts";
-import { recordActDuration, recordTelegramMessage, traceSpan } from "./src/otel.ts";
 import {
+  createAgent,
+  createLMStudioManager,
+  createSkillManager,
+  createToolContext,
+  createWorkspace,
+  getModelTools,
+  runTurn,
+  SubagentManager,
+  updateTelegramMeta,
+} from "./src/agent/mod.ts";
+import {
+  assertPermissionBrokerSupported,
   runPermissionControlClient,
   shouldRunPermissionControlClient,
   waitForPermissionControlClient,
-} from "./src/permission-broker/control-client.ts";
-import { assertPermissionBrokerSupported } from "./src/permission-broker/version.ts";
-import { SubagentManager } from "./src/subagents.ts";
-import { createTelegramApprovalGate } from "./src/telegram/approval-gate.ts";
-import { startTelegramBot } from "./src/telegram/bot-runner.ts";
-import { createTelegramPermissionPromptPort } from "./src/telegram/grammy-permission-prompt-adapter.ts";
-import { createTelegramAskUserQuestionPort } from "./src/telegram/grammy-questions-adapter.ts";
-import { createTelegramTodoDisplayPort } from "./src/telegram/grammy-todo-display-adapter.ts";
-import { isBotCommand } from "./src/telegram/is-bot-command.ts";
-import { replyError, replyWithModelText } from "./src/telegram/telegram-reply.ts";
-import { createTelegramManager, type TelegramContext } from "./src/telegram/telegram.ts";
-import { withTurnMutex } from "./src/telegram/turn-gate.ts";
-import { createSkillManager, createToolContext, getModelTools } from "./src/tools.ts";
-import { updateTelegramMeta } from "./src/tools/todo-write.ts";
-import { createWorkspace } from "./src/workspace.ts";
+} from "./src/permission-broker/mod.ts";
+import {
+  ApprovalDeniedError,
+  logDebug,
+  recordActDuration,
+  recordTelegramMessage,
+  traceSpan,
+} from "./src/shared/mod.ts";
+import {
+  createTelegramApprovalGate,
+  createTelegramAskUserQuestionPort,
+  createTelegramManager,
+  createTelegramPermissionPromptPort,
+  createTelegramTodoDisplayPort,
+  isBotCommand,
+  replyError,
+  replyWithModelText,
+  startTelegramBot,
+  type TelegramContext,
+  withTurnMutex,
+} from "./src/telegram/mod.ts";
 
 const PENDING_INTERACTION_HINT =
   "Please resolve the pending approval or permission prompt first (or wait for it to time out).";

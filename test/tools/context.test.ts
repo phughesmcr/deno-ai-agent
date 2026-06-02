@@ -1,7 +1,7 @@
 import * as path from "@std/path";
 import { assertEquals, assertRejects } from "jsr:@std/assert@1";
 
-import { expandTilde } from "../../src/workspace-sandbox.ts";
+import { expandTilde } from "../../src/agent/workspace-sandbox.ts";
 
 import {
   createToolContext,
@@ -10,7 +10,7 @@ import {
   normalizeUserPath,
   resolvePath,
   resolveReadPath,
-} from "../../src/tools/context.ts";
+} from "../../src/agent/tools/context.ts";
 import { createTestWorkspace } from "./helpers.ts";
 
 Deno.test("resolvePath accepts relative path under workspace", async () => {

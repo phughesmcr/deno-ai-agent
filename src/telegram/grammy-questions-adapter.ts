@@ -1,14 +1,15 @@
 import type { Filter } from "grammy";
 
-import { logDebug } from "../log.ts";
-import { escapeMarkdownV2 } from "../markdown.ts";
 import {
   type AskUserQuestionParams,
+  type AskUserQuestionPort,
   type Question,
+  type TurnTarget,
   UserQuestionAbortedError,
   UserQuestionDeclinedError,
-} from "../tools/ask-user-question.ts";
-import type { AskUserQuestionPort, TurnTarget } from "../tools/user-question-port.ts";
+} from "../agent/mod.ts";
+import { logDebug } from "../shared/mod.ts";
+import { escapeMarkdownV2 } from "./markdown.ts";
 import type { TelegramContext } from "./telegram.ts";
 import {
   encodeCancelCallback,

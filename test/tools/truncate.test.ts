@@ -1,6 +1,6 @@
 import { assertEquals } from "jsr:@std/assert@1";
 
-import { truncateHead, truncateLine, truncateTail } from "../../src/tools/truncate.ts";
+import { truncateHead, truncateLine, truncateTail } from "../../src/agent/tools/truncate.ts";
 
 Deno.test("truncateHead keeps content within limits", () => {
   const content = "a\nb\nc";

@@ -1,5 +1,5 @@
 // deno-lint-ignore-file camelcase -- Telegram API uses snake_case keys
-import { plainReply, stripThinking } from "../markdown.ts";
+import { plainReply, stripThinking } from "./markdown.ts";
 
 /** Telegram reply target parameters. */
 export interface TelegramReplyParameters {

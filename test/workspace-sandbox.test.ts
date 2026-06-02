@@ -1,6 +1,6 @@
 import { assertEquals, assertRejects } from "jsr:@std/assert@1";
 
-import { WorkspaceSandbox } from "../src/workspace-sandbox.ts";
+import { WorkspaceSandbox } from "../src/agent/workspace-sandbox.ts";
 
 Deno.test("WorkspaceSandbox rejects traversal outside the root", async () => {
   const root = await Deno.makeTempDir({ prefix: "deno-ai-agent-sandbox-" });

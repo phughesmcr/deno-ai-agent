@@ -1,5 +1,4 @@
-import type { SessionManager, SessionStatus } from "../context/session.ts";
-import { copyTodosForSession } from "../tools/todo-write.ts";
+import { copyTodosForSession, type SessionManager, type SessionStatus } from "../agent/mod.ts";
 
 /** One-line help text for supported session commands. */
 export const SESSION_HELP =

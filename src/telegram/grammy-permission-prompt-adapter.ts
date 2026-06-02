@@ -1,10 +1,10 @@
-import { logDebug } from "../log.ts";
-import {
-  type PermissionPromptPort,
-  type PermissionPromptRequest,
-  type PermissionPromptResult,
-  type PermissionPromptTurnTarget,
-} from "../tools/permission-prompt-port.ts";
+import type {
+  PermissionPromptPort,
+  PermissionPromptRequest,
+  PermissionPromptResult,
+  PermissionPromptTurnTarget,
+} from "../permission-broker/mod.ts";
+import { logDebug } from "../shared/mod.ts";
 import {
   encodePermissionCallback,
   parsePermissionCallback,
@@ -115,36 +115,36 @@ export function createTelegramPermissionPromptPort(timeoutMs = 120_000): Permiss
         });
       });
     },
-    async handleCallback(data: string, actorId: number | undefined, adminId: number): Promise<boolean> {
+    handleCallback(data: string, actorId: number | undefined, adminId: number): Promise<boolean> {
       const parsed = parsePermissionCallback(data);
-      if (!parsed) return false;
+      if (!parsed) return Promise.resolve(false);
 
       const current = pending;
       if (!current) {
         logDebug("permission_prompt.stale_callback", { data });
-        return true;
+        return Promise.resolve(true);
       }
 
       const requestId = resolveRequestId(parsed.shortId, shortIds);
       if (!requestId || requestId !== current.request.requestId) {
         logDebug("permission_prompt.stale_callback", { data, requestId: requestId ?? "" });
-        return true;
+        return Promise.resolve(true);
       }
 
       if (actorId !== adminId) {
         settle({ result: "deny" });
-        return true;
+        return Promise.resolve(true);
       }
 
       if (parsed.action === "deny") {
         settle({ result: "deny" });
-        return true;
+        return Promise.resolve(true);
       }
       settle({
         result: "allow",
         grant: parsed.action === "session" ? "session" : "once",
       });
-      return true;
+      return Promise.resolve(true);
     },
   };
 }

@@ -1,7 +1,7 @@
 import { assertEquals, assertStringIncludes } from "jsr:@std/assert@1";
 
 import { formatTodoListMarkdown, formatTodoListPlain } from "../../src/telegram/todo-list-format.ts";
-import { createNoopTodoDisplayPort } from "../../src/tools/todo-display-port.ts";
+import { createNoopTodoDisplayPort } from "../../src/agent/tools/todo-display-port.ts";
 import {
   copyTodosForSession,
   createTodoWriteTool,
@@ -12,7 +12,7 @@ import {
   type TodoItem,
   updateTelegramMeta,
   validateTodoWriteParams,
-} from "../../src/tools/todo-write.ts";
+} from "../../src/agent/tools/todo-write.ts";
 import { createTestWorkspace, runTool } from "./helpers.ts";
 
 const SESSION_ID = "00000000-0000-4000-8000-000000000001";

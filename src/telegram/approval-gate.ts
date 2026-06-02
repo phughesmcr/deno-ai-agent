@@ -5,12 +5,10 @@ import {
   type ApprovalRequest,
   approveDecision,
   denyDecision,
-} from "../approval.ts";
-import { logDebug } from "../log.ts";
-import { sendControlGrant } from "../permission-broker/control-channel.ts";
-import { shouldRunPermissionControlClient } from "../permission-broker/control-client.ts";
-import { grantBrokerReadPaths } from "../permission-broker/grant-read.ts";
-import { getShellCommand } from "../tools/shell-command.ts";
+  logDebug,
+} from "../shared/mod.ts";
+import { getShellCommand } from "../agent/mod.ts";
+import { grantBrokerReadPaths, sendControlGrant, shouldRunPermissionControlClient } from "../permission-broker/mod.ts";
 
 /** Telegram approval button action. */
 export type ApprovalAction = "approve" | "deny";

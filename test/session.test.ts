@@ -2,8 +2,8 @@ import { Chat, ChatMessage, type ChatMessageData, type LLM, type Tool } from "@l
 import { assert } from "jsr:@std/assert@1/assert";
 import { assertEquals } from "jsr:@std/assert@1/equals";
 import { assertStringIncludes } from "jsr:@std/assert@1/string-includes";
-import { SessionStore } from "../src/context/session-store.ts";
-import { type ModelActObserver, SessionManager } from "../src/context/session.ts";
+import { SessionStore } from "../src/agent/context/session-store.ts";
+import { type ModelActObserver, SessionManager } from "../src/agent/context/session.ts";
 
 type ChatMessageWithRaw = ChatMessage & {
   getRaw(): ChatMessageData;

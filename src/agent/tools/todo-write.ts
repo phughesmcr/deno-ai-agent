@@ -1,7 +1,7 @@
 import { tool } from "@lmstudio/sdk";
 import { z } from "zod/v3";
 
-import { logDebug } from "../log.ts";
+import { logDebug } from "../../shared/log.ts";
 import { approveToolOperation, type ToolContext } from "./context.ts";
 import { withFileMutationQueue } from "./file-mutation-queue.ts";
 import type { TodoDisplayPort } from "./todo-display-port.ts";

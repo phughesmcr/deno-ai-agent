@@ -1,7 +1,7 @@
 import { Chat, ChatMessage, type ChatMessageData, type LLM, type Tool } from "@lmstudio/sdk";
 
-import { logDebug } from "../log.ts";
-import { traceSpan } from "../otel.ts";
+import { logDebug } from "../../shared/log.ts";
+import { traceSpan } from "../../shared/otel.ts";
 import type { SessionStore } from "./session-store.ts";
 
 /** @internal SDK exposes getRaw() at runtime but not in public types. */

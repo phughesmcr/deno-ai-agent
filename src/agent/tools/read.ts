@@ -1,9 +1,8 @@
 import { tool } from "@lmstudio/sdk";
 import { z } from "zod/v3";
 
-import { DEFAULT_APPROVAL_TIMEOUT_MS } from "../approval.ts";
-import { shouldRunPermissionControlClient } from "../permission-broker/control-client.ts";
-import { grantBrokerReadPaths } from "../permission-broker/grant-read.ts";
+import { grantBrokerReadPaths, shouldRunPermissionControlClient } from "../../permission-broker/mod.ts";
+import { DEFAULT_APPROVAL_TIMEOUT_MS } from "../../shared/approval.ts";
 import { approveToolOperation, displayPath, resolveReadPath, type ToolContext } from "./context.ts";
 import { DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES, formatSize, truncateHead } from "./truncate.ts";
 

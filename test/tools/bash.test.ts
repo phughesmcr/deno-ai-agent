@@ -1,8 +1,8 @@
 import { assertEquals, assertRejects, assertStringIncludes } from "jsr:@std/assert@1";
 
-import { createDenyApprovalGate } from "../../src/approval.ts";
-import { createToolContext } from "../../src/tools/context.ts";
-import { createBashTool } from "../../src/tools/bash.ts";
+import { createDenyApprovalGate } from "../../src/shared/approval.ts";
+import { createToolContext } from "../../src/agent/tools/context.ts";
+import { createBashTool } from "../../src/agent/tools/bash.ts";
 import { createTestWorkspace, runToolImplementation, runToolImplementationThrows } from "./helpers.ts";
 
 Deno.test("bash runs echo in workspace", async () => {

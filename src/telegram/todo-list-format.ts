@@ -1,4 +1,4 @@
-import { escapeMarkdownV2 } from "../markdown.ts";
+import { escapeMarkdownV2 } from "./markdown.ts";
 
 const TELEGRAM_MAX_LENGTH = 4096;
 

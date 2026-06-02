@@ -1,5 +1,5 @@
 import { debounce } from "@std/async/debounce";
-import { logDebug } from "./log.ts";
+import { logDebug } from "../shared/log.ts";
 import { preprocessSystemPrompt } from "./tools/prompt.ts";
 
 /**

@@ -1,11 +1,11 @@
 import { type Chat, ChatMessage, type LLM, type Tool } from "@lmstudio/sdk";
 import { assert, assertEquals, assertStringIncludes } from "jsr:@std/assert@1";
 
-import { createAutoApprovalGate } from "../../src/approval.ts";
-import { createSkillManager } from "../../src/skills/mod.ts";
-import { createReadOnlySubagentTools, SubagentManager, type SubagentRecord } from "../../src/subagents.ts";
-import { type AgentAction, createAgentTool } from "../../src/tools/agent.ts";
-import { createToolContext, type ToolContext } from "../../src/tools/context.ts";
+import { createAutoApprovalGate } from "../../src/shared/approval.ts";
+import { createSkillManager } from "../../src/agent/skills/mod.ts";
+import { createReadOnlySubagentTools, SubagentManager, type SubagentRecord } from "../../src/agent/subagents.ts";
+import { type AgentAction, createAgentTool } from "../../src/agent/tools/agent.ts";
+import { createToolContext, type ToolContext } from "../../src/agent/tools/context.ts";
 import { runTool } from "./helpers.ts";
 
 interface FakeActOptions {

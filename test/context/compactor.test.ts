@@ -1,7 +1,7 @@
 import { Chat, ChatMessage, type ChatMessageData, type LLM, type Tool } from "@lmstudio/sdk";
 import { assert, assertEquals, assertStringIncludes } from "jsr:@std/assert@1";
 
-import { createSummaryCompactor } from "../../src/context/compactor.ts";
+import { createSummaryCompactor } from "../../src/agent/context/compactor.ts";
 
 type ChatMessageWithRaw = ChatMessage & {
   getRaw(): ChatMessageData;

@@ -1,5 +1,5 @@
 import { assertEquals } from "jsr:@std/assert@1/equals";
-import { escapeMarkdownV2, plainReply, stripThinking } from "../src/markdown.ts";
+import { escapeMarkdownV2, plainReply, stripThinking } from "../src/telegram/markdown.ts";
 
 Deno.test("escapeMarkdownV2 escapes special characters", () => {
   assertEquals(

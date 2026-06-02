@@ -1,23 +1,73 @@
+export { type Agent, createAgent, type CreateAgentOptions, runTurn, type TurnResult } from "./runtime.ts";
+export { createLMStudioManager, type LMStudioManager } from "./lmstudio.ts";
+export { createWorkspace, type FsSubscriber, notifyWorkspaceSubscribers, type Workspace } from "./workspace.ts";
+export {
+  createReadOnlySubagentTools,
+  createUnavailableSubagentPort,
+  type SubagentActMessage,
+  type SubagentActOptions,
+  SubagentManager,
+  type SubagentManagerOptions,
+  type SubagentModel,
+  type SubagentPort,
+  type SubagentRecord,
+  type SubagentSpawnSpec,
+  type SubagentStatus,
+} from "./subagents.ts";
+export {
+  type ModelActObserver,
+  SessionManager,
+  type SessionStatus,
+  type SessionTurnResult,
+} from "./context/session.ts";
+export { FORMAT_VERSION, type SessionFile, SessionStore } from "./context/session-store.ts";
+export { createSummaryCompactor } from "./context/compactor.ts";
 export {
   type AgentAction,
   type AgentToolParams,
   type AgentToolResponse,
   allToolNames,
+  type AskUserQuestionParams,
   type AskUserQuestionPort,
+  copyTodosForSession,
   createAgentTool,
+  createAskUserQuestionTool,
+  createNoopTodoDisplayPort,
+  createTodoWriteTool,
   createToolContext,
-  createUnavailableSubagentPort,
+  createUnavailableAskUserQuestionPort,
+  detectTodoChanges,
+  formatAnswers,
+  formatTodoWriteResult,
   getModelTools,
   getModelToolsForRoot,
+  getShellCommand,
   type ModelToolDeps,
   normalizeRoot,
   preprocessSystemPrompt,
-  type SubagentPort,
-  type SubagentRecord,
-  type SubagentStatus,
+  type Question,
+  type QuestionOption,
+  readTodoFile,
+  readTodosForSession,
+  type TodoChanges,
+  type TodoDisplayPort,
+  type TodoFile,
+  type TodoItem,
+  type TodoStatus,
+  type TodoTelegramMeta,
+  type TodoUpdatePayload,
+  type TodoWriteDeps,
+  type TodoWriteParams,
   type ToolContext,
   type ToolContextOptions,
   type ToolName,
+  type TurnTarget,
+  updateTelegramMeta,
+  UserQuestionAbortedError,
+  UserQuestionDeclinedError,
+  validateAskUserQuestionParams,
+  validateTodoWriteParams,
+  writeTodoFile,
 } from "./tools/index.ts";
 export {
   createSkillManager,
@@ -27,17 +77,4 @@ export {
   SkillManager,
   type SkillSummary,
 } from "./skills/mod.ts";
-export {
-  type ApprovalDecision,
-  ApprovalDeniedError,
-  type ApprovalGate,
-  type ApprovalOperation,
-  type ApprovalRequest,
-  type ApprovalRisk,
-  createAutoApprovalGate,
-  createDenyApprovalGate,
-  DEFAULT_APPROVAL_TIMEOUT_MS,
-  requireApproval,
-} from "./approval.ts";
-export { NetworkGate, type NetworkGateOptions } from "./network-gate.ts";
 export { WorkspaceSandbox } from "./workspace-sandbox.ts";

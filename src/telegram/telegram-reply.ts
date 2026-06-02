@@ -1,6 +1,6 @@
 import type { Context } from "grammy";
 
-import { escapeMarkdownV2 } from "../markdown.ts";
+import { escapeMarkdownV2 } from "./markdown.ts";
 import { sendModelTextReply } from "./model-reply.ts";
 
 /**

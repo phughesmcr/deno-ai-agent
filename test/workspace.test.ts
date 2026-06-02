@@ -1,6 +1,6 @@
 import { assert } from "jsr:@std/assert@1/assert";
 import { assertEquals } from "jsr:@std/assert@1/equals";
-import { notifyWorkspaceSubscribers } from "../src/workspace.ts";
+import { notifyWorkspaceSubscribers } from "../src/agent/workspace.ts";
 
 function withDebugLogs(fn: () => Promise<void>): Promise<string[]> {
   const previousLevel = Deno.env.get("LOG_LEVEL");

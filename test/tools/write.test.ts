@@ -1,8 +1,8 @@
 import { assertEquals, assertRejects } from "jsr:@std/assert@1";
 
-import { createDenyApprovalGate } from "../../src/approval.ts";
-import { createToolContext } from "../../src/tools/context.ts";
-import { createWriteTool } from "../../src/tools/write.ts";
+import { createDenyApprovalGate } from "../../src/shared/approval.ts";
+import { createToolContext } from "../../src/agent/tools/context.ts";
+import { createWriteTool } from "../../src/agent/tools/write.ts";
 import { createTestWorkspace, runToolImplementation } from "./helpers.ts";
 
 Deno.test("write creates nested file", async () => {

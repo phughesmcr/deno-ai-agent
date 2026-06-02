@@ -1,10 +1,10 @@
 import { assertEquals } from "jsr:@std/assert@1";
 
-import { createSkillManager } from "../../src/skills/mod.ts";
-import { allToolNames, getModelTools } from "../../src/tools/index.ts";
-import { createNoopTodoDisplayPort } from "../../src/tools/todo-display-port.ts";
-import { createUnavailableAskUserQuestionPort } from "../../src/tools/user-question-port.ts";
-import { createUnavailableSubagentPort } from "../../src/subagents.ts";
+import { createSkillManager } from "../../src/agent/skills/mod.ts";
+import { allToolNames, getModelTools } from "../../src/agent/tools/index.ts";
+import { createNoopTodoDisplayPort } from "../../src/agent/tools/todo-display-port.ts";
+import { createUnavailableAskUserQuestionPort } from "../../src/agent/tools/user-question-port.ts";
+import { createUnavailableSubagentPort } from "../../src/agent/subagents.ts";
 import { createTestWorkspace } from "./helpers.ts";
 
 Deno.test("getModelTools registers eleven tools including skill, todo_write, ask_user_question, and agent", async () => {

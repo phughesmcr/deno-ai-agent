@@ -1,8 +1,8 @@
 import { assertEquals, assertRejects, assertStringIncludes } from "jsr:@std/assert@1";
 
-import { createDenyApprovalGate } from "../../src/approval.ts";
-import { createToolContext } from "../../src/tools/context.ts";
-import { createReadTool } from "../../src/tools/read.ts";
+import { createDenyApprovalGate } from "../../src/shared/approval.ts";
+import { createToolContext } from "../../src/agent/tools/context.ts";
+import { createReadTool } from "../../src/agent/tools/read.ts";
 import { createTestWorkspace, runToolImplementation } from "./helpers.ts";
 
 Deno.test("read returns file content", async () => {

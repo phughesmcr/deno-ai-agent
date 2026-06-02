@@ -1,7 +1,7 @@
 import { assertEquals } from "jsr:@std/assert@1/equals";
 
-import { createReadTool } from "../../src/tools/read.ts";
-import { createWriteTool } from "../../src/tools/write.ts";
+import { createReadTool } from "../../src/agent/tools/read.ts";
+import { createWriteTool } from "../../src/agent/tools/write.ts";
 import { runTool, withSandbox } from "./helpers.ts";
 
 Deno.test("integration write then read", async () => {

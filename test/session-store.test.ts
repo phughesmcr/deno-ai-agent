@@ -1,7 +1,7 @@
 import { ChatMessage, type ChatMessageData } from "@lmstudio/sdk";
 import { assertEquals } from "jsr:@std/assert@1/equals";
 import { assertRejects } from "jsr:@std/assert@1/rejects";
-import { SessionStore } from "../src/context/session-store.ts";
+import { SessionStore } from "../src/agent/context/session-store.ts";
 
 type ChatMessageWithRaw = ChatMessage & {
   getRaw(): ChatMessageData;

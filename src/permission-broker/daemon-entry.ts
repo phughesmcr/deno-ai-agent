@@ -1,5 +1,5 @@
-import { logDebug } from "../log.ts";
 import { loadBrokerDaemonEnv, PermissionBrokerDaemon } from "./daemon.ts";
+import { logDebug } from "./debug-log.ts";
 import { assertPermissionBrokerSupported } from "./version.ts";
 
 async function main(): Promise<void> {

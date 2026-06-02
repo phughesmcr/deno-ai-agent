@@ -1,5 +1,5 @@
 import { assertEquals } from "jsr:@std/assert@1/equals";
-import type { SessionManager, SessionStatus } from "../src/context/session.ts";
+import type { SessionManager, SessionStatus } from "../src/agent/context/session.ts";
 import { formatSessionStatus, SESSION_HELP, TelegramCommandHandler } from "../src/telegram/commands.ts";
 
 class FakeSession {

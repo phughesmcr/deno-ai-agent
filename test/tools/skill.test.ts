@@ -1,7 +1,7 @@
 import { assertEquals, assertStringIncludes } from "jsr:@std/assert@1";
 
-import { createSkillManager } from "../../src/skills/mod.ts";
-import { createSkillTool } from "../../src/tools/skill.ts";
+import { createSkillManager } from "../../src/agent/skills/mod.ts";
+import { createSkillTool } from "../../src/agent/tools/skill.ts";
 import { runTool, runToolImplementationThrows } from "./helpers.ts";
 
 async function withWorkspace(fn: (dir: string) => Promise<void>): Promise<void> {

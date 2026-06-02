@@ -1,6 +1,6 @@
 import { assertEquals, assertStringIncludes } from "jsr:@std/assert@1";
 
-import { preprocessSystemPrompt } from "../../src/tools/prompt.ts";
+import { preprocessSystemPrompt } from "../../src/agent/tools/prompt.ts";
 
 Deno.test("preprocessSystemPrompt substitutes tool names and injects workspace path", () => {
   const raw = "Use ${ToolNames.READ_FILE} and ${ToolNames.SHELL} here.";

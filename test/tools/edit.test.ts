@@ -1,6 +1,6 @@
 import { assertEquals } from "jsr:@std/assert@1";
 
-import { createEditTool } from "../../src/tools/edit.ts";
+import { createEditTool } from "../../src/agent/tools/edit.ts";
 import { createTestWorkspace, runToolImplementation, runToolImplementationThrows } from "./helpers.ts";
 
 Deno.test("edit replaces unique text", async () => {

@@ -1,12 +1,12 @@
 import * as path from "@std/path";
 
-import { logDebug } from "../log.ts";
 import {
   type ControlDecision,
   type ControlPrompt,
   formatControlMessage,
   parseControlMessage,
 } from "./control-protocol.ts";
+import { logDebug } from "./debug-log.ts";
 import { readJsonlLine, writeJsonlLine } from "./jsonl.ts";
 import { normalizeAbsolutePath } from "./paths.ts";
 import { createPolicyContext, decidePolicy, effectiveDecision, type PolicyContext } from "./policy.ts";

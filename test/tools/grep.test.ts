@@ -1,6 +1,6 @@
 import { assertEquals, assertStringIncludes } from "jsr:@std/assert@1";
 
-import { createGrepTool } from "../../src/tools/grep.ts";
+import { createGrepTool } from "../../src/agent/tools/grep.ts";
 import { createTestWorkspace, runToolImplementation } from "./helpers.ts";
 
 Deno.test("grep finds pattern with built-in walker", async () => {

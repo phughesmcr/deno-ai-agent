@@ -1,6 +1,6 @@
 import { assertEquals } from "jsr:@std/assert@1";
 
-import { grantBrokerReadPaths } from "../../src/permission-broker/grant-read.ts";
+import { grantBrokerReadPaths } from "../../src/permission-broker/mod.ts";
 
 Deno.test("grantBrokerReadPaths is a no-op without a control connection", async () => {
   const dir = await Deno.makeTempDir({ prefix: "silas-grant-read-" });

@@ -1,6 +1,6 @@
 import { assertEquals, assertStringIncludes } from "jsr:@std/assert@1";
 
-import { createLsTool } from "../../src/tools/ls.ts";
+import { createLsTool } from "../../src/agent/tools/ls.ts";
 import { createTestWorkspace, runToolImplementation } from "./helpers.ts";
 
 Deno.test("ls lists entries with directory suffix", async () => {

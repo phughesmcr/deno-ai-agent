@@ -1,7 +1,7 @@
 // deno-lint-ignore-file camelcase -- Telegram API field names are snake_case.
 import { assertEquals } from "jsr:@std/assert@1";
 
-import type { ApprovalRequest } from "../../src/approval.ts";
+import type { ApprovalRequest } from "../../src/shared/approval.ts";
 import { createTelegramApprovalGate, encodeApprovalCallback } from "../../src/telegram/approval-gate.ts";
 
 function request(overrides: Partial<ApprovalRequest> = {}): ApprovalRequest {

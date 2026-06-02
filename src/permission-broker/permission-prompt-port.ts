@@ -1,3 +1,5 @@
+// deno-lint-ignore-file camelcase -- Telegram API field names are snake_case.
+
 /** One runtime permission prompt shown in Telegram. */
 export interface PermissionPromptRequest {
   requestId: string;

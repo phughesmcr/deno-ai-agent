@@ -1,6 +1,6 @@
 import { assertEquals } from "jsr:@std/assert@1";
 
-import { createSkillManager } from "../../src/skills/mod.ts";
+import { createSkillManager } from "../../src/agent/skills/mod.ts";
 
 async function withWorkspace(fn: (dir: string) => Promise<void>): Promise<void> {
   const dir = await Deno.makeTempDir({ prefix: "deno-ai-agent-skills-" });
