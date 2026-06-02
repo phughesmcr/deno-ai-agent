@@ -1,9 +1,11 @@
 import { Bot, type Context, GrammyError, HttpError } from "grammy";
+
 import { questions, type QuestionsFlavor } from "grammy-questions";
 import type { SessionManager } from "../context/session.ts";
 import { logDebug } from "../log.ts";
 import type { TodoTelegramMeta } from "../tools/todo-write.ts";
 import type { AskUserQuestionPort } from "../tools/user-question-port.ts";
+import { installConcurrentUpdates } from "./bot-runner.ts";
 import { SESSION_HELP, TelegramCommandHandler } from "./commands.ts";
 import { showTodosForSession } from "./grammy-todo-display-adapter.ts";
 import { isPermissionCallback } from "./permission-callback.ts";
@@ -104,6 +106,8 @@ export function createTelegramManager({
     };
     await next();
   });
+
+  installConcurrentUpdates(bot);
 
   bot.on("message", async (ctx, next) => {
     if (!ctx.config.isAdmin) {

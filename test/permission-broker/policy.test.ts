@@ -54,10 +54,22 @@ Deno.test("policy allows read inside workspace", async () => {
   assertEquals(decidePolicy(request("read", file), ctx(fixture, true)), "auto_allow");
 });
 
-Deno.test("policy denies read under repo src", async () => {
+Deno.test("policy allows read under repo src for app startup", async () => {
   const fixture = await makeFixture();
   const file = path.join(fixture.src, "main.ts");
-  assertEquals(decidePolicy(request("read", file), ctx(fixture, true)), "auto_deny");
+  assertEquals(decidePolicy(request("read", file), ctx(fixture, true)), "auto_allow");
+});
+
+Deno.test("policy denies write under repo src", async () => {
+  const fixture = await makeFixture();
+  const file = path.join(fixture.src, "main.ts");
+  assertEquals(decidePolicy(request("write", file), ctx(fixture, true)), "auto_deny");
+});
+
+Deno.test("policy prompts read under home directory", async () => {
+  const fixture = await makeFixture();
+  const file = "/Users/tester/.codex/config.toml";
+  assertEquals(decidePolicy(request("read", file), ctx(fixture, true)), "prompt");
 });
 
 Deno.test("policy denies run when prompts disabled", async () => {
@@ -75,6 +87,39 @@ Deno.test("policy allows bootstrap env vars", async () => {
   for (const name of BOOTSTRAP_ENV_VARS.slice(0, 3)) {
     assertEquals(decidePolicy(request("env", name), ctx(fixture, true)), "auto_allow");
   }
+});
+
+Deno.test("policy allows terminal color env vars needed by npm packages", async () => {
+  const fixture = await makeFixture();
+  for (const name of ["TERM", "TERM_PROGRAM", "TERM_PROGRAM_VERSION", "COLORTERM", "FORCE_COLOR", "NO_COLOR"]) {
+    assertEquals(decidePolicy(request("env", name), ctx(fixture, true)), "auto_allow");
+  }
+});
+
+Deno.test("policy allows env enumeration needed by Node compatibility shims", async () => {
+  const fixture = await makeFixture();
+  assertEquals(decidePolicy(request("env", null), ctx(fixture, true)), "auto_allow");
+});
+
+Deno.test("policy allows unknown env keys after Node env enumeration", async () => {
+  const fixture = await makeFixture();
+  assertEquals(decidePolicy(request("env", "__SHELL_INHERITED_KEY__"), ctx(fixture, true)), "auto_allow");
+});
+
+Deno.test("policy allows broker control socket before registration", async () => {
+  const fixture = await makeFixture();
+  const context = createPolicyContext({
+    workspaceRoot: fixture.workspace,
+    projectRoot: fixture.project,
+    denoDir: fixture.denoDir,
+    brokerSocketPaths: ["/tmp/silas-perm.sock", "/tmp/silas-perm-control.sock"],
+    runPromptsEnabled: true,
+    controlRegistered: false,
+    cache: new SessionCache(),
+  });
+
+  assertEquals(decidePolicy(request("read", "/tmp/silas-perm-control.sock"), context), "auto_allow");
+  assertEquals(decidePolicy(request("net", "/tmp/silas-perm-control.sock"), context), "auto_allow");
 });
 
 Deno.test("effectiveDecision denies prompt before register", async () => {

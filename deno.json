@@ -92,9 +92,14 @@
     "test": "deno test --unstable-kv --allow-read --allow-write --allow-run --allow-env=WS_NO_BUFFER_UTIL,WS_NO_UTF_8_VALIDATE,NODE_ENV,LOG_LEVEL,DENO_TEST_PERMISSION_BROKER test/**/*.test.ts",
     "test:broker": "DENO_TEST_PERMISSION_BROKER=1 deno test --allow-read --allow-write --allow-run --allow-net --allow-env test/permission-broker/daemon.integration.test.ts",
 
-    "broker": "deno run --allow-net --allow-read --allow-write --allow-env --env-file=.env src/permission-broker/daemon-entry.ts",
+    "broker": "deno run --allow-net --allow-read --allow-write --allow-env src/permission-broker/daemon-entry.ts",
+    "broker:only": "bash scripts/start-broker.sh",
     "start:broker": "deno run -A --unstable-kv --env-file=.env main.ts",
+    "start:broker:otel": "OTEL_DENO=true OTEL_SERVICE_NAME=deno-ai-agent deno run -A --unstable-kv --env-file=.env main.ts",
+    "agent:broker": "bash scripts/start-agent-with-broker.sh",
+    "agent:broker:otel": "bash scripts/start-agent-with-broker-otel.sh",
     "start:all": "bash scripts/start-with-broker.sh",
+    "start:all:otel": "bash scripts/start-with-broker-otel.sh",
     "start": "deno run --unstable-kv --env-file=.env --allow-read --allow-write --allow-run --allow-net --allow-env main.ts",
     "start:otel": "OTEL_DENO=true OTEL_SERVICE_NAME=deno-ai-agent deno run --unstable-kv --env-file=.env --allow-read --allow-write --allow-run --allow-net --allow-env main.ts",
     "start:otel:console": "OTEL_DENO=true OTEL_SERVICE_NAME=deno-ai-agent OTEL_EXPORTER_OTLP_PROTOCOL=console deno run --unstable-kv --env-file=.env --allow-read --allow-write --allow-run --allow-net --allow-env main.ts",
@@ -117,6 +122,7 @@
     "@lmstudio/sdk": "npm:@lmstudio/sdk@^1.5.0",
     "@std/yaml": "jsr:@std/yaml@^1.1.1",
     "grammy": "npm:grammy@^1.43.0",
+    "@grammyjs/runner": "npm:@grammyjs/runner@^2.0.3",
     "grammy-questions": "npm:grammy-questions@0.1.9",
     "zod": "npm:zod@^4.4.3"
   },

@@ -9,7 +9,7 @@ import {
   DEFAULT_APPROVAL_TIMEOUT_MS,
   requireApproval,
 } from "../approval.ts";
-import { WorkspaceSandbox } from "../workspace-sandbox.ts";
+import { expandTilde, WorkspaceSandbox } from "../workspace-sandbox.ts";
 
 /** Workspace-scoped root for all tool I/O. */
 export interface ToolContext {
@@ -76,6 +76,38 @@ export async function resolvePath(ctx: ToolContext, userPath: string): Promise<s
   return await ctx.sandbox.resolvePath(userPath);
 }
 
+/** Strips one layer of surrounding quotes from a user-supplied path. */
+export function normalizeUserPath(userPath: string): string {
+  const trimmed = userPath.trim();
+  if (
+    (trimmed.startsWith("'") && trimmed.endsWith("'")) ||
+    (trimmed.startsWith('"') && trimmed.endsWith('"'))
+  ) {
+    return trimmed.slice(1, -1).trim();
+  }
+  return trimmed;
+}
+
+/** True when the user path is resolved outside the workspace (absolute or `~`). */
+export function isHostReadPath(userPath: string): boolean {
+  const normalized = normalizeUserPath(userPath);
+  return normalized.startsWith("~") || path.isAbsolute(expandTilde(normalized));
+}
+
+/** Resolves a path for `read`: workspace-relative paths stay sandboxed; host paths do not. */
+export async function resolveReadPath(
+  ctx: ToolContext,
+  userPath: string,
+): Promise<{ absolutePath: string; outsideWorkspace: boolean }> {
+  const normalized = normalizeUserPath(userPath);
+  // Host paths: expand only. Avoid Deno.realPath here — the permission broker would
+  // prompt before the Telegram tool-approval step (resolveHostPath uses realPath).
+  const absolutePath = isHostReadPath(normalized) ?
+    path.resolve(expandTilde(normalized)) :
+    await ctx.sandbox.resolvePath(normalized);
+  return { absolutePath, outsideWorkspace: !ctx.sandbox.containsPath(absolutePath) };
+}
+
 /** @throws Error if path is not an existing directory under the workspace. */
 export async function resolveDirectoryPath(ctx: ToolContext, userPath: string): Promise<string> {
   return await ctx.sandbox.resolveDirectoryPath(userPath || ".");
@@ -106,5 +138,6 @@ export async function approveToolOperation(
     timeoutMs: spec.timeoutMs ?? DEFAULT_APPROVAL_TIMEOUT_MS,
   };
   if (spec.summary !== undefined) request.summary = spec.summary;
-  await requireApproval(ctx.approvalGate, request, ctx.signal);
+  // Do not pass ctx.signal: it must not be the LM Studio act signal (abort cancels pending approvals).
+  await requireApproval(ctx.approvalGate, request);
 }

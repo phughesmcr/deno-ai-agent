@@ -1,12 +1,15 @@
 #!/usr/bin/env bash
-# One terminal: broker (background) + Silas.
-# If the broker already runs elsewhere, use: deno task start:broker
+# One terminal: broker (background) + Silas with OTEL.
+# If the broker already runs elsewhere, use: deno task agent:broker:otel
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 # shellcheck source=scripts/broker-env.sh
 source "$ROOT/scripts/broker-env.sh"
+
+export OTEL_DENO="${OTEL_DENO:-true}"
+export OTEL_SERVICE_NAME="${OTEL_SERVICE_NAME:-deno-ai-agent}"
 
 rm -f "$SILAS_BROKER_LISTEN_PATH" "$SILAS_PERMISSION_CONTROL_PATH"
 
@@ -24,5 +27,5 @@ trap cleanup EXIT INT TERM
 wait_for_socket "$SILAS_BROKER_LISTEN_PATH" "broker" || exit 1
 wait_for_socket "$SILAS_PERMISSION_CONTROL_PATH" "control" || exit 1
 
-echo "Broker ready (pid $BROKER_PID). Starting Silas..."
-deno task start:broker
+echo "Broker ready (pid $BROKER_PID). Starting Silas with OTEL..."
+deno task agent:broker:otel

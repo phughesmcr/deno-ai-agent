@@ -9,6 +9,7 @@ export interface PolicyContext {
   projectRoot: string;
   denoDir: string;
   repoSrcDir: string;
+  brokerSocketPaths: readonly string[];
   runPromptsEnabled: boolean;
   controlRegistered: boolean;
   cache: SessionCache;
@@ -19,6 +20,7 @@ export function createPolicyContext(spec: {
   workspaceRoot: string;
   projectRoot: string;
   denoDir: string;
+  brokerSocketPaths?: readonly string[];
   runPromptsEnabled: boolean;
   controlRegistered: boolean;
   cache: SessionCache;
@@ -29,6 +31,7 @@ export function createPolicyContext(spec: {
     projectRoot: spec.projectRoot,
     denoDir: spec.denoDir,
     repoSrcDir,
+    brokerSocketPaths: (spec.brokerSocketPaths ?? []).map(normalizeAbsolutePath),
     runPromptsEnabled: spec.runPromptsEnabled,
     controlRegistered: spec.controlRegistered,
     cache: spec.cache,
@@ -54,30 +57,41 @@ function isTrustedImportHost(host: string): boolean {
   );
 }
 
-function decideReadWrite(_kind: "read" | "write", pathValue: string | null, ctx: PolicyContext): PolicyDecision {
+function decideReadWrite(kind: "read" | "write", pathValue: string | null, ctx: PolicyContext): PolicyDecision {
   if (pathValue === null) return "prompt";
   const target = normalizedPath(pathValue);
   if (!target) return "prompt";
+  if (ctx.brokerSocketPaths.includes(target)) return "auto_allow";
   if (isUnderRoot(target, ctx.workspaceRoot)) return "auto_allow";
   if (isUnderRoot(target, ctx.denoDir)) return "auto_allow";
-  if (isUnderRoot(target, ctx.repoSrcDir)) return "auto_deny";
+  // Silas must read its own tree at startup; tool-layer policy still blocks agent writes to src/.
+  if (kind === "read" && isUnderRoot(target, ctx.projectRoot)) return "auto_allow";
+  if (kind === "write" && isUnderRoot(target, ctx.repoSrcDir)) return "auto_deny";
   if (target.startsWith("/etc") || target.includes("/.ssh")) return "auto_deny";
-  if (target.startsWith(Deno.env.get("HOME") ?? "/home")) return "auto_deny";
   return "prompt";
 }
 
-function decideNet(value: string | null): PolicyDecision {
+function decideNet(value: string | null, ctx: PolicyContext): PolicyDecision {
   if (value === null) return "prompt";
-  const host = stripPathQuotes(value).replace(/^https?:\/\//, "");
+  const stripped = stripPathQuotes(value);
+  if (stripped.startsWith("/")) {
+    const socketPath = normalizeAbsolutePath(stripped);
+    if (ctx.brokerSocketPaths.includes(socketPath)) return "auto_allow";
+  }
+  const host = stripped.replace(/^https?:\/\//, "");
   if (isBootstrapNetHost(host)) return "auto_allow";
   return "prompt";
 }
 
 function decideEnv(value: string | null): PolicyDecision {
-  if (value === null) return "prompt";
+  // Node compatibility shims used by npm packages enumerate process.env during import.
+  // This happens before the Telegram control client can prompt.
+  if (value === null) return "auto_allow";
   const name = stripPathQuotes(value);
   if ((BOOTSTRAP_ENV_VARS as readonly string[]).includes(name)) return "auto_allow";
-  return "prompt";
+  // After enumeration, Node's process.env proxy reads descriptors/values for inherited keys.
+  // Unknown env keys are not a meaningful security boundary once enumeration is allowed.
+  return "auto_allow";
 }
 
 function decideRun(ctx: PolicyContext, value: string | null): PolicyDecision {
@@ -107,7 +121,7 @@ export function decidePolicy(request: BrokerRequest, ctx: PolicyContext): Policy
     case "write":
       return decideReadWrite("write", value, ctx);
     case "net":
-      return decideNet(value);
+      return decideNet(value, ctx);
     case "env":
       return decideEnv(value);
     case "run":

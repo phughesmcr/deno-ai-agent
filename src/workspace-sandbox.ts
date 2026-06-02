@@ -10,6 +10,19 @@ function isPathInsideRoot(resolved: string, root: string): boolean {
   return resolved.startsWith(root + path.SEPARATOR);
 }
 
+/** Expands a leading `~` using `HOME` when set. */
+export function expandTilde(userPath: string): string {
+  if (userPath === "~") {
+    return Deno.env.get("HOME") ?? userPath;
+  }
+  if (userPath.startsWith("~/") || userPath.startsWith("~\\")) {
+    const home = Deno.env.get("HOME");
+    if (!home) return userPath;
+    return path.join(home, userPath.slice(2));
+  }
+  return userPath;
+}
+
 async function canonicalPath(value: string): Promise<string> {
   try {
     return await Deno.realPath(value);
@@ -52,6 +65,25 @@ export class WorkspaceSandbox {
   /** Canonical workspace root. */
   get root(): string {
     return this.#root;
+  }
+
+  /** True when `absolutePath` is the workspace root or under it. */
+  containsPath(absolutePath: string): boolean {
+    return isPathInsideRoot(absolutePath, this.#root);
+  }
+
+  /**
+   * Resolves a host path (absolute or `~`-prefixed) outside the workspace sandbox.
+   * Canonicalizes symlinks on existing path segments; missing leaf paths are allowed.
+   */
+  async resolveHostPath(userPath: string): Promise<string> {
+    const resolved = path.resolve(expandTilde(userPath));
+    try {
+      return await Deno.realPath(resolved);
+    } catch (error) {
+      if (error instanceof Deno.errors.NotFound) return resolved;
+      throw error;
+    }
   }
 
   /**

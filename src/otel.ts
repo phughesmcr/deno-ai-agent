@@ -90,12 +90,23 @@ export interface ActSpanTracker {
   onToolCallRequestDequeued(roundIndex: number, callId: number): void;
 }
 
+const noopActSpanTracker: ActSpanTracker = {
+  onMessage() {},
+  onFirstToken() {},
+  onRoundStart() {},
+  onRoundEnd() {},
+  onToolCallRequestStart() {},
+  onToolCallRequestNameReceived() {},
+  onToolCallRequestEnd() {},
+  onToolCallRequestFailure() {},
+  onToolCallRequestFinalized() {},
+  onToolCallRequestDequeued() {},
+};
+
 /** Creates a tracker for lmstudio `act()` `on*` callbacks under the active `lmstudio.act` span. */
 export function createActSpanTracker(): ActSpanTracker {
   const parentSpan = trace.getActiveSpan();
-  if (!parentSpan) {
-    throw new Error("createActSpanTracker must be called inside an active lmstudio.act span");
-  }
+  if (!parentSpan) return noopActSpanTracker;
 
   const roundSpans = new Map<number, Span>();
   const toolCallSpans = new Map<number, Span>();
@@ -184,16 +195,17 @@ export function traceSpan<T>(
   return tracer.startActiveSpan(
     name,
     { attributes: options?.attributes, root: options?.root, kind: SpanKind.INTERNAL },
-    async (span) => {
-      try {
-        return await fn(asHandle(span));
-      } catch (error) {
-        span.recordException(error as Error);
-        span.setStatus({ code: SpanStatusCode.ERROR, message: (error as Error).message });
-        throw error;
-      } finally {
-        span.end();
-      }
-    },
+    (span) =>
+      context.with(trace.setSpan(context.active(), span), async () => {
+        try {
+          return await fn(asHandle(span));
+        } catch (error) {
+          span.recordException(error as Error);
+          span.setStatus({ code: SpanStatusCode.ERROR, message: (error as Error).message });
+          throw error;
+        } finally {
+          span.end();
+        }
+      }),
   );
 }

@@ -58,6 +58,12 @@ interface PendingPrompt {
   timeoutId: ReturnType<typeof setTimeout>;
 }
 
+function isSocketClosedError(error: unknown): boolean {
+  if (error instanceof Deno.errors.BadResource) return true;
+  const message = error instanceof Error ? error.message : String(error);
+  return message.includes("operation canceled") || message.includes("Invalid argument");
+}
+
 /**
  * Permission broker daemon: JSONL broker socket + control socket for Telegram UI.
  * @internal
@@ -67,7 +73,7 @@ export class PermissionBrokerDaemon {
   readonly #cache = new SessionCache();
   #controlConn: Deno.Conn | undefined;
   #controlRegistered = false;
-  #brokerConn: Deno.Conn | undefined;
+  readonly #brokerConns = new Set<Deno.Conn>();
   #pending: PendingPrompt | undefined;
 
   constructor(env: BrokerDaemonEnv) {
@@ -79,6 +85,7 @@ export class PermissionBrokerDaemon {
       workspaceRoot: this.#env.workspacePath,
       projectRoot: this.#env.projectRoot,
       denoDir: this.#env.denoDir,
+      brokerSocketPaths: [this.#env.brokerPath, this.#env.controlPath],
       runPromptsEnabled: this.#env.runPromptsEnabled,
       controlRegistered: this.#controlRegistered,
       cache: this.#cache,
@@ -99,8 +106,24 @@ export class PermissionBrokerDaemon {
     });
 
     const abortHandler = (): void => {
-      this.#brokerConn?.close();
+      for (const conn of this.#brokerConns) {
+        try {
+          conn.close();
+        } catch {
+          /* already closed */
+        }
+      }
       this.#controlConn?.close();
+      try {
+        brokerListener.close();
+      } catch {
+        /* already closed */
+      }
+      try {
+        controlListener.close();
+      } catch {
+        /* already closed */
+      }
     };
     signal.addEventListener("abort", abortHandler, { once: true });
 
@@ -125,29 +148,58 @@ export class PermissionBrokerDaemon {
   }
 
   async #acceptBroker(listener: Deno.UnixListener, signal: AbortSignal): Promise<void> {
-    for await (const conn of listener) {
-      if (signal.aborted) return;
-      if (this.#brokerConn) {
-        conn.close();
-        continue;
-      }
-      this.#brokerConn = conn;
-      logDebug("permission_broker.client_connected", { kind: "broker" });
+    while (!signal.aborted) {
+      let conn: Deno.Conn;
       try {
-        await this.#serveBroker(conn);
-      } finally {
-        this.#brokerConn = undefined;
-        try {
-          conn.close();
-        } catch {
-          /* already closed */
-        }
+        conn = await listener.accept();
+      } catch (error) {
+        if (signal.aborted || isSocketClosedError(error)) return;
+        logDebug("permission_broker.accept_error", {
+          kind: "broker",
+          message: error instanceof Error ? error.message : String(error),
+        });
+        return;
       }
+
+      if (signal.aborted) return;
+      this.#brokerConns.add(conn);
+      logDebug("permission_broker.client_connected", { kind: "broker" });
+      void (async () => {
+        try {
+          await this.#serveBroker(conn);
+        } catch (error) {
+          if (!signal.aborted && !isSocketClosedError(error)) {
+            logDebug("permission_broker.connection_error", {
+              kind: "broker",
+              message: error instanceof Error ? error.message : String(error),
+            });
+          }
+        } finally {
+          this.#brokerConns.delete(conn);
+          try {
+            conn.close();
+          } catch {
+            /* already closed */
+          }
+        }
+      })();
     }
   }
 
   async #acceptControl(listener: Deno.UnixListener, signal: AbortSignal): Promise<void> {
-    for await (const conn of listener) {
+    while (!signal.aborted) {
+      let conn: Deno.Conn;
+      try {
+        conn = await listener.accept();
+      } catch (error) {
+        if (signal.aborted || isSocketClosedError(error)) return;
+        logDebug("permission_broker.accept_error", {
+          kind: "control",
+          message: error instanceof Error ? error.message : String(error),
+        });
+        return;
+      }
+
       if (signal.aborted) return;
       if (this.#controlConn) {
         conn.close();
@@ -157,6 +209,13 @@ export class PermissionBrokerDaemon {
       logDebug("permission_broker.client_connected", { kind: "control" });
       try {
         await this.#serveControl(conn);
+      } catch (error) {
+        if (!signal.aborted && !isSocketClosedError(error)) {
+          logDebug("permission_broker.connection_error", {
+            kind: "control",
+            message: error instanceof Error ? error.message : String(error),
+          });
+        }
       } finally {
         this.#controlConn = undefined;
         this.#controlRegistered = false;
@@ -177,6 +236,15 @@ export class PermissionBrokerDaemon {
       if (message.type === "register") {
         this.#controlRegistered = true;
         logDebug("permission_broker.control_registered", { pid: String(message.pid) });
+        continue;
+      }
+      if (message.type === "grant") {
+        this.#cache.grant(message.permission, message.value, message.scope);
+        logDebug("permission_broker.grant", {
+          permission: message.permission,
+          value: message.value ?? "",
+          scope: message.scope,
+        });
         continue;
       }
       if (message.type === "decision") {

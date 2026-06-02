@@ -1,5 +1,6 @@
 import { logDebug } from "../log.ts";
 import type { PermissionPromptPort } from "../tools/permission-prompt-port.ts";
+import { attachControlConnection, detachControlConnection } from "./control-channel.ts";
 import {
   type ControlDecision,
   type ControlPrompt,
@@ -15,6 +16,32 @@ export interface ControlClientOptions {
   reconnectDelayMs?: number;
 }
 
+let controlReadyResolve: (() => void) | undefined;
+
+/** Resolves once the control client has connected and sent `register` to the broker. */
+export const permissionControlClientReady: Promise<void> = new Promise((resolve) => {
+  controlReadyResolve = resolve;
+});
+
+function markControlReady(): void {
+  controlReadyResolve?.();
+  controlReadyResolve = undefined;
+}
+
+/** Waits for the control client to register with the broker (no-op if broker is off). */
+export async function waitForPermissionControlClient(timeoutMs = 15_000): Promise<void> {
+  if (!shouldRunPermissionControlClient()) return;
+  await Promise.race([
+    permissionControlClientReady,
+    new Promise<void>((_resolve, reject) => {
+      setTimeout(
+        () => reject(new Error("Permission control client did not register with the broker in time.")),
+        timeoutMs,
+      );
+    }),
+  ]);
+}
+
 /**
  * Connects main to the broker daemon control socket and drives Telegram prompts.
  * @internal
@@ -24,13 +51,23 @@ export async function runPermissionControlClient(
   signal: AbortSignal,
 ): Promise<void> {
   const delay = options.reconnectDelayMs ?? 1000;
+  let registered = false;
   while (!signal.aborted) {
     try {
       const conn = await Deno.connect({ transport: "unix", path: options.controlPath });
+      attachControlConnection(conn);
       logDebug("permission_broker.control_connected", { path: options.controlPath });
-      await writeJsonlLine(conn, formatControlMessage({ type: "register", pid: Deno.pid }));
-      await serveControl(conn, options.promptPort, signal);
-      conn.close();
+      try {
+        await writeJsonlLine(conn, formatControlMessage({ type: "register", pid: Deno.pid }));
+        if (!registered) {
+          registered = true;
+          markControlReady();
+        }
+        await serveControl(conn, options.promptPort, signal);
+      } finally {
+        detachControlConnection();
+        conn.close();
+      }
     } catch (error) {
       if (signal.aborted) return;
       logDebug("permission_broker.control_error", {
@@ -90,5 +127,9 @@ async function handlePrompt(
 
 /** Returns true when the process should attach to a permission broker control socket. */
 export function shouldRunPermissionControlClient(): boolean {
-  return Deno.env.get("SILAS_PERMISSION_CONTROL_PATH") !== undefined;
+  try {
+    return Deno.env.get("SILAS_PERMISSION_CONTROL_PATH") !== undefined;
+  } catch {
+    return false;
+  }
 }

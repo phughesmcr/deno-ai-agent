@@ -2,25 +2,8 @@ import { tool } from "@lmstudio/sdk";
 import { z } from "zod/v3";
 
 import { approveToolOperation, type ToolContext } from "./context.ts";
+import { getShellCommand } from "./shell-command.ts";
 import { DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES, formatSize, truncateTail } from "./truncate.ts";
-
-function getShellCommand(): { cmd: string; args: string[] } {
-  if (Deno.build.os === "windows") {
-    return { cmd: "cmd.exe", args: ["/c"] };
-  }
-  try {
-    const shell = Deno.env.get("SHELL");
-    if (shell) {
-      const name = shell.split("/").pop() ?? "sh";
-      if (name === "bash" || name === "zsh" || name === "sh") {
-        return { cmd: shell, args: ["-c"] };
-      }
-    }
-  } catch {
-    // Deno.env may be unavailable under restricted permissions.
-  }
-  return { cmd: "/bin/sh", args: ["-c"] };
-}
 
 async function readStream(stream: ReadableStream<Uint8Array> | null): Promise<string> {
   if (!stream) return "";
@@ -33,7 +16,7 @@ export function createBashTool(ctx: ToolContext): unknown {
     description:
       `Execute a bash command in the workspace directory. Returns stdout and stderr. Output is truncated to last ${DEFAULT_MAX_LINES} lines or ${
         DEFAULT_MAX_BYTES / 1024
-      }KB (whichever is hit first). Optionally provide a timeout in seconds.`,
+      }KB (whichever is hit first). Optionally provide a timeout in seconds. For reading files outside the workspace (e.g. ~/.codex/...), use the read tool with a ~/ path instead of bash.`,
     parameters: {
       command: z.string().describe("Shell command to execute"),
       timeout: z.number().optional().describe("Timeout in seconds (optional)"),

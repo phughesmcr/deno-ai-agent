@@ -26,7 +26,7 @@ async function makeEnv(runPrompts: boolean): Promise<{
   controller: AbortController;
   done: Promise<void>;
 }> {
-  const root = await Deno.makeTempDir();
+  const root = await Deno.makeTempDir({ dir: Deno.cwd(), prefix: ".silas-broker-test-" });
   const workspace = path.join(root, "ws");
   const project = path.join(root, "project");
   await Deno.mkdir(path.join(workspace, "a"), { recursive: true });
@@ -48,7 +48,7 @@ async function makeEnv(runPrompts: boolean): Promise<{
 }
 
 Deno.test({
-  name: "broker daemon allows workspace read and denies src without control",
+  name: "broker daemon allows workspace and project src read without control",
   ignore: !integrationEnabled(),
 }, async () => {
   const { env, controller, done } = await makeEnv(false);
@@ -67,7 +67,7 @@ Deno.test({
     const allowResp = await readJsonlLine(brokerConn);
     assertEquals(JSON.parse(allowResp!).result, "allow");
 
-    const denyLine = JSON.stringify({
+    const srcReadLine = JSON.stringify({
       v: 1,
       pid: 1,
       id: 2,
@@ -75,9 +75,21 @@ Deno.test({
       permission: "read",
       value: path.join(env.projectRoot, "src", "secret.ts"),
     });
-    await writeJsonlLine(brokerConn, denyLine);
-    const denyResp = await readJsonlLine(brokerConn);
-    assertEquals(JSON.parse(denyResp!).result, "deny");
+    await writeJsonlLine(brokerConn, srcReadLine);
+    const srcReadResp = await readJsonlLine(brokerConn);
+    assertEquals(JSON.parse(srcReadResp!).result, "allow");
+
+    const srcWriteLine = JSON.stringify({
+      v: 1,
+      pid: 1,
+      id: 3,
+      datetime: "2025-01-01T00:00:00.000Z",
+      permission: "write",
+      value: path.join(env.projectRoot, "src", "secret.ts"),
+    });
+    await writeJsonlLine(brokerConn, srcWriteLine);
+    const srcWriteResp = await readJsonlLine(brokerConn);
+    assertEquals(JSON.parse(srcWriteResp!).result, "deny");
   } finally {
     brokerConn.close();
     controller.abort();
@@ -136,12 +148,12 @@ Deno.test({
 async function waitForSocket(sockPath: string): Promise<void> {
   for (let i = 0; i < 50; i++) {
     try {
-      const conn = await Deno.connect({ transport: "unix", path: sockPath });
-      conn.close();
+      await Deno.stat(sockPath);
       return;
     } catch {
-      await new Promise((r) => setTimeout(r, 20));
+      /* socket not created yet */
     }
+    await new Promise((r) => setTimeout(r, 20));
   }
   throw new Error(`socket not ready: ${sockPath}`);
 }

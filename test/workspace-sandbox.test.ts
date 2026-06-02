@@ -54,6 +54,22 @@ Deno.test("WorkspaceSandbox rejects a missing file under a symlink escape", asyn
   }
 });
 
+Deno.test("WorkspaceSandbox resolveHostPath reads outside the workspace root", async () => {
+  const root = await Deno.makeTempDir({ prefix: "deno-ai-agent-sandbox-" });
+  const outside = await Deno.makeTempDir({ prefix: "deno-ai-agent-outside-" });
+  try {
+    const file = `${outside}/host.txt`;
+    await Deno.writeTextFile(file, "host");
+    const sandbox = await WorkspaceSandbox.create(root);
+    const resolved = await sandbox.resolveHostPath(file);
+    assertEquals(resolved, await Deno.realPath(file));
+    assertEquals(sandbox.containsPath(resolved), false);
+  } finally {
+    await Deno.remove(root, { recursive: true });
+    await Deno.remove(outside, { recursive: true });
+  }
+});
+
 Deno.test("WorkspaceSandbox resolves a missing file below an in-workspace parent", async () => {
   const root = await Deno.makeTempDir({ prefix: "deno-ai-agent-sandbox-" });
   try {

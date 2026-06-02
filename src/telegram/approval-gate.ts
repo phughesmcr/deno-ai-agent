@@ -7,6 +7,10 @@ import {
   denyDecision,
 } from "../approval.ts";
 import { logDebug } from "../log.ts";
+import { sendControlGrant } from "../permission-broker/control-channel.ts";
+import { shouldRunPermissionControlClient } from "../permission-broker/control-client.ts";
+import { grantBrokerReadPaths } from "../permission-broker/grant-read.ts";
+import { getShellCommand } from "../tools/shell-command.ts";
 
 /** Telegram approval button action. */
 export type ApprovalAction = "approve" | "deny";
@@ -154,6 +158,7 @@ export function createTelegramApprovalGate(): TelegramApprovalGate {
         pending = { request, resolve, timeoutId, abortHandler, signal: effectiveSignal };
         effectiveSignal.addEventListener("abort", abortHandler, { once: true });
 
+        console.log(`Approval requested: ${request.operation} → ${request.target}`);
         turn?.ctx.reply(approvalText(request), {
           reply_markup: keyboard(request.id),
           message_thread_id: turn.ctx.message?.["message_thread_id"],
@@ -168,6 +173,7 @@ export function createTelegramApprovalGate(): TelegramApprovalGate {
       if (!data) return false;
       const parsed = parseApprovalCallback(data);
       if (!parsed) return false;
+      logDebug("approval.callback", { id: parsed.id, action: parsed.action });
 
       const current = pending;
       const actorId = ctx.from?.id;
@@ -185,17 +191,42 @@ export function createTelegramApprovalGate(): TelegramApprovalGate {
 
       if (parsed.id !== current.request.id) {
         await ctx.answerCallbackQuery({ text: "This approval has expired." });
-        settle("stale_callback", false, String(actorId));
+        logDebug("approval.stale_callback", { id: parsed.id, pendingId: current.request.id ?? "" });
         return true;
       }
 
-      await ctx.answerCallbackQuery();
-      try {
-        await ctx.editMessageReplyMarkup({ reply_markup: undefined });
-      } catch {
-        /* message may already be gone */
+      const approved = parsed.action === "approve";
+      settle(approved ? "approved" : "denied", approved, String(actorId));
+
+      if (approved && shouldRunPermissionControlClient()) {
+        try {
+          if (current.request.operation === "shell") {
+            const { cmd } = getShellCommand();
+            await sendControlGrant("run", cmd, "session");
+            await sendControlGrant("run", current.request.target, "session");
+          } else if (current.request.operation === "read" && current.request.target.startsWith("/")) {
+            await grantBrokerReadPaths(current.request.target);
+          }
+        } catch (error: unknown) {
+          logDebug("approval.pregrant_error", {
+            operation: current.request.operation,
+            message: error instanceof Error ? error.message : String(error),
+          });
+        }
       }
-      settle(parsed.action === "approve" ? "approved" : "denied", parsed.action === "approve", String(actorId));
+
+      try {
+        await ctx.answerCallbackQuery();
+        try {
+          await ctx.editMessageReplyMarkup({ reply_markup: undefined });
+        } catch {
+          /* message may already be gone */
+        }
+      } catch (error: unknown) {
+        logDebug("approval.callback_ack_error", {
+          message: error instanceof Error ? error.message : String(error),
+        });
+      }
       return true;
     },
   };

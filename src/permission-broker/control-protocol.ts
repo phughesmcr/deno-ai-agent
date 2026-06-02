@@ -27,8 +27,16 @@ export interface ControlAbort {
   requestId?: string;
 }
 
+/** Control channel: main pre-grants a permission in the broker session cache. */
+export interface ControlGrant {
+  type: "grant";
+  permission: string;
+  value: string | null;
+  scope: "once" | "session";
+}
+
 /** All control messages. */
-export type ControlMessage = ControlRegister | ControlPrompt | ControlDecision | ControlAbort;
+export type ControlMessage = ControlRegister | ControlPrompt | ControlDecision | ControlAbort | ControlGrant;
 
 /** Parses a control JSONL line. */
 export function parseControlMessage(line: string): ControlMessage {
@@ -58,6 +66,13 @@ export function parseControlMessage(line: string): ControlMessage {
       return {
         type: "abort",
         requestId: record["requestId"] === undefined ? undefined : String(record["requestId"]),
+      };
+    case "grant":
+      return {
+        type: "grant",
+        permission: String(record["permission"]),
+        value: record["value"] === null || record["value"] === undefined ? null : String(record["value"]),
+        scope: record["scope"] === "once" ? "once" : "session",
       };
     default:
       throw new Error(`unknown control message type: ${type}`);

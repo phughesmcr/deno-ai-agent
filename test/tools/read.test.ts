@@ -39,6 +39,22 @@ Deno.test("read requests approval before returning file content", async () => {
   }
 });
 
+Deno.test("read returns host file outside workspace when given an absolute path", async () => {
+  const outside = await Deno.makeTempDir({ prefix: "silas-outside-" });
+  const { dir, ctx, cleanup } = await createTestWorkspace();
+  try {
+    const file = `${outside}/codex.toml`;
+    await Deno.writeTextFile(file, "model = test\n");
+    const tool = createReadTool(ctx);
+    const out = await runToolImplementation(tool, { path: file });
+    assertStringIncludes(out, "model = test");
+    assertEquals(dir !== outside, true);
+  } finally {
+    await cleanup();
+    await Deno.remove(outside, { recursive: true });
+  }
+});
+
 Deno.test("read supports offset and limit", async () => {
   const { dir, ctx, cleanup } = await createTestWorkspace();
   try {

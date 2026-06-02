@@ -100,6 +100,9 @@ export function createTelegramPermissionPromptPort(timeoutMs = 120_000): Permiss
         };
         effectiveSignal.addEventListener("abort", abortHandler, { once: true });
 
+        console.log(
+          `Broker permission prompt: ${request.permission} → ${request.value ?? "(none)"}`,
+        );
         turn!.ctx.reply(promptText(request), {
           reply_markup: keyboard(shortId),
           message_thread_id: turn!.ctx.message?.message_thread_id,

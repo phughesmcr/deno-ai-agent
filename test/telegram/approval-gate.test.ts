@@ -101,7 +101,7 @@ Deno.test("Telegram approval gate denies on timeout", async () => {
   assertEquals(decision.reason, "timeout");
 });
 
-Deno.test("Telegram approval gate denies stale callbacks while pending", async () => {
+Deno.test("Telegram approval gate ignores stale callbacks while pending", async () => {
   const gate = createTelegramApprovalGate();
   const ctx = fakeContext();
   gate.setTurnContext({ ctx, signal: new AbortController().signal });
@@ -109,14 +109,21 @@ Deno.test("Telegram approval gate denies stale callbacks while pending", async (
   const pending = gate.requestApproval(request({ id: "current" }));
   await Promise.resolve();
 
+  const staleCtx = fakeContext();
+  await gate.handleCallback({
+    ...staleCtx,
+    callbackQuery: { data: encodeApprovalCallback("old", "approve") },
+  });
+  assertEquals(staleCtx.callbackAnswers.at(-1), "This approval has expired.");
+
   await gate.handleCallback({
     ...fakeContext(),
-    callbackQuery: { data: encodeApprovalCallback("old", "approve") },
+    callbackQuery: { data: encodeApprovalCallback("current", "approve") },
   });
 
   const decision = await pending;
-  assertEquals(decision.approved, false);
-  assertEquals(decision.reason, "stale_callback");
+  assertEquals(decision.approved, true);
+  assertEquals(decision.reason, "approved");
 });
 
 Deno.test("Telegram approval gate denies wrong-user callbacks", async () => {

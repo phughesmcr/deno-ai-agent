@@ -42,7 +42,9 @@ export function preprocessSystemPrompt(raw: string, workspacePath: string): stri
   result = result.replaceAll("${ToolNames.AGENT}", "agent");
 
   const workspaceNote =
-    `\nTool workspace root (all file/shell tool paths must resolve inside this directory): \`${workspacePath}\`\n`;
+    `\nTool workspace root: \`${workspacePath}\`. Relative paths (and absolutes under this directory) are sandboxed. ` +
+    `To read host files outside it (e.g. \`~/.codex/config.toml\`), use \`read\` with an absolute or \`~/\` path (approval required). ` +
+    "`bash` runs with this directory as cwd.\n";
 
   const firstNewline = result.indexOf("\n");
   if (firstNewline === -1) {

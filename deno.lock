@@ -7,6 +7,7 @@
     "jsr:@std/internal@^1.0.14": "1.0.14",
     "jsr:@std/path@^1.1.0": "1.1.5",
     "jsr:@std/yaml@^1.1.1": "1.1.1",
+    "npm:@grammyjs/runner@^2.0.3": "2.0.3_grammy@1.43.0",
     "npm:@lmstudio/sdk@*": "1.5.0",
     "npm:@lmstudio/sdk@1.5.0": "1.5.0",
     "npm:@lmstudio/sdk@^1.5.0": "1.5.0",
@@ -39,6 +40,13 @@
     }
   },
   "npm": {
+    "@grammyjs/runner@2.0.3_grammy@1.43.0": {
+      "integrity": "sha512-nckmTs1dPWfVQteK9cxqxzE+0m1VRvluLWB8UgFzsjg62w3qthPJt0TYtJBEdG7OedvfQq4vnFAyE6iaMkR42A==",
+      "dependencies": [
+        "abort-controller",
+        "grammy"
+      ]
+    },
     "@grammyjs/types@3.27.3": {
       "integrity": "sha512-yUKMLliGsGbnxu96YUJ7km7B0zy4PzeH/Jvti5705R/LeKDMqkDV4DckMSt+OrliWQpTwQljHE0QLol5zgxBkg=="
     },
@@ -168,6 +176,7 @@
       "jsr:@std/async@*",
       "jsr:@std/path@^1.1.0",
       "jsr:@std/yaml@^1.1.1",
+      "npm:@grammyjs/runner@^2.0.3",
       "npm:@lmstudio/sdk@^1.5.0",
       "npm:@opentelemetry/api@^1.9.1",
       "npm:grammy-questions@0.1.9",

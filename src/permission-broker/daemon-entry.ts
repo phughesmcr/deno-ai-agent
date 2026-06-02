@@ -11,6 +11,9 @@ async function main(): Promise<void> {
   Deno.addSignalListener("SIGTERM", shutdown);
 
   const daemon = new PermissionBrokerDaemon(env);
+  console.log(
+    `Silas permission broker listening\n  broker:  ${env.brokerPath}\n  control: ${env.controlPath}`,
+  );
   logDebug("permission_broker.daemon_start", {
     workspace: env.workspacePath,
     runPrompts: String(env.runPromptsEnabled),

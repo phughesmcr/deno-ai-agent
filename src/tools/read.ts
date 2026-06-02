@@ -1,7 +1,10 @@
 import { tool } from "@lmstudio/sdk";
 import { z } from "zod/v3";
 
-import { approveToolOperation, displayPath, resolvePath, type ToolContext } from "./context.ts";
+import { DEFAULT_APPROVAL_TIMEOUT_MS } from "../approval.ts";
+import { shouldRunPermissionControlClient } from "../permission-broker/control-client.ts";
+import { grantBrokerReadPaths } from "../permission-broker/grant-read.ts";
+import { approveToolOperation, displayPath, resolveReadPath, type ToolContext } from "./context.ts";
 import { DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES, formatSize, truncateHead } from "./truncate.ts";
 
 const IMAGE_EXTENSIONS = new Set([".jpg", ".jpeg", ".png", ".gif", ".webp"]);
@@ -19,24 +22,36 @@ export function createReadTool(ctx: ToolContext): unknown {
     name: "read",
     description: `Read the contents of a file. Output is truncated to ${DEFAULT_MAX_LINES} lines or ${
       DEFAULT_MAX_BYTES / 1024
-    }KB (whichever is hit first). Use offset/limit for large files. When you need the full file, continue with offset until complete. Images are not supported in phase 1.`,
+    }KB (whichever is hit first). Use offset/limit for large files. When you need the full file, continue with offset until complete. Images are not supported in phase 1. Use a relative path for workspace files. For host files outside the workspace, use this tool with an absolute path or \`~/...\` (requires Telegram approval)—do not use bash for host file reads.`,
     parameters: {
-      path: z.string().describe("Path to the file to read (relative or absolute, under workspace)"),
+      path: z.string().describe(
+        "Path to read: relative (workspace), or absolute / ~/... for host files outside the workspace",
+      ),
       offset: z.number().optional().describe("Line number to start reading from (1-indexed)"),
       limit: z.number().optional().describe("Maximum number of lines to read"),
     },
     implementation: async ({ path: userPath, offset, limit }) => {
-      const absolutePath = await resolvePath(ctx, userPath);
+      const { absolutePath, outsideWorkspace } = await resolveReadPath(ctx, userPath);
       if (isImagePath(absolutePath)) {
         throw new Error(`Cannot read image file as text: ${displayPath(ctx, absolutePath)}`);
       }
       const display = displayPath(ctx, absolutePath);
+      const rangeSummary = offset || limit ?
+        `read text with offset=${offset ?? 1}, limit=${limit ?? "default"}` :
+        "read text";
+      if (outsideWorkspace) {
+        console.log(`read (host): ${absolutePath} — waiting for Telegram approval`);
+      }
       await approveToolOperation(ctx, {
         operation: "read",
-        target: display,
-        risk: "low",
-        summary: offset || limit ? `read text with offset=${offset ?? 1}, limit=${limit ?? "default"}` : "read text",
+        target: outsideWorkspace ? absolutePath : display,
+        risk: outsideWorkspace ? "high" : "low",
+        summary: outsideWorkspace ? `host ${rangeSummary}` : rangeSummary,
+        timeoutMs: outsideWorkspace ? DEFAULT_APPROVAL_TIMEOUT_MS * 2 : undefined,
       });
+      if (outsideWorkspace && shouldRunPermissionControlClient()) {
+        await grantBrokerReadPaths(absolutePath);
+      }
 
       let text: string;
       try {
