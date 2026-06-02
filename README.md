@@ -52,8 +52,29 @@ Only the Telegram user matching `TELEGRAM_ADMIN_ID` can chat with the bot (other
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | OTLP HTTP endpoint (default: `http://localhost:4318`) |
 | `OTEL_EXPORTER_OTLP_PROTOCOL` | `http/protobuf` (default), `console`, or `grpc` |
 | `LOG_LEVEL` | Set to `debug` for token/context stats (no message bodies) |
+| `SILAS_BROKER_LISTEN_PATH` | Unix socket the broker daemon listens on (`deno task start:all`) |
+| `DENO_PERMISSION_BROKER_PATH` | Same path for Silas; Deno connects as broker client (do not set on the daemon process) |
+| `SILAS_PERMISSION_CONTROL_PATH` | Unix socket between broker daemon and main for Telegram prompts |
+| `SILAS_PERMISSION_RUN_PROMPTS` | Set to `1` to prompt in Telegram for each distinct `run` permission (shell) |
+| `PERMISSION_PROMPT_TIMEOUT_MS` | Auto-deny broker prompts after this many ms (default: `120000`) |
+| `SILAS_PROJECT_ROOT` | Repo root used by broker policy to deny reads of `src/` (default: `.`) |
 
 Copy `.env.example` to `.env` and fill in values.
+
+### Permission broker (optional)
+
+For centralized Deno runtime permissions with Telegram approve/deny, run:
+
+```sh
+deno task start:all
+```
+
+This starts a sidecar broker (`deno task broker`) then Silas with `DENO_PERMISSION_BROKER_PATH` and `-A`. CLI `--allow-*` flags are ignored while the broker is active; the daemon applies workspace-aware auto-policy and sends ambiguous requests (and every distinct `run`) to the admin chat.
+
+- **Allow once / Allow session / Deny** inline buttons handle runtime prompts (`pm:` callbacks).
+- Tool-layer path checks under `WORKSPACE_PATH` still apply; approving `run` grants **host-level** shell access via `bash`.
+- Tune policy with `DENO_AUDIT_PERMISSIONS` before relying on production prompts.
+- Integration tests: `deno task test:broker`
 
 ## How it works
 

@@ -89,8 +89,12 @@
     }
   },
   "tasks": {
-    "test": "deno test --unstable-kv --allow-read --allow-write --allow-run --allow-env=WS_NO_BUFFER_UTIL,WS_NO_UTF_8_VALIDATE,NODE_ENV,LOG_LEVEL test/**/*.test.ts",
+    "test": "deno test --unstable-kv --allow-read --allow-write --allow-run --allow-env=WS_NO_BUFFER_UTIL,WS_NO_UTF_8_VALIDATE,NODE_ENV,LOG_LEVEL,DENO_TEST_PERMISSION_BROKER test/**/*.test.ts",
+    "test:broker": "DENO_TEST_PERMISSION_BROKER=1 deno test --allow-read --allow-write --allow-run --allow-net --allow-env test/permission-broker/daemon.integration.test.ts",
 
+    "broker": "deno run --allow-net --allow-read --allow-write --allow-env --env-file=.env src/permission-broker/daemon-entry.ts",
+    "start:broker": "deno run -A --unstable-kv --env-file=.env main.ts",
+    "start:all": "bash scripts/start-with-broker.sh",
     "start": "deno run --unstable-kv --env-file=.env --allow-read --allow-write --allow-run --allow-net --allow-env main.ts",
     "start:otel": "OTEL_DENO=true OTEL_SERVICE_NAME=deno-ai-agent deno run --unstable-kv --env-file=.env --allow-read --allow-write --allow-run --allow-net --allow-env main.ts",
     "start:otel:console": "OTEL_DENO=true OTEL_SERVICE_NAME=deno-ai-agent OTEL_EXPORTER_OTLP_PROTOCOL=console deno run --unstable-kv --env-file=.env --allow-read --allow-write --allow-run --allow-net --allow-env main.ts",

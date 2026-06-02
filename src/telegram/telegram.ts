@@ -6,6 +6,7 @@ import type { TodoTelegramMeta } from "../tools/todo-write.ts";
 import type { AskUserQuestionPort } from "../tools/user-question-port.ts";
 import { SESSION_HELP, TelegramCommandHandler } from "./commands.ts";
 import { showTodosForSession } from "./grammy-todo-display-adapter.ts";
+import { isPermissionCallback } from "./permission-callback.ts";
 import { replyError } from "./telegram-reply.ts";
 
 interface BotConfig {
@@ -30,6 +31,11 @@ interface TelegramManager {
 interface TelegramApprovalPort {
   isPending(): boolean;
   handleCallback(ctx: TelegramContext): Promise<boolean>;
+}
+
+interface TelegramPermissionPromptPort {
+  isPending(): boolean;
+  handleCallback(data: string, actorId: number | undefined, adminId: number): Promise<boolean>;
 }
 
 function getEnv(): { token: string; adminId: number } {
@@ -58,12 +64,14 @@ const PENDING_INTERACTION_HINT = "Please resolve the pending question or approva
 export function createTelegramManager({
   session,
   userQuestions,
+  permissionPrompts,
   approvals,
   todosDir,
   updateTelegramMeta,
 }: {
   session: SessionManager;
   userQuestions?: AskUserQuestionPort;
+  permissionPrompts?: TelegramPermissionPromptPort;
   approvals?: TelegramApprovalPort;
   todosDir?: string;
   updateTelegramMeta?: (sessionId: string, meta: TodoTelegramMeta) => Promise<void>;
@@ -116,12 +124,25 @@ export function createTelegramManager({
   );
 
   bot.on("callback_query:data", async (ctx, next) => {
+    const data = ctx.callbackQuery?.data;
+    if (data && isPermissionCallback(data)) {
+      const handled = await permissionPrompts?.handleCallback(data, ctx.from?.id, adminId);
+      if (handled) {
+        await ctx.answerCallbackQuery();
+        try {
+          await ctx.editMessageReplyMarkup({ reply_markup: undefined });
+        } catch {
+          /* message may be gone */
+        }
+        return;
+      }
+    }
     if (await approvals?.handleCallback(ctx)) return;
     await next();
   });
 
   function blockIfInteractionPending(ctx: TelegramContext): boolean {
-    if (userQuestions?.isPending() || approvals?.isPending()) {
+    if (userQuestions?.isPending() || permissionPrompts?.isPending() || approvals?.isPending()) {
       void ctx.reply(PENDING_INTERACTION_HINT);
       return true;
     }

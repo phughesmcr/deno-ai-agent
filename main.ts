@@ -4,10 +4,16 @@ import { createAgent, runTurn } from "./src/agent.ts";
 import { createLMStudioManager } from "./src/lmstudio.ts";
 import { logDebug } from "./src/log.ts";
 import { recordActDuration, recordTelegramMessage, traceSpan } from "./src/otel.ts";
+import {
+  runPermissionControlClient,
+  shouldRunPermissionControlClient,
+} from "./src/permission-broker/control-client.ts";
+import { assertPermissionBrokerSupported } from "./src/permission-broker/version.ts";
 import { SubagentManager } from "./src/subagents.ts";
+import { createTelegramApprovalGate } from "./src/telegram/approval-gate.ts";
+import { createTelegramPermissionPromptPort } from "./src/telegram/grammy-permission-prompt-adapter.ts";
 import { createTelegramAskUserQuestionPort } from "./src/telegram/grammy-questions-adapter.ts";
 import { createTelegramTodoDisplayPort } from "./src/telegram/grammy-todo-display-adapter.ts";
-import { createTelegramApprovalGate } from "./src/telegram/approval-gate.ts";
 import { isBotCommand } from "./src/telegram/is-bot-command.ts";
 import { replyWithModelText } from "./src/telegram/telegram-reply.ts";
 import { createTelegramManager, type TelegramContext } from "./src/telegram/telegram.ts";
@@ -33,7 +39,16 @@ function registerShutdown(controller: AbortController, stop: () => Promise<void>
   Deno.addSignalListener("SIGTERM", shutdown);
 }
 
+function permissionPromptTimeoutMs(): number {
+  const value = Number(Deno.env.get("PERMISSION_PROMPT_TIMEOUT_MS") ?? "120000");
+  return Number.isFinite(value) ? value : 120_000;
+}
+
 async function main(): Promise<void> {
+  if (Deno.env.get("DENO_PERMISSION_BROKER_PATH")) {
+    assertPermissionBrokerSupported();
+  }
+
   const controller = new AbortController();
   const { maxContextLength } = getEnv();
 
@@ -43,6 +58,7 @@ async function main(): Promise<void> {
   const subagentKv = await Deno.openKv(":memory:");
 
   const userQuestions = createTelegramAskUserQuestionPort();
+  const permissionPrompts = createTelegramPermissionPromptPort(permissionPromptTimeoutMs());
   const approvals = createTelegramApprovalGate();
   const bindUpdateTelegramMeta = (sessionId: string, meta: Parameters<typeof updateTelegramMeta>[2]) =>
     updateTelegramMeta(workspace.todosDir, sessionId, meta);
@@ -84,10 +100,16 @@ async function main(): Promise<void> {
   const telegram = createTelegramManager({
     session: agent.session,
     userQuestions,
+    permissionPrompts,
     approvals,
     todosDir: workspace.todosDir,
     updateTelegramMeta: bindUpdateTelegramMeta,
   });
+
+  if (shouldRunPermissionControlClient()) {
+    const controlPath = Deno.env.get("SILAS_PERMISSION_CONTROL_PATH")!;
+    void runPermissionControlClient({ controlPath, promptPort: permissionPrompts }, controller.signal);
+  }
 
   registerShutdown(controller, async () => {
     await telegram.bot.stop();
@@ -97,7 +119,7 @@ async function main(): Promise<void> {
   });
 
   telegram.bot.on("message", async (ctx: TelegramContext) => {
-    if (userQuestions.isPending()) return;
+    if (userQuestions.isPending() || permissionPrompts.isPending() || approvals.isPending()) return;
 
     let outcome: "error" | "ok" = "ok";
     let skipped = false;
@@ -133,6 +155,7 @@ async function main(): Promise<void> {
             span.setAttribute("tools.count", toolsList.length);
             activeTurnId = String(ctx.update.update_id);
             userQuestions.setTurnContext({ ctx, signal: controller.signal });
+            permissionPrompts.setTurnContext({ ctx, signal: controller.signal });
             todoDisplay.setTurnContext({ ctx, signal: controller.signal });
             approvals.setTurnContext({ ctx, signal: controller.signal });
             const actStarted = performance.now();
@@ -157,6 +180,7 @@ async function main(): Promise<void> {
             } finally {
               actMs = performance.now() - actStarted;
               userQuestions.clearTurnContext();
+              permissionPrompts.clearTurnContext();
               todoDisplay.clearTurnContext();
               approvals.clearTurnContext();
               activeTurnId = "no-active-turn";
