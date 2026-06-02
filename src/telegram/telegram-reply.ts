@@ -9,7 +9,7 @@ import { sendModelTextReply } from "./model-reply.ts";
  */
 export async function replyWithModelText(
   ctx: Context,
-  raw: string,
+  raw: string | readonly string[],
   replyToMessageId: number,
   messageThreadId?: number,
 ): Promise<void> {

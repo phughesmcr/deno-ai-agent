@@ -23,10 +23,24 @@ export interface TelegramReplySender {
   reply(text: string, options?: TelegramReplyOptions): Promise<unknown>;
 }
 
+type ModelReplyText = string | readonly string[];
+
 function isTelegramBadRequest(error: unknown): boolean {
   return Boolean(
     error && typeof error === "object" && "error_code" in error && error.error_code === 400,
   );
+}
+
+function replyChunks(raw: ModelReplyText): readonly string[] {
+  return typeof raw === "string" ? [raw] : raw;
+}
+
+function formatMarkdownReply(raw: ModelReplyText): string {
+  return replyChunks(raw).map(stripThinking).filter(Boolean).join("\n\n");
+}
+
+function formatPlainReply(raw: ModelReplyText): string {
+  return replyChunks(raw).map(plainReply).filter(Boolean).join("\n\n");
 }
 
 /**
@@ -35,11 +49,11 @@ function isTelegramBadRequest(error: unknown): boolean {
  */
 export async function sendModelTextReply(
   sender: TelegramReplySender,
-  raw: string,
+  raw: ModelReplyText,
   replyToMessageId: number,
   messageThreadId?: number,
 ): Promise<void> {
-  const formatted = stripThinking(raw);
+  const formatted = formatMarkdownReply(raw);
   const params = {
     reply_parameters: { message_id: replyToMessageId },
     message_thread_id: messageThreadId,
@@ -49,6 +63,6 @@ export async function sendModelTextReply(
     await sender.reply(formatted, { ...params, parse_mode: "MarkdownV2" as const });
   } catch (error) {
     if (!isTelegramBadRequest(error)) throw error;
-    await sender.reply(plainReply(raw), params);
+    await sender.reply(formatPlainReply(raw), params);
   }
 }

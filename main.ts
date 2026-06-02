@@ -226,7 +226,7 @@ async function main(): Promise<void> {
                 if (replyTexts.length > 0) {
                   await replyWithModelText(
                     ctx,
-                    replyTexts.join("\n"),
+                    replyTexts,
                     ctx.message.message_id,
                     ctx.message.message_thread_id,
                   );

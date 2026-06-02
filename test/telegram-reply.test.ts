@@ -45,6 +45,23 @@ Deno.test("sendModelTextReply sends MarkdownV2 with reply parameters", async () 
   ]);
 });
 
+Deno.test("sendModelTextReply formats thinking per reply chunk", async () => {
+  const sender = new FakeSender();
+
+  await sendModelTextReply(sender, ["<think>a</think>First", "<think>b</think>Second"], 42, 99);
+
+  assertEquals(sender.calls, [
+    {
+      text: "**>a||\n\nFirst\n\n**>b||\n\nSecond",
+      options: {
+        reply_parameters: { message_id: 42 },
+        message_thread_id: 99,
+        parse_mode: "MarkdownV2",
+      },
+    },
+  ]);
+});
+
 Deno.test("sendModelTextReply falls back to plain text on Telegram 400", async () => {
   const sender = new FakeSender();
   sender.failures = [telegramError("bad markdown", 400)];
@@ -62,6 +79,31 @@ Deno.test("sendModelTextReply falls back to plain text on Telegram 400", async (
     },
     {
       text: "Hello *world*",
+      options: {
+        reply_parameters: { message_id: 7 },
+        message_thread_id: 11,
+      },
+    },
+  ]);
+});
+
+Deno.test("sendModelTextReply plain fallback strips thinking per reply chunk", async () => {
+  const sender = new FakeSender();
+  sender.failures = [telegramError("bad markdown", 400)];
+
+  await sendModelTextReply(sender, ["<think>a</think>First", "<think>b</think>Second"], 7, 11);
+
+  assertEquals(sender.calls, [
+    {
+      text: "**>a||\n\nFirst\n\n**>b||\n\nSecond",
+      options: {
+        reply_parameters: { message_id: 7 },
+        message_thread_id: 11,
+        parse_mode: "MarkdownV2",
+      },
+    },
+    {
+      text: "First\n\nSecond",
       options: {
         reply_parameters: { message_id: 7 },
         message_thread_id: 11,
