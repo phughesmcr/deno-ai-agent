@@ -1,6 +1,7 @@
 import { type Tool, tool } from "@lmstudio/sdk";
 import { z } from "zod/v3";
 
+import { grantBrokerRunValues, shouldRunPermissionControlClient } from "../../permission-broker/mod.ts";
 import { approveToolOperation, type ToolContext } from "./context.ts";
 import { getShellCommand } from "./shell-command.ts";
 import { DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES, formatSize, truncateTail } from "./truncate.ts";
@@ -30,6 +31,9 @@ export function createBashTool(ctx: ToolContext): Tool {
       });
 
       const { cmd, args } = getShellCommand();
+      if (shouldRunPermissionControlClient()) {
+        await grantBrokerRunValues([cmd]);
+      }
       const timeoutController = new AbortController();
       const timeoutMs = timeout !== undefined && timeout > 0 ? timeout * 1000 : undefined;
       let timeoutId: ReturnType<typeof setTimeout> | undefined;

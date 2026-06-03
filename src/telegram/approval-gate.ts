@@ -7,12 +7,6 @@ import {
   denyDecision,
   logDebug,
 } from "../shared/mod.ts";
-import { getShellCommand } from "../agent/mod.ts";
-import {
-  grantBrokerReadPath,
-  grantBrokerRunValues,
-  shouldRunPermissionControlClient,
-} from "../permission-broker/mod.ts";
 
 /** Telegram approval button action. */
 export type ApprovalAction = "approve" | "deny";
@@ -199,22 +193,6 @@ export function createTelegramApprovalGate(): TelegramApprovalGate {
 
       const approved = parsed.action === "approve";
       settle(approved ? "approved" : "denied", approved, String(actorId));
-
-      if (approved && shouldRunPermissionControlClient()) {
-        try {
-          if (current.request.operation === "shell") {
-            const { cmd } = getShellCommand();
-            await grantBrokerRunValues([cmd, current.request.target]);
-          } else if (current.request.operation === "read" && current.request.target.startsWith("/")) {
-            await grantBrokerReadPath(current.request.target);
-          }
-        } catch (error: unknown) {
-          logDebug("approval.pregrant_error", {
-            operation: current.request.operation,
-            message: error instanceof Error ? error.message : String(error),
-          });
-        }
-      }
 
       try {
         await ctx.answerCallbackQuery();
