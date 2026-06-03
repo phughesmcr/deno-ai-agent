@@ -7,7 +7,7 @@ import { createUnavailableAskUserQuestionPort } from "../../src/agent/tools/user
 import { createUnavailableSubagentPort } from "../../src/agent/subagents.ts";
 import { createTestWorkspace } from "./helpers.ts";
 
-Deno.test("getModelTools registers eleven tools including skill, todo_write, ask_user_question, and agent", async () => {
+Deno.test("getModelTools registers twelve tools including deno_repl, skill, todo_write, ask_user_question, and agent", async () => {
   const { dir, ctx, cleanup } = await createTestWorkspace();
   try {
     const skills = await createSkillManager({ root: dir });
@@ -25,7 +25,7 @@ Deno.test("getModelTools registers eleven tools including skill, todo_write, ask
       },
       subagents: createUnavailableSubagentPort(),
     }) as Array<{ name: string }>;
-    assertEquals(tools.length, 11);
+    assertEquals(tools.length, 12);
     assertEquals(tools.map((t) => t.name).sort(), [...allToolNames].sort());
   } finally {
     await cleanup();

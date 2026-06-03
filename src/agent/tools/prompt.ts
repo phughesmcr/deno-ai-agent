@@ -17,7 +17,7 @@ const TOOL_NAME_MAP: Record<string, string> = {
 const TOOL_NOTES = `
 ## Tool notes
 
-Use \`ask_user_question\` for structured multiple-choice clarification via Telegram inline keyboards.
+Use \`ask_user_question\` for structured multiple-choice clarification.
 Use \`agent\` to spawn asynchronous read-only subagent jobs for research. Subagents can inspect with \`read\`, \`grep\`, \`find\`, \`ls\`, and \`skill\`; they cannot mutate files, run shell commands, ask the user, manage todos, or spawn agents.
 File and shell tools have **no** runtime confirmation gate.
 `;
@@ -30,16 +30,6 @@ export function preprocessSystemPrompt(raw: string, workspacePath: string): stri
   for (const [placeholder, name] of Object.entries(TOOL_NAME_MAP)) {
     result = result.replaceAll(`\${${placeholder}}`, name);
   }
-  result = result.replaceAll("${ToolNames.READ_FILE}", "read");
-  result = result.replaceAll("${ToolNames.WRITE_FILE}", "write");
-  result = result.replaceAll("${ToolNames.EDIT}", "edit");
-  result = result.replaceAll("${ToolNames.SHELL}", "bash");
-  result = result.replaceAll("${ToolNames.GREP}", "grep");
-  result = result.replaceAll("${ToolNames.GLOB}", "find");
-  result = result.replaceAll("${ToolNames.TODO_WRITE}", "todo_write");
-  result = result.replaceAll("${ToolNames.ASK_USER_QUESTION}", "ask_user_question");
-  result = result.replaceAll("${ToolNames.SKILL}", "skill");
-  result = result.replaceAll("${ToolNames.AGENT}", "agent");
 
   const workspaceNote =
     `\nTool workspace root: \`${workspacePath}\`. Relative paths (and absolutes under this directory) are sandboxed. ` +

@@ -42,6 +42,7 @@ export {
   copyTodosForSession,
   createAgentTool,
   createAskUserQuestionTool,
+  createDenoReplTool,
   createNoopTodoDisplayPort,
   createTodoWriteTool,
   createToolContext,
