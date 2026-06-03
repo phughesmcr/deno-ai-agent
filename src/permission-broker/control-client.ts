@@ -5,7 +5,7 @@ import {
   formatControlMessage,
   parseControlMessage,
 } from "./control-protocol.ts";
-import { logDebug } from "./debug-log.ts";
+import { logDebug } from "../shared/log.ts";
 import { JsonlConnection } from "./jsonl.ts";
 import type { PermissionPromptPort } from "./permission-prompt-port.ts";
 

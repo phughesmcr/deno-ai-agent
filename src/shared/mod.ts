@@ -14,11 +14,10 @@ export {
 } from "./approval.ts";
 export { logDebug } from "./log.ts";
 export {
-  type ActSpanTracker,
-  createActSpanTracker,
-  recordActDuration,
-  recordTelegramMessage,
-  tokenBucket,
+  SERVICE_NAME,
+  SERVICE_VERSION,
+  type TelemetryAttributes,
+  type TelemetryAttributeValue,
   traceEvent,
   traceSpan,
   type TraceSpanHandle,

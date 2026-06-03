@@ -7,6 +7,7 @@ import {
   createToolContext,
   createWorkspace,
   getModelTools,
+  recordActDuration,
   runTurn,
   SubagentManager,
   updateTelegramMeta,
@@ -17,13 +18,7 @@ import {
   shouldRunPermissionControlClient,
   waitForPermissionControlClient,
 } from "./src/permission-broker/mod.ts";
-import {
-  ApprovalDeniedError,
-  logDebug,
-  recordActDuration,
-  recordTelegramMessage,
-  traceSpan,
-} from "./src/shared/mod.ts";
+import { ApprovalDeniedError, logDebug, traceSpan } from "./src/shared/mod.ts";
 import {
   ActiveTurnRegistry,
   createTelegramApprovalGate,
@@ -32,6 +27,7 @@ import {
   createTelegramPermissionPromptPort,
   createTelegramTodoDisplayPort,
   isBotCommand,
+  recordTelegramMessage,
   replyError,
   replyWithModelText,
   startTelegramBot,

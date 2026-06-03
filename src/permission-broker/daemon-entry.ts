@@ -1,5 +1,5 @@
 import { loadBrokerDaemonEnv, PermissionBrokerDaemon } from "./daemon.ts";
-import { logDebug } from "./debug-log.ts";
+import { logDebug } from "../shared/log.ts";
 import { assertPermissionBrokerSupported } from "./version.ts";
 
 const encoder = new TextEncoder();

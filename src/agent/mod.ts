@@ -1,4 +1,5 @@
 export { type Agent, createAgent, type CreateAgentOptions, runTurn, type TurnResult } from "./runtime.ts";
+export { recordActDuration } from "./act-telemetry.ts";
 export { createLMStudioManager, type LMStudioManager } from "./lmstudio.ts";
 export { createWorkspace, type FsSubscriber, notifyWorkspaceSubscribers, type Workspace } from "./workspace.ts";
 export {

@@ -2,9 +2,10 @@ import type { Tool } from "@lmstudio/sdk";
 
 import { createSummaryCompactor } from "./context/compactor.ts";
 import { SessionStore } from "./context/session-store.ts";
-import { type ModelActObserver, SessionManager, type SessionTurnResult } from "./context/session.ts";
+import { SessionManager, type SessionTurnResult } from "./context/session.ts";
 import type { LMStudioManager } from "./lmstudio.ts";
-import { createActSpanTracker, tokenBucket, traceSpan } from "../shared/otel.ts";
+import { createModelActObserver, tokenBucket } from "./act-telemetry.ts";
+import { traceSpan } from "../shared/otel.ts";
 import type { Workspace } from "./workspace.ts";
 
 /** Wired agent: session state and LM Studio model. */
@@ -71,40 +72,12 @@ export async function runTurn(agent: Agent, userText: string, options: RunTurnOp
   const { session } = agent;
   const { tools, signal } = options;
 
-  let firstTokenMs: number | undefined;
   let result: SessionTurnResult | undefined;
 
   await traceSpan(
     "lmstudio.act",
     async (actSpan) => {
-      const actTelemetry = createActSpanTracker();
-      const observer: ModelActObserver = {
-        onMessage: () => actTelemetry.onMessage(),
-        onFirstToken: (roundIndex, ms) => {
-          if (firstTokenMs === undefined && ms !== undefined) firstTokenMs = ms;
-          actTelemetry.onFirstToken(roundIndex, ms);
-        },
-        onRoundStart: (roundIndex) => actTelemetry.onRoundStart(roundIndex),
-        onRoundEnd: (roundIndex) => actTelemetry.onRoundEnd(roundIndex),
-        onToolCallRequestDequeued: (roundIndex, callId) => {
-          actTelemetry.onToolCallRequestDequeued(roundIndex, callId);
-        },
-        onToolCallRequestEnd: (roundIndex, callId, name, isQueued) => {
-          actTelemetry.onToolCallRequestEnd(roundIndex, callId, name, isQueued);
-        },
-        onToolCallRequestFailure: (callId, message) => {
-          actTelemetry.onToolCallRequestFailure(callId, message);
-        },
-        onToolCallRequestFinalized: (callId, name) => {
-          actTelemetry.onToolCallRequestFinalized(callId, name);
-        },
-        onToolCallRequestNameReceived: (callId, name) => {
-          actTelemetry.onToolCallRequestNameReceived(callId, name);
-        },
-        onToolCallRequestStart: (roundIndex, callId, toolCallId) => {
-          actTelemetry.onToolCallRequestStart(roundIndex, callId, toolCallId);
-        },
-      };
+      const observer = createModelActObserver();
 
       result = await session.runTurn(userText, {
         tools,
@@ -115,7 +88,7 @@ export async function runTurn(agent: Agent, userText: string, options: RunTurnOp
       actSpan.setAttribute("context.tokens", tokenBucket(result.totalTokens));
       actSpan.setAttribute("turn.tokens", tokenBucket(result.turnTokens));
       actSpan.setAttribute("reply.count", result.replyTexts.length);
-      if (firstTokenMs !== undefined) actSpan.setAttribute("first_token.ms", Math.round(firstTokenMs));
+      if (result.firstTokenMs !== undefined) actSpan.setAttribute("first_token.ms", Math.round(result.firstTokenMs));
     },
     { attributes: { "tools.count": tools.length } },
   );

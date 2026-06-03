@@ -117,6 +117,8 @@ export interface SessionCompactionResult {
 export interface SessionTurnResult {
   /** Assistant reply texts from this turn. */
   replyTexts: string[];
+  /** Time to first model token, when one was observed. */
+  firstTokenMs?: number;
   /** Tokens used by assistant messages this turn. */
   turnTokens: number;
   /** Whether context was compacted after this turn. */
@@ -346,6 +348,7 @@ export class SessionManager {
 
     return {
       replyTexts,
+      firstTokenMs,
       turnTokens,
       compacted,
       totalTokens: this.#tokenCount,

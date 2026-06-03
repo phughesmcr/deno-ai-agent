@@ -1,5 +1,5 @@
 import { assertEquals } from "jsr:@std/assert@1/equals";
-import { tokenBucket } from "../src/shared/otel.ts";
+import { tokenBucket } from "../src/agent/act-telemetry.ts";
 
 Deno.test("tokenBucket labels token count boundaries", () => {
   assertEquals(tokenBucket(999), "lt_1k");
