@@ -30,12 +30,13 @@ export function createBashTool(ctx: ToolContext): Tool {
       });
 
       const { cmd, args } = getShellCommand();
-      const abortController = new AbortController();
+      const timeoutController = new AbortController();
       const timeoutMs = timeout !== undefined && timeout > 0 ? timeout * 1000 : undefined;
       let timeoutId: ReturnType<typeof setTimeout> | undefined;
       if (timeoutMs !== undefined) {
-        timeoutId = setTimeout(() => abortController.abort(), timeoutMs);
+        timeoutId = setTimeout(() => timeoutController.abort(), timeoutMs);
       }
+      const signal = ctx.signal ? AbortSignal.any([ctx.signal, timeoutController.signal]) : timeoutController.signal;
 
       try {
         const child = new Deno.Command(cmd, {
@@ -44,7 +45,7 @@ export function createBashTool(ctx: ToolContext): Tool {
           stdout: "piped",
           stderr: "piped",
           env: { NO_COLOR: "1", TERM: "dumb" },
-          signal: abortController.signal,
+          signal,
         }).spawn();
 
         const [stdout, stderr, status] = await Promise.all([
@@ -52,6 +53,7 @@ export function createBashTool(ctx: ToolContext): Tool {
           readStream(child.stderr),
           child.status,
         ]);
+        if (signal.aborted) throw new Error("Command aborted");
 
         let output = [stdout, stderr].filter((s) => s.length > 0).join(
           stdout.length > 0 && stderr.length > 0 ? "\n" : "",

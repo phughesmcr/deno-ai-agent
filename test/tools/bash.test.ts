@@ -1,6 +1,6 @@
 import { assertEquals, assertRejects, assertStringIncludes } from "jsr:@std/assert@1";
 
-import { createDenyApprovalGate } from "../../src/shared/approval.ts";
+import { createAutoApprovalGate, createDenyApprovalGate } from "../../src/shared/approval.ts";
 import { createToolContext } from "../../src/agent/tools/context.ts";
 import { createBashTool } from "../../src/agent/tools/bash.ts";
 import { createTestWorkspace, runToolImplementation, runToolImplementationThrows } from "./helpers.ts";
@@ -53,5 +53,28 @@ Deno.test("bash throws on non-zero exit", async () => {
     assertStringIncludes(err.message, "exited with code 1");
   } finally {
     await cleanup();
+  }
+});
+
+Deno.test("bash aborts when the turn signal aborts", async () => {
+  const dir = await Deno.makeTempDir({ prefix: "silas-tools-" });
+  const controller = new AbortController();
+  try {
+    const ctx = await createToolContext(dir, {
+      approvalGate: createAutoApprovalGate("test"),
+      sessionId: "session-1",
+      turnId: "turn-1",
+      signal: controller.signal,
+    });
+    const tool = createBashTool(ctx);
+
+    const pending = runToolImplementationThrows(tool, { command: "sleep 10" });
+    setTimeout(() => controller.abort(), 25);
+
+    const error = await pending;
+    assertStringIncludes(error.message, "Command aborted");
+  } finally {
+    controller.abort();
+    await Deno.remove(dir, { recursive: true });
   }
 });

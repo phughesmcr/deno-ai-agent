@@ -25,6 +25,7 @@ import {
   traceSpan,
 } from "./src/shared/mod.ts";
 import {
+  ActiveTurnRegistry,
   createTelegramApprovalGate,
   createTelegramAskUserQuestionPort,
   createTelegramManager,
@@ -63,6 +64,12 @@ function permissionPromptTimeoutMs(): number {
   return Number.isFinite(value) ? value : 120_000;
 }
 
+function isAbortError(error: unknown): boolean {
+  if (error instanceof DOMException && error.name === "AbortError") return true;
+  if (!(error instanceof Error)) return false;
+  return error.name === "AbortError" || error.message.toLowerCase().includes("aborted");
+}
+
 async function main(): Promise<void> {
   if (Deno.env.get("DENO_PERMISSION_BROKER_PATH")) {
     assertPermissionBrokerSupported();
@@ -95,11 +102,12 @@ async function main(): Promise<void> {
     updateTelegramMeta(workspace.todosDir, sessionId, meta);
   const todoDisplay = createTelegramTodoDisplayPort({ updateTelegramMeta: bindUpdateTelegramMeta });
   let activeTurnId = "no-active-turn";
+  const activeTurns = new ActiveTurnRegistry();
   const toolContext = await createToolContext(workspace.path, {
     approvalGate: approvals,
     sessionId: () => agent.session.id,
     turnId: () => activeTurnId,
-    signal: controller.signal,
+    signal: () => activeTurns.actSignal ?? controller.signal,
   });
   const skills = await createSkillManager({ root: workspace.path });
   const subagents = new SubagentManager({
@@ -133,6 +141,7 @@ async function main(): Promise<void> {
     userQuestions,
     permissionPrompts,
     approvals,
+    turnAbort: activeTurns,
     todosDir: workspace.todosDir,
     updateTelegramMeta: bindUpdateTelegramMeta,
   });
@@ -221,6 +230,11 @@ async function main(): Promise<void> {
               approvalController.abort();
             };
             controller.signal.addEventListener("abort", onShutdown);
+            const clearActiveTurn = activeTurns.setActiveTurn({
+              id: activeTurnId,
+              actController: turnController,
+              approvalController,
+            });
 
             userQuestions.setTurnContext({ ctx, signal: turnController.signal });
             permissionPrompts.setTurnContext({ ctx, signal: approvalController.signal });
@@ -255,6 +269,7 @@ async function main(): Promise<void> {
               }
             } finally {
               actMs = performance.now() - actStarted;
+              clearActiveTurn();
               controller.signal.removeEventListener("abort", onShutdown);
               approvalController.abort();
               userQuestions.clearTurnContext();
@@ -269,6 +284,16 @@ async function main(): Promise<void> {
       );
     } catch (error) {
       outcome = "error";
+      if (
+        isAbortError(error) ||
+        (error instanceof ApprovalDeniedError && error.decision.reason === "cancelled")
+      ) {
+        outcome = "ok";
+        if (ctx.message) {
+          await ctx.reply("Turn aborted.", { message_thread_id: ctx.message.message_thread_id });
+        }
+        return;
+      }
       if (error instanceof ApprovalDeniedError && ctx.message) {
         await ctx.reply(
           `Operation not approved (${error.decision.reason}). Target: ${error.request.target}`,

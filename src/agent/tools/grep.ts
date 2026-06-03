@@ -24,6 +24,7 @@ async function grepWithRg(
     context?: number;
     limit: number;
     targetIsFile: boolean;
+    signal?: AbortSignal;
   },
 ): Promise<{ output: string; usedRg: boolean; linesTruncated: boolean; matchLimitReached: boolean }> {
   const args = ["--json", "--line-number", "--color=never", "--hidden"];
@@ -34,7 +35,7 @@ async function grepWithRg(
   if (options.glob) args.push("--glob", options.glob);
   args.push("--", pattern, searchPath);
 
-  const child = new Deno.Command("rg", { args, stdout: "piped", stderr: "piped" }).spawn();
+  const child = new Deno.Command("rg", { args, stdout: "piped", stderr: "piped", signal: options.signal }).spawn();
   const [stdout, status] = await Promise.all([
     readStreamToString(child.stdout),
     child.status,
@@ -91,7 +92,7 @@ async function grepWithRg(
 async function walkGrep(
   searchPath: string,
   pattern: RegExp,
-  options: { glob?: string; limit: number; context?: number; targetIsFile: boolean },
+  options: { glob?: string; limit: number; context?: number; targetIsFile: boolean; signal?: AbortSignal },
 ): Promise<{ output: string; linesTruncated: boolean; matchLimitReached: boolean }> {
   const globRe = options.glob ? path.globToRegExp(options.glob) : null;
   const outputLines: string[] = [];
@@ -100,6 +101,7 @@ async function walkGrep(
   const contextValue = options.context && options.context > 0 ? options.context : 0;
 
   async function grepFile(fullPath: string, rel: string): Promise<void> {
+    options.signal?.throwIfAborted();
     let content: string;
     try {
       content = await Deno.readTextFile(fullPath);
@@ -126,8 +128,10 @@ async function walkGrep(
   }
 
   async function walk(dir: string): Promise<void> {
+    options.signal?.throwIfAborted();
     if (matchCount >= options.limit) return;
     for await (const entry of Deno.readDir(dir)) {
+      options.signal?.throwIfAborted();
       if (matchCount >= options.limit) return;
       const fullPath = path.join(dir, entry.name);
       if (entry.isDirectory) {
@@ -202,6 +206,7 @@ export function createGrepTool(ctx: ToolContext): Tool {
           context,
           limit: effectiveLimit,
           targetIsFile,
+          signal: ctx.signal,
         });
         output = result.output;
         usedRg = true;
@@ -212,7 +217,13 @@ export function createGrepTool(ctx: ToolContext): Tool {
         const regex = literal ?
           new RegExp(pattern.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), flags) :
           new RegExp(pattern, flags);
-        const result = await walkGrep(searchPath, regex, { glob, limit: effectiveLimit, context, targetIsFile });
+        const result = await walkGrep(searchPath, regex, {
+          glob,
+          limit: effectiveLimit,
+          context,
+          targetIsFile,
+          signal: ctx.signal,
+        });
         output = result.output;
         linesTruncated = result.linesTruncated;
         matchLimitReached = result.matchLimitReached;

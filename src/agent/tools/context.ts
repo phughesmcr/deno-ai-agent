@@ -35,8 +35,8 @@ export interface ToolContextOptions {
   sessionId?: string | (() => string);
   /** Turn id or getter used in approval requests. */
   turnId?: string | (() => string);
-  /** Abort signal for the active model turn. */
-  signal?: AbortSignal;
+  /** Abort signal, or getter for the active model turn signal. */
+  signal?: AbortSignal | (() => AbortSignal | undefined);
   /** Pre-created sandbox, primarily for tests and shared runtime wiring. */
   sandbox?: WorkspaceSandbox;
 }
@@ -52,19 +52,25 @@ function valueGetter(value: string | (() => string) | undefined, fallback: strin
   return () => value ?? fallback;
 }
 
+function signalGetter(value: ToolContextOptions["signal"]): () => AbortSignal | undefined {
+  if (typeof value === "function") return value;
+  return () => value;
+}
+
 /** Creates context with a canonical workspace root (resolves symlinks such as /var to /private/var). */
 export async function createToolContext(root: string, options: ToolContextOptions = {}): Promise<ToolContext> {
   const sandbox = options.sandbox ?? await WorkspaceSandbox.create(root);
+  const getSignal = signalGetter(options.signal);
   const context: ToolContext = {
     root: sandbox.root,
     sandbox,
     approvalGate: options.approvalGate ?? createDenyApprovalGate(),
     getSessionId: valueGetter(options.sessionId, "unknown-session"),
     getTurnId: valueGetter(options.turnId, "unknown-turn"),
+    get signal() {
+      return getSignal();
+    },
   };
-  if (options.signal !== undefined) {
-    return { ...context, signal: options.signal };
-  }
   return context;
 }
 

@@ -29,13 +29,14 @@ async function findWithFd(
   searchPath: string,
   pattern: string,
   limit: number,
+  signal?: AbortSignal,
 ): Promise<string[]> {
   const { pattern: effectivePattern, fullPath } = prepareGlobPattern(pattern);
   const args = ["--glob", "--color=never", "--hidden", "--type", "f", "--max-results", String(limit)];
   if (fullPath) args.push("--full-path");
   args.push("--", effectivePattern, searchPath);
 
-  const child = new Deno.Command("fd", { args, stdout: "piped", stderr: "piped" }).spawn();
+  const child = new Deno.Command("fd", { args, stdout: "piped", stderr: "piped", signal }).spawn();
   const [stdout, status] = await Promise.all([
     readStreamToString(child.stdout),
     child.status,
@@ -61,14 +62,21 @@ async function findWithFd(
   return lines;
 }
 
-async function walkFind(searchPath: string, globPattern: string, limit: number): Promise<string[]> {
+async function walkFind(
+  searchPath: string,
+  globPattern: string,
+  limit: number,
+  signal?: AbortSignal,
+): Promise<string[]> {
   const { pattern: effectivePattern } = prepareGlobPattern(globPattern);
   const re = path.globToRegExp(effectivePattern, { extended: true });
   const results: string[] = [];
 
   async function walk(dir: string, prefix: string): Promise<void> {
+    signal?.throwIfAborted();
     if (results.length >= limit) return;
     for await (const entry of Deno.readDir(dir)) {
+      signal?.throwIfAborted();
       if (results.length >= limit) return;
       const rel = prefix ? `${prefix}/${entry.name}` : entry.name;
       const fullPath = path.join(dir, entry.name);
@@ -117,10 +125,10 @@ export function createFindTool(ctx: ToolContext): Tool {
       let usedFd = false;
 
       if (await commandExists("fd")) {
-        relativized = await findWithFd(searchPath, pattern, effectiveLimit);
+        relativized = await findWithFd(searchPath, pattern, effectiveLimit, ctx.signal);
         usedFd = true;
       } else {
-        relativized = await walkFind(searchPath, pattern, effectiveLimit);
+        relativized = await walkFind(searchPath, pattern, effectiveLimit, ctx.signal);
       }
 
       if (relativized.length === 0) return "No files found matching pattern";

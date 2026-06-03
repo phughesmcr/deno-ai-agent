@@ -33,6 +33,10 @@ interface TelegramApprovalPort {
   handleCallback(ctx: TelegramContext): Promise<boolean>;
 }
 
+interface TelegramTurnAbortPort {
+  abortActiveTurn(): boolean;
+}
+
 interface TelegramPermissionPromptPort {
   isPending(): boolean;
   handleCallback(data: string, actorId: number | undefined, adminId: number): Promise<boolean>;
@@ -66,6 +70,7 @@ export function createTelegramManager({
   userQuestions,
   permissionPrompts,
   approvals,
+  turnAbort,
   todosDir,
   updateTelegramMeta,
 }: {
@@ -73,6 +78,7 @@ export function createTelegramManager({
   userQuestions?: AskUserQuestionPort;
   permissionPrompts?: TelegramPermissionPromptPort;
   approvals?: TelegramApprovalPort;
+  turnAbort?: TelegramTurnAbortPort;
   todosDir?: string;
   updateTelegramMeta?: (sessionId: string, meta: TodoTelegramMeta) => Promise<void>;
 }): TelegramManager {
@@ -113,6 +119,13 @@ export function createTelegramManager({
       return;
     }
     await next();
+  });
+
+  bot.command("q", async (ctx: TelegramContext) => {
+    const aborted = turnAbort?.abortActiveTurn() ?? false;
+    await ctx.reply(aborted ? "Aborted current turn." : "No active turn.", {
+      message_thread_id: ctx.message?.message_thread_id,
+    });
   });
 
   bot.use(
