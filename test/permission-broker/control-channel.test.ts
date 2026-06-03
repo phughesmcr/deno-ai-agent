@@ -5,7 +5,7 @@ import {
   detachControlConnection,
 } from "../../src/permission-broker/control-channel.ts";
 import { parseControlMessage } from "../../src/permission-broker/control-protocol.ts";
-import { grantBrokerReadPath, grantBrokerRunValues } from "../../src/permission-broker/mod.ts";
+import { grantBrokerNetUrl, grantBrokerReadPath, grantBrokerRunValues } from "../../src/permission-broker/mod.ts";
 
 const decoder = new TextDecoder();
 
@@ -99,12 +99,14 @@ Deno.test("ControlGrantWriter timeout clears and closes active connection", asyn
   assertEquals(hung.closed(), true);
 });
 
-Deno.test("broker grant facades emit read and run grant messages", async () => {
+Deno.test("broker grant facades emit read, run, and net grant messages", async () => {
   const fake = writableConn();
   attachControlConnection(fake.conn);
   try {
     await grantBrokerReadPath("/tmp/config.toml");
     await grantBrokerRunValues(["/bin/sh", "/bin/sh", "/usr/bin/env"]);
+    await grantBrokerNetUrl(new URL("https://example.com/docs"), "once");
+    await grantBrokerNetUrl(new URL("http://example.org:8080/docs"), "once");
   } finally {
     detachControlConnection();
   }
@@ -115,5 +117,7 @@ Deno.test("broker grant facades emit read and run grant messages", async () => {
     { type: "grant", permission: "read", value: '"/tmp/config.toml"', scope: "session" },
     { type: "grant", permission: "run", value: "/bin/sh", scope: "session" },
     { type: "grant", permission: "run", value: "/usr/bin/env", scope: "session" },
+    { type: "grant", permission: "net", value: "example.com:443", scope: "once" },
+    { type: "grant", permission: "net", value: "example.org:8080", scope: "once" },
   ]);
 });

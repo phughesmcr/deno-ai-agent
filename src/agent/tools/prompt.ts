@@ -10,6 +10,7 @@ const TOOL_NAME_MAP: Record<string, string> = {
   "ToolNames.FIND": "find",
   "ToolNames.LS": "ls",
   "ToolNames.TODO_WRITE": "todo_write",
+  "ToolNames.WEB_FETCH": "web-fetch",
   "ToolNames.ASK_USER_QUESTION": "ask_user_question",
   "ToolNames.SKILL": "skill",
   "ToolNames.SUBAGENT": "subagent",
@@ -19,6 +20,7 @@ const TOOL_NOTES = `
 ## Tool notes
 
 Use \`ask_user_question\` for structured multiple-choice clarification.
+Use \`web-fetch\` for approved HTTP/HTTPS website pages instead of \`bash\`/curl.
 Use \`subagent\` to spawn asynchronous read-only subagent jobs for research. Subagents can inspect with \`read\`, \`grep\`, \`find\`, \`ls\`, and \`skill\`; they cannot mutate files, run shell commands, ask the user, manage todos, or spawn subagents.
 File and shell tools have **no** runtime confirmation gate.
 `;

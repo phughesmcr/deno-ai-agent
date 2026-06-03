@@ -14,6 +14,7 @@ import { createSkillTool } from "./skill.ts";
 import { createNoopTodoDisplayPort } from "./todo-display-port.ts";
 import { createTodoWriteTool, type TodoWriteDeps } from "./todo-write.ts";
 import { type AskUserQuestionPort, createUnavailableAskUserQuestionPort } from "./user-question-port.ts";
+import { createWebFetchTool } from "./web-fetch.ts";
 import { createWriteTool } from "./write.ts";
 import { createSkillManager, type SkillManager } from "../skills/mod.ts";
 import { createUnavailableSubagentPort, type SubagentPort } from "../subagents.ts";
@@ -41,6 +42,7 @@ export {
 export { createSubagentTool } from "./subagent.ts";
 export type { SubagentAction, SubagentToolParams, SubagentToolResponse } from "./subagent.ts";
 export { createTypeScriptReplTool } from "./typescript-repl.ts";
+export { createWebFetchTool, type WebFetchToolOptions } from "./web-fetch.ts";
 export { getShellCommand } from "./shell-command.ts";
 export {
   copyTodosForSession,
@@ -75,6 +77,7 @@ export type ToolName =
   | "ls"
   | "skill"
   | "todo_write"
+  | "web-fetch"
   | "ask_user_question"
   | "subagent";
 
@@ -90,6 +93,7 @@ export const allToolNames: ToolName[] = [
   "ls",
   "skill",
   "todo_write",
+  "web-fetch",
   "ask_user_question",
   "subagent",
 ];
@@ -122,6 +126,7 @@ export function getModelTools(deps: ModelToolDeps): Tool[] {
     createLsTool(deps.workspace),
     createSkillTool(deps.skills.manager, deps.workspace),
     createTodoWriteTool({ ...deps.todos, workspace: deps.workspace }),
+    createWebFetchTool(deps.workspace),
     createAskUserQuestionTool(deps.userQuestions),
     createSubagentTool(deps.subagents),
   ];

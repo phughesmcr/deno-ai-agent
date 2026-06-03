@@ -1,5 +1,6 @@
 export { grantBrokerReadPath } from "./grant-read.ts";
 export { grantBrokerRunValues } from "./grant-run.ts";
+export { type BrokerGrantScope, brokerNetValueForUrl, grantBrokerNetUrl } from "./grant-net.ts";
 export {
   runPermissionControlClient,
   shouldRunPermissionControlClient,

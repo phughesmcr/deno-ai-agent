@@ -13,7 +13,6 @@ export {
   requireApproval,
 } from "./approval.ts";
 export { logDebug } from "./log.ts";
-export { NetworkGate, type NetworkGateOptions } from "./network-gate.ts";
 export {
   type ActSpanTracker,
   createActSpanTracker,
