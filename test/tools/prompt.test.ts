@@ -11,7 +11,7 @@ Deno.test("preprocessSystemPrompt substitutes tool names and injects workspace p
   assertStringIncludes(out, "Tool notes");
   assertStringIncludes(out, "ask_user_question");
   assertStringIncludes(out, "read-only subagent");
-  assertStringIncludes(out, "`agent`");
+  assertStringIncludes(out, "`subagent`");
   assertEquals(out.includes("not implemented"), false);
   assertStringIncludes(out, "`skill`");
   assertEquals(out.includes("`todo_write`"), false);

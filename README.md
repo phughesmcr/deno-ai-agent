@@ -121,13 +121,13 @@ flowchart LR
 
 ### Model tools
 
-Silas exposes twelve tools: eight filesystem/shell tools (pi-aligned) — `read`, `write`, `edit`, `bash`, `deno_repl`, `grep`, `find`, `ls` — plus `skill` for activating AgentSkills under `{WORKSPACE_PATH}/skills/<name>/SKILL.md`, `todo_write` for session-scoped task tracking (shown in Telegram as an edited status message), `ask_user_question` for structured clarification via Telegram inline keyboards ([grammy-questions](https://github.com/z44d/grammy-questions)), and `agent` for spawning asynchronous read-only subagent jobs. Users can pick question options, type a custom answer (**Other**), or **Cancel**.
+Silas exposes twelve tools: eight filesystem/shell tools (pi-aligned) — `read`, `write`, `edit`, `bash`, `typescript-repl`, `grep`, `find`, `ls` — plus `skill` for activating AgentSkills under `{WORKSPACE_PATH}/skills/<name>/SKILL.md`, `todo_write` for session-scoped task tracking (shown in Telegram as an edited status message), `ask_user_question` for structured clarification via Telegram inline keyboards ([grammy-questions](https://github.com/z44d/grammy-questions)), and `subagent` for spawning asynchronous read-only subagent jobs. Users can pick question options, type a custom answer (**Other**), or **Cancel**.
 
 The `skill` tool lists available workspace skills in its description, returns the selected skill body wrapped as protected context, and lists files under that skill's `scripts/`, `references/`, and `assets/` directories without reading them eagerly. `allowed-tools` is metadata only; it does not pre-approve shell or file actions. Bundled TypeScript scripts should be run explicitly by the agent with `deno run --allow-`* permissions and `jsr:`/`npm:` imports.
 
-Most file tools are scoped to `WORKSPACE_PATH` (e.g. `.silas/`); `read` can also open host paths via absolute or `~/` paths with approval. The bot cannot modify application source under `src/` via tools. `bash` and `deno_repl` require `--allow-run` (included in `deno task start`). Optional `rg` and `fd` on PATH speed up search; built-in fallbacks work without them.
+Most file tools are scoped to `WORKSPACE_PATH` (e.g. `.silas/`); `read` can also open host paths via absolute or `~/` paths with approval. The bot cannot modify application source under `src/` via tools. `bash` and `typescript-repl` require `--allow-run` (included in `deno task start`). Optional `rg` and `fd` on PATH speed up search; built-in fallbacks work without them.
 
-The `agent` tool tracks subagents per current session with in-memory Deno KV. Subagents can only use `read`, `grep`, `find`, `ls`, and `skill`; they cannot mutate files, run shell commands, ask the user, manage todos, or spawn nested agents. Jobs survive only for the current bot process.
+The `subagent` tool tracks subagents per current session with in-memory Deno KV. Subagents can only use `read`, `grep`, `find`, `ls`, and `skill`; they cannot mutate files, run shell commands, ask the user, manage todos, or spawn nested subagents. Jobs survive only for the current bot process.
 
 ### Session commands (admin)
 
@@ -216,7 +216,7 @@ src/
   log.ts             Debug logging (`LOG_LEVEL=debug`)
   tools.ts           Re-exports tool registry
   subagents.ts       Async read-only subagent job manager
-  tools/             read, write, edit, bash, deno_repl, grep, find, ls, skill, todo_write, agent (workspace-scoped)
+  tools/             read, write, edit, bash, typescript-repl, grep, find, ls, skill, todo_write, subagent (workspace-scoped)
   markdown.ts        Reply formatting (thinking strip, etc.)
 otel/
   otel-collector.jaeger.yaml

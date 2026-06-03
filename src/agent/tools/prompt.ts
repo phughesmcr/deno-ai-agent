@@ -4,6 +4,7 @@ const TOOL_NAME_MAP: Record<string, string> = {
   "ToolNames.EDIT": "edit",
   "ToolNames.SHELL": "bash",
   "ToolNames.BASH": "bash",
+  "ToolNames.TYPESCRIPT_REPL": "typescript-repl",
   "ToolNames.GREP": "grep",
   "ToolNames.GLOB": "find",
   "ToolNames.FIND": "find",
@@ -11,14 +12,14 @@ const TOOL_NAME_MAP: Record<string, string> = {
   "ToolNames.TODO_WRITE": "todo_write",
   "ToolNames.ASK_USER_QUESTION": "ask_user_question",
   "ToolNames.SKILL": "skill",
-  "ToolNames.AGENT": "agent",
+  "ToolNames.SUBAGENT": "subagent",
 };
 
 const TOOL_NOTES = `
 ## Tool notes
 
 Use \`ask_user_question\` for structured multiple-choice clarification.
-Use \`agent\` to spawn asynchronous read-only subagent jobs for research. Subagents can inspect with \`read\`, \`grep\`, \`find\`, \`ls\`, and \`skill\`; they cannot mutate files, run shell commands, ask the user, manage todos, or spawn agents.
+Use \`subagent\` to spawn asynchronous read-only subagent jobs for research. Subagents can inspect with \`read\`, \`grep\`, \`find\`, \`ls\`, and \`skill\`; they cannot mutate files, run shell commands, ask the user, manage todos, or spawn subagents.
 File and shell tools have **no** runtime confirmation gate.
 `;
 

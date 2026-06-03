@@ -1,10 +1,10 @@
 import type { Tool } from "@lmstudio/sdk";
 
-import { createAgentTool } from "./agent.ts";
+import { createSubagentTool } from "./subagent.ts";
 import { createAskUserQuestionTool } from "./ask-user-question.ts";
 import { createBashTool } from "./bash.ts";
 import { createToolContext, type ToolContext } from "./context.ts";
-import { createDenoReplTool } from "./deno-repl.ts";
+import { createTypeScriptReplTool } from "./typescript-repl.ts";
 import { createEditTool } from "./edit.ts";
 import { createFindTool } from "./find.ts";
 import { createGrepTool } from "./grep.ts";
@@ -38,9 +38,9 @@ export {
   createUnavailableAskUserQuestionPort,
   type TurnTarget,
 } from "./user-question-port.ts";
-export { createAgentTool } from "./agent.ts";
-export type { AgentAction, AgentToolParams, AgentToolResponse } from "./agent.ts";
-export { createDenoReplTool } from "./deno-repl.ts";
+export { createSubagentTool } from "./subagent.ts";
+export type { SubagentAction, SubagentToolParams, SubagentToolResponse } from "./subagent.ts";
+export { createTypeScriptReplTool } from "./typescript-repl.ts";
 export { getShellCommand } from "./shell-command.ts";
 export {
   copyTodosForSession,
@@ -69,14 +69,14 @@ export type ToolName =
   | "write"
   | "edit"
   | "bash"
-  | "deno_repl"
+  | "typescript-repl"
   | "grep"
   | "find"
   | "ls"
   | "skill"
   | "todo_write"
   | "ask_user_question"
-  | "agent";
+  | "subagent";
 
 /** All tool names in registration order. */
 export const allToolNames: ToolName[] = [
@@ -84,14 +84,14 @@ export const allToolNames: ToolName[] = [
   "write",
   "edit",
   "bash",
-  "deno_repl",
+  "typescript-repl",
   "grep",
   "find",
   "ls",
   "skill",
   "todo_write",
   "ask_user_question",
-  "agent",
+  "subagent",
 ];
 
 /**
@@ -116,14 +116,14 @@ export function getModelTools(deps: ModelToolDeps): Tool[] {
     createWriteTool(deps.workspace),
     createEditTool(deps.workspace),
     createBashTool(deps.workspace),
-    createDenoReplTool(deps.workspace),
+    createTypeScriptReplTool(deps.workspace),
     createGrepTool(deps.workspace),
     createFindTool(deps.workspace),
     createLsTool(deps.workspace),
     createSkillTool(deps.skills.manager, deps.workspace),
     createTodoWriteTool({ ...deps.todos, workspace: deps.workspace }),
     createAskUserQuestionTool(deps.userQuestions),
-    createAgentTool(deps.subagents),
+    createSubagentTool(deps.subagents),
   ];
 }
 

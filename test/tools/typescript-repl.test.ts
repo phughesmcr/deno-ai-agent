@@ -2,15 +2,15 @@ import { assertEquals, assertRejects, assertStringIncludes } from "jsr:@std/asse
 
 import { createDenyApprovalGate } from "../../src/shared/approval.ts";
 import { createToolContext } from "../../src/agent/tools/context.ts";
-import { createDenoReplTool } from "../../src/agent/tools/deno-repl.ts";
+import { createTypeScriptReplTool } from "../../src/agent/tools/typescript-repl.ts";
 import { createTestWorkspace, runToolImplementation, runToolImplementationThrows } from "./helpers.ts";
 
-Deno.test("deno_repl runs JavaScript in the workspace", async () => {
+Deno.test("typescript-repl runs TypeScript in the workspace", async () => {
   const { dir, ctx, cleanup } = await createTestWorkspace();
   try {
-    const tool = createDenoReplTool(ctx);
+    const tool = createTypeScriptReplTool(ctx);
     const out = await runToolImplementation(tool, {
-      javascript: `
+      typescript: `
         await Deno.writeTextFile("out.txt", "ok");
         console.log(await Deno.readTextFile("out.txt"));
       `,
@@ -23,20 +23,20 @@ Deno.test("deno_repl runs JavaScript in the workspace", async () => {
   }
 });
 
-Deno.test("deno_repl requests approval before creating temp files", async () => {
+Deno.test("typescript-repl requests approval before creating temp files", async () => {
   const dir = await Deno.makeTempDir({ prefix: "silas-tools-" });
   try {
     const ctx = await createToolContext(dir, {
-      approvalGate: createDenyApprovalGate("deno repl denied"),
+      approvalGate: createDenyApprovalGate("typescript repl denied"),
       sessionId: "session-1",
       turnId: "turn-1",
     });
-    const tool = createDenoReplTool(ctx);
+    const tool = createTypeScriptReplTool(ctx);
 
     await assertRejects(
-      () => runToolImplementation(tool, { javascript: `await Deno.writeTextFile("marker.txt", "touched");` }),
+      () => runToolImplementation(tool, { typescript: `await Deno.writeTextFile("marker.txt", "touched");` }),
       Error,
-      "deno repl denied",
+      "typescript repl denied",
     );
 
     const entries: string[] = [];
@@ -47,29 +47,29 @@ Deno.test("deno_repl requests approval before creating temp files", async () => 
   }
 });
 
-Deno.test("deno_repl throws on non-zero exit", async () => {
+Deno.test("typescript-repl throws on non-zero exit", async () => {
   const { ctx, cleanup } = await createTestWorkspace();
   try {
-    const tool = createDenoReplTool(ctx);
+    const tool = createTypeScriptReplTool(ctx);
     const err = await runToolImplementationThrows(tool, {
-      javascript: `console.error("bad"); Deno.exit(7);`,
+      typescript: `console.error("bad"); Deno.exit(7);`,
     });
     assertStringIncludes(err.message, "bad");
-    assertStringIncludes(err.message, "JavaScript exited with code 7");
+    assertStringIncludes(err.message, "TypeScript exited with code 7");
   } finally {
     await cleanup();
   }
 });
 
-Deno.test("deno_repl times out", async () => {
+Deno.test("typescript-repl times out", async () => {
   const { ctx, cleanup } = await createTestWorkspace();
   try {
-    const tool = createDenoReplTool(ctx);
+    const tool = createTypeScriptReplTool(ctx);
     const err = await runToolImplementationThrows(tool, {
-      javascript: `await new Promise((resolve) => setTimeout(resolve, 10_000));`,
+      typescript: `await new Promise((resolve) => setTimeout(resolve, 10_000));`,
       timeout: 0.1,
     });
-    assertStringIncludes(err.message, "JavaScript execution timed out");
+    assertStringIncludes(err.message, "TypeScript execution timed out");
   } finally {
     await cleanup();
   }

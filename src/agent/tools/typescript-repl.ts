@@ -8,8 +8,8 @@ import { DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES, formatSize, truncateTail } from "
 const DEFAULT_TIMEOUT_SECONDS = 5;
 const MAX_TIMEOUT_SECONDS = 60;
 
-export interface DenoReplToolParams {
-  javascript: string;
+export interface TypeScriptReplToolParams {
+  typescript: string;
   timeout?: number;
 }
 
@@ -52,29 +52,29 @@ function formatTruncatedOutput(output: string): string {
 
 function abortErrorMessage(timeoutSignal: AbortSignal): string {
   if (timeoutSignal.aborted) {
-    return "JavaScript execution timed out";
+    return "TypeScript execution timed out";
   }
-  return "JavaScript execution aborted";
+  return "TypeScript execution aborted";
 }
 
-export function createDenoReplTool(ctx: ToolContext): Tool {
+export function createTypeScriptReplTool(ctx: ToolContext): Tool {
   return tool({
-    name: "deno_repl",
+    name: "typescript-repl",
     description:
-      `Run a JavaScript or TypeScript snippet with Deno in the workspace directory. The snippet can read and write workspace files, but cannot access the network, environment, subprocesses, FFI, or system APIs. Returns stdout and stderr. Output is truncated to last ${DEFAULT_MAX_LINES} lines or ${
+      `Run a TypeScript snippet with Deno in the workspace directory. The snippet can read and write workspace files, but cannot access the network, environment, subprocesses, FFI, or system APIs. Returns stdout and stderr. Output is truncated to last ${DEFAULT_MAX_LINES} lines or ${
         DEFAULT_MAX_BYTES / 1024
       }KB (whichever is hit first). Optionally provide a timeout in seconds, up to ${MAX_TIMEOUT_SECONDS}.`,
     parameters: {
-      javascript: z.string().describe("JavaScript or TypeScript code to execute"),
+      typescript: z.string().describe("TypeScript code to execute"),
       timeout: z.number().optional().describe(`Timeout in seconds (default: ${DEFAULT_TIMEOUT_SECONDS})`),
     },
-    implementation: async ({ javascript, timeout }: DenoReplToolParams) => {
+    implementation: async ({ typescript, timeout }: TypeScriptReplToolParams) => {
       const timeoutSeconds = validateTimeoutSeconds(timeout);
       await approveToolOperation(ctx, {
         operation: "shell",
-        target: "deno_repl",
+        target: "typescript-repl",
         risk: "high",
-        summary: `run javascript, timeout=${timeoutSeconds}s, ${javascript.length} bytes`,
+        summary: `run typescript, timeout=${timeoutSeconds}s, ${typescript.length} bytes`,
       });
 
       let scriptPath: string | undefined;
@@ -85,10 +85,10 @@ export function createDenoReplTool(ctx: ToolContext): Tool {
       try {
         scriptPath = await Deno.makeTempFile({
           dir: ctx.root,
-          prefix: ".silas-deno-repl-",
+          prefix: ".silas-typescript-repl-",
           suffix: ".ts",
         });
-        await Deno.writeTextFile(scriptPath, javascript);
+        await Deno.writeTextFile(scriptPath, typescript);
 
         const child = new Deno.Command(Deno.execPath(), {
           args: [
@@ -122,7 +122,7 @@ export function createDenoReplTool(ctx: ToolContext): Tool {
         const output = formatOutput(stdout, stderr);
         const text = formatTruncatedOutput(output);
         if (!status.success) {
-          throw new Error(`${text}\n\nJavaScript exited with code ${status.code}`);
+          throw new Error(`${text}\n\nTypeScript exited with code ${status.code}`);
         }
         return text;
       } catch (error) {

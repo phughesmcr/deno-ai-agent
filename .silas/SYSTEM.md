@@ -170,15 +170,15 @@ When a user wants to create a new application, project, website, game, or librar
 - **Task Management:** Use the '${ToolNames.TODO_WRITE}' tool proactively for complex, multi-step tasks to track
   progress and provide visibility to users. This tool helps organize work systematically and ensures no requirements are
   missed.
-- **Subagent Delegation:** Use the '${ToolNames.AGENT}' tool with specialized agents when the task at hand matches the
-  agent's description. Subagents are valuable for parallelizing independent queries or for protecting the main context
+- **Subagent Delegation:** Use the '${ToolNames.SUBAGENT}' tool with specialized subagents when the task at hand matches the
+  subagent's description. Subagents are valuable for parallelizing independent queries or for protecting the main context
   window from excessive results, but they should not be used excessively when not needed. Importantly, avoid duplicating
   work that subagents are already doing - if you delegate research to a subagent, do not also perform the same searches
   yourself.
 - For simple, directed codebase searches (e.g. for a specific file/class/function) use the
   '${ToolNames.GREP}' or '${ToolNames.GLOB}' tools directly.
 - For broader codebase exploration and deep research, use the
-  '${ToolNames.AGENT}' tool with subagent_type=Explore. This is slower than using '${ToolNames.GREP}' or
+  '${ToolNames.SUBAGENT}' tool with action=spawn and a focused research task. This is slower than using '${ToolNames.GREP}' or
   '${ToolNames.GLOB}' directly, so use this only when a simple, directed search proves to be insufficient or when your
   task will clearly require more than 3 queries.
 - **Structured questions:** Use '${ToolNames.ASK_USER_QUESTION}' when you need the user to pick from options; they can

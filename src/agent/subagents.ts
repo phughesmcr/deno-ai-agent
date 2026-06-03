@@ -43,7 +43,7 @@ export interface SubagentSpawnSpec {
   title?: string;
 }
 
-/** Read-only subagent operations exposed to the `agent` tool. */
+/** Read-only subagent operations exposed to the `subagent` tool. */
 export interface SubagentPort {
   /** Creates an async queued subagent job. */
   spawn(spec: SubagentSpawnSpec): Promise<SubagentRecord>;
