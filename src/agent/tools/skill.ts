@@ -6,6 +6,7 @@ import type { Skill, SkillDiagnostic, SkillManager, SkillSummary } from "../skil
 import { approveToolOperation, type ToolContext } from "./context.ts";
 
 const RESOURCE_DIRS = ["assets", "references", "scripts"] as const;
+const SKILL_FILE_NAME = "SKILL.md";
 
 function toPosixPath(value: string): string {
   return value.split(path.SEPARATOR).join("/");
@@ -68,9 +69,26 @@ async function listResourceFiles(baseDir: string, relativeDir: string): Promise<
   return nested.flat();
 }
 
+async function listSiblingMarkdown(skill: Skill): Promise<string[]> {
+  let entries: Deno.DirEntry[];
+  try {
+    entries = await Array.fromAsync(Deno.readDir(skill.baseDir));
+  } catch (error) {
+    if (error instanceof Deno.errors.NotFound) return [];
+    throw error;
+  }
+  return entries
+    .filter((entry) => entry.isFile && entry.name.endsWith(".md") && entry.name !== SKILL_FILE_NAME)
+    .map((entry) => entry.name)
+    .toSorted((a, b) => a.localeCompare(b));
+}
+
 async function listResources(skill: Skill): Promise<string[]> {
-  const resources = await Promise.all(RESOURCE_DIRS.map((dir) => listResourceFiles(skill.baseDir, dir)));
-  return resources.flat().toSorted((a, b) => a.localeCompare(b));
+  const [siblingMarkdown, nested] = await Promise.all([
+    listSiblingMarkdown(skill),
+    Promise.all(RESOURCE_DIRS.map((dir) => listResourceFiles(skill.baseDir, dir))),
+  ]);
+  return [...siblingMarkdown, ...nested.flat()].toSorted((a, b) => a.localeCompare(b));
 }
 
 function formatResourceListing(resources: string[]): string {

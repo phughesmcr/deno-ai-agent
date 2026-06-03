@@ -1,29 +1,27 @@
 import type { Tool } from "@lmstudio/sdk";
 
-import { createSubagentTool } from "./subagent.ts";
+import { createSkillManager, type SkillManager } from "../skills/mod.ts";
+import { createUnavailableSubagentPort, type SubagentPort } from "../subagents.ts";
 import { createAskUserQuestionTool } from "./ask-user-question.ts";
 import { createBashTool } from "./bash.ts";
 import { createToolContext, type ToolContext } from "./context.ts";
-import { createTypeScriptReplTool } from "./typescript-repl.ts";
 import { createEditTool } from "./edit.ts";
 import { createFindTool } from "./find.ts";
 import { createGrepTool } from "./grep.ts";
 import { createLsTool } from "./ls.ts";
 import { createReadTool } from "./read.ts";
 import { createSkillTool } from "./skill.ts";
+import { createSubagentTool } from "./subagent.ts";
 import { createNoopTodoDisplayPort } from "./todo-display-port.ts";
 import { createTodoWriteTool, type TodoWriteDeps } from "./todo-write.ts";
+import { withRecoverableToolErrors } from "./tool-errors.ts";
+import { createTypeScriptReplTool } from "./typescript-repl.ts";
 import { type AskUserQuestionPort, createUnavailableAskUserQuestionPort } from "./user-question-port.ts";
 import { createWebFetchTool } from "./web-fetch.ts";
 import { createWriteTool } from "./write.ts";
-import { createSkillManager, type SkillManager } from "../skills/mod.ts";
-import { createUnavailableSubagentPort, type SubagentPort } from "../subagents.ts";
 
-export { createToolContext, normalizeRoot } from "./context.ts";
-export type { ToolContext, ToolContextOptions } from "./context.ts";
-export { preprocessSystemPrompt } from "./prompt.ts";
-export { createNoopTodoDisplayPort } from "./todo-display-port.ts";
-export type { TodoDisplayPort, TodoUpdatePayload } from "./todo-display-port.ts";
+export { createUnavailableSubagentPort } from "../subagents.ts";
+export type { SubagentPort, SubagentRecord, SubagentStatus } from "../subagents.ts";
 export {
   type AskUserQuestionParams,
   createAskUserQuestionTool,
@@ -34,16 +32,14 @@ export {
   UserQuestionDeclinedError,
   validateAskUserQuestionParams,
 } from "./ask-user-question.ts";
-export {
-  type AskUserQuestionPort,
-  createUnavailableAskUserQuestionPort,
-  type TurnTarget,
-} from "./user-question-port.ts";
+export { createToolContext, normalizeRoot } from "./context.ts";
+export type { ToolContext, ToolContextOptions } from "./context.ts";
+export { preprocessSystemPrompt } from "./prompt.ts";
+export { getShellCommand } from "./shell-command.ts";
 export { createSubagentTool } from "./subagent.ts";
 export type { SubagentAction, SubagentToolParams, SubagentToolResponse } from "./subagent.ts";
-export { createTypeScriptReplTool } from "./typescript-repl.ts";
-export { createWebFetchTool, type WebFetchToolOptions } from "./web-fetch.ts";
-export { getShellCommand } from "./shell-command.ts";
+export { createNoopTodoDisplayPort } from "./todo-display-port.ts";
+export type { TodoDisplayPort, TodoUpdatePayload } from "./todo-display-port.ts";
 export {
   copyTodosForSession,
   createTodoWriteTool,
@@ -62,8 +58,13 @@ export {
   validateTodoWriteParams,
   writeTodoFile,
 } from "./todo-write.ts";
-export { createUnavailableSubagentPort } from "../subagents.ts";
-export type { SubagentPort, SubagentRecord, SubagentStatus } from "../subagents.ts";
+export { createTypeScriptReplTool } from "./typescript-repl.ts";
+export {
+  type AskUserQuestionPort,
+  createUnavailableAskUserQuestionPort,
+  type TurnTarget,
+} from "./user-question-port.ts";
+export { createWebFetchTool, type WebFetchToolOptions } from "./web-fetch.ts";
 
 /** Pi-aligned tool identifiers registered with the model. */
 export type ToolName =
@@ -129,7 +130,7 @@ export function getModelTools(deps: ModelToolDeps): Tool[] {
     createWebFetchTool(deps.workspace),
     createAskUserQuestionTool(deps.userQuestions),
     createSubagentTool(deps.subagents),
-  ];
+  ].map(withRecoverableToolErrors);
 }
 
 /** Creates tools from a workspace directory path (canonicalizes root). */

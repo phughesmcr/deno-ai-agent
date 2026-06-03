@@ -10,6 +10,12 @@ function isPathInsideRoot(resolved: string, root: string): boolean {
   return resolved.startsWith(root + path.SEPARATOR);
 }
 
+function workspaceEscapeMessage(userPath: string, root: string): string {
+  const displayRoot = root.split(path.SEPARATOR).join("/");
+  return `Path escapes workspace: "${userPath}" is outside the tool root (${displayRoot}). ` +
+    "Use relative paths under the workspace, or use bash to inspect parent directories.";
+}
+
 /** Expands a leading `~` using `HOME` when set. */
 export function expandTilde(userPath: string): string {
   if (userPath === "~") {
@@ -97,19 +103,19 @@ export class WorkspaceSandbox {
     const resolved = path.resolve(base);
 
     if (!isPathInsideRoot(resolved, this.#root)) {
-      throw new Error("Path escapes workspace");
+      throw new Error(workspaceEscapeMessage(userPath, this.#root));
     }
 
     const existingPath = await nearestExistingPath(resolved);
     const canonicalExistingPath = await Deno.realPath(existingPath);
     if (!isPathInsideRoot(canonicalExistingPath, this.#root)) {
-      throw new Error("Path escapes workspace");
+      throw new Error(workspaceEscapeMessage(userPath, this.#root));
     }
 
     try {
       const canonicalTarget = await Deno.realPath(resolved);
       if (!isPathInsideRoot(canonicalTarget, this.#root)) {
-        throw new Error("Path escapes workspace");
+        throw new Error(workspaceEscapeMessage(userPath, this.#root));
       }
       return canonicalTarget;
     } catch (error) {

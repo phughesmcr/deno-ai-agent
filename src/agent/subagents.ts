@@ -1,12 +1,13 @@
 import { Chat, type Tool } from "@lmstudio/sdk";
 
 import type { SkillManager } from "./skills/mod.ts";
+import type { ToolContext } from "./tools/context.ts";
 import { createFindTool } from "./tools/find.ts";
 import { createGrepTool } from "./tools/grep.ts";
 import { createLsTool } from "./tools/ls.ts";
 import { createReadTool } from "./tools/read.ts";
 import { createSkillTool } from "./tools/skill.ts";
-import type { ToolContext } from "./tools/context.ts";
+import { withRecoverableToolErrors } from "./tools/tool-errors.ts";
 
 /** Subagent lifecycle state stored in KV. */
 export type SubagentStatus = "queued" | "running" | "completed" | "failed" | "cancelled";
@@ -153,7 +154,7 @@ export function createReadOnlySubagentTools(workspace: ToolContext, skills: Skil
     createFindTool(workspace),
     createLsTool(workspace),
     createSkillTool(skills, workspace),
-  ];
+  ].map(withRecoverableToolErrors);
 }
 
 /**

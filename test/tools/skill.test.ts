@@ -69,6 +69,21 @@ Deno.test("skill tool activation returns wrapped body, base directory, and resou
   });
 });
 
+Deno.test("skill tool lists sibling markdown files as resources", async () => {
+  await withWorkspace(async (root) => {
+    await writeSkill(root, "grill", "---\nname: grill\ndescription: Grill\n---\nBody");
+    await Deno.writeTextFile(`${root}/skills/grill/CONTEXT-FORMAT.md`, "# Context");
+    await Deno.writeTextFile(`${root}/skills/grill/ADR-FORMAT.md`, "# ADR");
+
+    const manager = await createSkillManager({ root });
+    const output = await runTool(createSkillTool(manager), { skill: "grill" });
+
+    assertStringIncludes(output, "- ADR-FORMAT.md");
+    assertStringIncludes(output, "- CONTEXT-FORMAT.md");
+    assertEquals(output.includes("# Context"), false);
+  });
+});
+
 Deno.test("skill tool reports available names for unknown skills", async () => {
   await withWorkspace(async (root) => {
     await writeSkill(root, "docs", "---\nname: docs\ndescription: Build docs\n---\nBody");
