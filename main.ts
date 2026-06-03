@@ -35,6 +35,7 @@ import {
   replyError,
   replyWithModelText,
   startTelegramBot,
+  startTelegramTypingIndicator,
   type TelegramContext,
   withTurnMutex,
 } from "./src/telegram/mod.ts";
@@ -201,84 +202,86 @@ async function main(): Promise<void> {
           });
           console.log(`Telegram message received (${message.length} chars).`);
 
-          try {
-            await ctx.api.sendChatAction(ctx.chat!.id, "typing", {
-              message_thread_id: ctx.message.message_thread_id,
-            });
-          } catch {
-            /* typing indicator is best-effort */
-          }
-
-          try {
-            await ctx.reply("Working on it…", {
-              message_thread_id: ctx.message.message_thread_id,
-            });
-          } catch {
-            /* best-effort ack while the model turn runs */
-          }
-
-          await withTurnMutex(async () => {
-            const toolsList = await createTurnTools();
-            span.setAttribute("tools.count", toolsList.length);
-            activeTurnId = String(ctx.update.update_id);
-
-            // LM Studio may abort the act signal mid-turn; approvals must use a separate signal.
-            const turnController = new AbortController();
-            const approvalController = new AbortController();
-            const onShutdown = (): void => {
-              turnController.abort();
-              approvalController.abort();
-            };
-            controller.signal.addEventListener("abort", onShutdown);
-            const clearActiveTurn = activeTurns.setActiveTurn({
-              id: activeTurnId,
-              actController: turnController,
-              approvalController,
-            });
-
-            userQuestions.setTurnContext({ ctx, signal: turnController.signal });
-            permissionPrompts.setTurnContext({ ctx, signal: approvalController.signal });
-            todoDisplay.setTurnContext({ ctx, signal: turnController.signal });
-            approvals.setTurnContext({ ctx, signal: approvalController.signal });
-            const actStarted = performance.now();
-            try {
-              console.log("Model turn started.");
-              const { replyTexts, compacted } = await runTurn(agent, message, {
-                tools: toolsList,
-                signal: turnController.signal,
-              });
-              console.log(`Model turn finished (${replyTexts.length} reply chunk(s)).`);
-
-              if (ctx.message) {
-                if (replyTexts.length > 0) {
-                  await replyWithModelText(
-                    ctx,
-                    replyTexts,
-                    ctx.message.message_id,
-                    ctx.message.message_thread_id,
-                  );
-                } else {
-                  await ctx.reply("The model finished without a reply. Try again or rephrase.", {
-                    message_thread_id: ctx.message.message_thread_id,
-                  });
-                }
-              }
-
-              if (compacted) {
-                logDebug("session.compacted", { sessionId: agent.session.id });
-              }
-            } finally {
-              actMs = performance.now() - actStarted;
-              clearActiveTurn();
-              controller.signal.removeEventListener("abort", onShutdown);
-              approvalController.abort();
-              userQuestions.clearTurnContext();
-              permissionPrompts.clearTurnContext();
-              todoDisplay.clearTurnContext();
-              approvals.clearTurnContext();
-              activeTurnId = "no-active-turn";
-            }
+          const stopTyping = startTelegramTypingIndicator({
+            api: ctx.api,
+            chatId: ctx.chat!.id,
+            threadId: ctx.message.message_thread_id,
+            signal: controller.signal,
           });
+          try {
+            try {
+              await ctx.reply("Working on it...", {
+                message_thread_id: ctx.message.message_thread_id,
+              });
+            } catch {
+              /* best-effort ack while the model turn runs */
+            }
+
+            await withTurnMutex(async () => {
+              const toolsList = await createTurnTools();
+              span.setAttribute("tools.count", toolsList.length);
+              activeTurnId = String(ctx.update.update_id);
+
+              // LM Studio may abort the act signal mid-turn; approvals must use a separate signal.
+              const turnController = new AbortController();
+              const approvalController = new AbortController();
+              const onShutdown = (): void => {
+                turnController.abort();
+                approvalController.abort();
+              };
+              controller.signal.addEventListener("abort", onShutdown);
+              const clearActiveTurn = activeTurns.setActiveTurn({
+                id: activeTurnId,
+                actController: turnController,
+                approvalController,
+              });
+
+              userQuestions.setTurnContext({ ctx, signal: turnController.signal });
+              permissionPrompts.setTurnContext({ ctx, signal: approvalController.signal });
+              todoDisplay.setTurnContext({ ctx, signal: turnController.signal });
+              approvals.setTurnContext({ ctx, signal: approvalController.signal });
+              const actStarted = performance.now();
+              try {
+                console.log("Model turn started.");
+                const { replyTexts, compacted } = await runTurn(agent, message, {
+                  tools: toolsList,
+                  signal: turnController.signal,
+                });
+                console.log(`Model turn finished (${replyTexts.length} reply chunk(s)).`);
+
+                if (ctx.message) {
+                  if (replyTexts.length > 0) {
+                    await replyWithModelText(
+                      ctx,
+                      replyTexts,
+                      ctx.message.message_id,
+                      ctx.message.message_thread_id,
+                    );
+                  } else {
+                    await ctx.reply("The model finished without a reply. Try again or rephrase.", {
+                      message_thread_id: ctx.message.message_thread_id,
+                    });
+                  }
+                }
+
+                if (compacted) {
+                  logDebug("session.compacted", { sessionId: agent.session.id });
+                }
+              } finally {
+                actMs = performance.now() - actStarted;
+                clearActiveTurn();
+                controller.signal.removeEventListener("abort", onShutdown);
+                approvalController.abort();
+                userQuestions.clearTurnContext();
+                permissionPrompts.clearTurnContext();
+                todoDisplay.clearTurnContext();
+                approvals.clearTurnContext();
+                activeTurnId = "no-active-turn";
+              }
+            });
+          } finally {
+            stopTyping();
+          }
         },
         { root: true },
       );

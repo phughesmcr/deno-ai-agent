@@ -7,4 +7,5 @@ export { createTelegramTodoDisplayPort, showTodosForSession } from "./grammy-tod
 export { isBotCommand } from "./is-bot-command.ts";
 export { replyError, replyWithModelText } from "./telegram-reply.ts";
 export { createTelegramManager, type TelegramContext } from "./telegram.ts";
+export { startTelegramTypingIndicator } from "./typing-indicator.ts";
 export { ActiveTurnRegistry, withTurnMutex } from "./turn-gate.ts";
