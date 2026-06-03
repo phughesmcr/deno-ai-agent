@@ -1,33 +1,84 @@
-import { Chat, type ChatMessage, type LLM } from "@lmstudio/sdk";
+import { Chat, type ChatMessageData, type LLM, type ToolCallRequest } from "@lmstudio/sdk";
 
-const KEEP_RECENT_MESSAGES = 6;
+import type { SessionFileDetails } from "./session-store.ts";
+
 const SKILL_CONTENT_PATTERN = /<skill_content name="([^"]+)">[\s\S]*?<\/skill_content>/g;
+const DEFAULT_TOOL_RESULT_LIMIT = 2_000;
 
-const SUMMARY_PROMPT =
-  "Summarize the following conversation history concisely. Preserve facts, decisions, and open questions. Output only the summary.";
+const SUMMARY_PROMPT = `Create an updated compaction checkpoint for the conversation.
+
+Output only the checkpoint in this exact structure:
+
+Goal
+- ...
+
+Constraints & Preferences
+- ...
+
+Progress
+- Done: ...
+- In Progress: ...
+- Blocked: ...
+
+Key Decisions
+- ...
+
+Next Steps
+- ...
+
+Critical Context
+- ...
+
+Preserve concrete user instructions, active plans, file paths, decisions, blockers, and details needed to continue work.`;
+
+/**
+ * Input used to generate a structured compaction checkpoint.
+ * @internal
+ */
+export interface SummaryCompactionInput {
+  /** Current system prompt to apply while asking the model for a summary. */
+  systemPrompt: string;
+  /** Previous checkpoint summary, when this compaction updates an earlier checkpoint. */
+  previousSummary?: string;
+  /** Raw message data to fold into the checkpoint. */
+  messages: ChatMessageData[];
+  /** Optional user-supplied manual compaction instructions. */
+  instructions?: string;
+  /** Cumulative file context to include in the checkpoint. */
+  details: SessionFileDetails;
+}
+
+/** Function that generates a structured checkpoint summary. */
+export type SummaryCompactor = (input: SummaryCompactionInput) => Promise<string>;
 
 interface SkillContentBlock {
   content: string;
   order: number;
 }
 
-function skillContentSources(message: ChatMessage): string[] {
-  const sources = message.getToolCallResults().map((result) => result.content);
-  const text = message.getText();
-  if (text) sources.push(text);
-  return sources;
+function textParts(message: ChatMessageData): string[] {
+  return message.content.flatMap((part) => part.type === "text" ? [part.text] : []);
 }
 
-function messageContainsSkillContent(message: ChatMessage): boolean {
-  return skillContentSources(message).some((source) => source.includes("<skill_content name="));
+function toolResultParts(message: ChatMessageData): string[] {
+  return message.content.flatMap((part) => part.type === "toolCallResult" ? [part.content] : []);
 }
 
-function extractLatestSkillContent(messages: ChatMessage[]): string[] {
+function toolCallRequests(message: ChatMessageData): ToolCallRequest[] {
+  return message.content.flatMap((part) => part.type === "toolCallRequest" ? [part.toolCallRequest] : []);
+}
+
+function truncate(value: string, limit: number): string {
+  if (value.length <= limit) return value;
+  return `${value.slice(0, limit)}\n[tool result truncated at ${limit} chars]`;
+}
+
+function extractLatestSkillContent(messages: ChatMessageData[]): string[] {
   const latest = new Map<string, SkillContentBlock>();
   let order = 0;
 
   for (const message of messages) {
-    for (const source of skillContentSources(message)) {
+    for (const source of [...textParts(message), ...toolResultParts(message)]) {
       for (const match of source.matchAll(SKILL_CONTENT_PATTERN)) {
         const name = match[1];
         const content = match[0];
@@ -43,47 +94,89 @@ function extractLatestSkillContent(messages: ChatMessage[]): string[] {
     .map((block) => block.content);
 }
 
+function serializeMessage(message: ChatMessageData, index: number, toolResultLimit: number): string {
+  const sections = [`[${index + 1}] role=${message.role}`];
+  const text = textParts(message).join("\n");
+  if (text) sections.push(text);
+
+  const requests = toolCallRequests(message);
+  if (requests.length > 0) {
+    sections.push(
+      requests
+        .map((request) => {
+          const args = request.arguments === undefined ? "" : ` args=${JSON.stringify(request.arguments)}`;
+          const id = request.id ? ` id=${request.id}` : "";
+          return `<tool-call name="${request.name}"${id}${args}>`;
+        })
+        .join("\n"),
+    );
+  }
+
+  const results = toolResultParts(message);
+  if (results.length > 0) {
+    sections.push(
+      results
+        .map((content) => `<tool-result>\n${truncate(content, toolResultLimit)}\n</tool-result>`)
+        .join("\n"),
+    );
+  }
+
+  return sections.join("\n");
+}
+
+function appendPracticalSections(summary: string, details: SessionFileDetails, skillBlocks: string[]): string {
+  const sections = [summary.trim()];
+  if (skillBlocks.length > 0) {
+    sections.push(`<skill-content>\n${skillBlocks.join("\n\n")}\n</skill-content>`);
+  }
+  if (details.readFiles.length > 0) {
+    sections.push(`<read-files>\n${details.readFiles.join("\n")}\n</read-files>`);
+  }
+  if (details.modifiedFiles.length > 0) {
+    sections.push(`<modified-files>\n${details.modifiedFiles.join("\n")}\n</modified-files>`);
+  }
+  return sections.filter((section) => section.length > 0).join("\n\n");
+}
+
 /**
- * Compacts chat history by summarizing older turns and keeping recent messages.
+ * Builds a structured checkpoint summary from explicit message data.
  * @internal
  */
-export function createSummaryCompactor(model: LLM, signal?: AbortSignal): (chat: Chat) => Promise<Chat> {
-  return async (chat: Chat): Promise<Chat> => {
-    const messages = chat.getMessagesArray();
-    if (messages.length <= KEEP_RECENT_MESSAGES + 1) return chat;
+export function createSummaryCompactor(
+  model: LLM,
+  signal?: AbortSignal,
+  toolResultLimit = DEFAULT_TOOL_RESULT_LIMIT,
+): SummaryCompactor {
+  return async (input: SummaryCompactionInput): Promise<string> => {
+    const transcript = input.messages
+      .map((message, index) => serializeMessage(message, index, toolResultLimit))
+      .join("\n\n");
+    const previous = input.previousSummary?.trim();
+    const instructions = input.instructions?.trim();
+    const skillBlocks = extractLatestSkillContent(input.messages);
 
-    const systemPrompt = chat.getSystemPrompt();
-    const skillBlocks = extractLatestSkillContent(messages);
-    const messagesWithoutSkillContent = skillBlocks.length > 0 ?
-      messages.filter((message) => !messageContainsSkillContent(message)) :
-      messages;
-    const toSummarize = messagesWithoutSkillContent.slice(0, -KEEP_RECENT_MESSAGES);
-    const recent = messagesWithoutSkillContent.slice(-KEEP_RECENT_MESSAGES);
+    const prompt = [
+      SUMMARY_PROMPT,
+      instructions ? `\nAdditional user compaction instructions:\n${instructions}` : "",
+      previous ? `\nPrevious checkpoint summary:\n${previous}` : "",
+      `\nCurrent file details:\nreadFiles=${JSON.stringify(input.details.readFiles)}\nmodifiedFiles=${
+        JSON.stringify(input.details.modifiedFiles)
+      }`,
+      `\nConversation messages to fold into the checkpoint:\n${transcript}`,
+    ].join("\n");
 
     let summary = "";
-    if (toSummarize.length > 0) {
-      const transcript = toSummarize.map((m) => m.toString()).join("\n\n");
-      const summaryChat = Chat.empty();
-      if (systemPrompt) summaryChat.replaceSystemPrompt(systemPrompt);
-      summaryChat.append("user", `${SUMMARY_PROMPT}\n\n${transcript}`);
+    const summaryChat = Chat.empty();
+    if (input.systemPrompt) summaryChat.replaceSystemPrompt(input.systemPrompt);
+    summaryChat.append("user", prompt);
 
-      await model.act(summaryChat, [], {
-        onMessage: (msg) => {
-          summary = msg.getText();
-        },
-        signal,
-      });
-    }
+    await model.act(summaryChat, [], {
+      onMessage: (msg) => {
+        summary = msg.getText();
+      },
+      signal,
+    });
 
-    const compacted = Chat.empty();
-    if (systemPrompt) compacted.replaceSystemPrompt(systemPrompt);
-    if (summary.trim()) compacted.append("user", `[Earlier conversation summary]\n${summary.trim()}`);
-    if (skillBlocks.length > 0) {
-      compacted.append("user", `[Loaded skill context]\n${skillBlocks.join("\n\n")}`);
-    }
-    for (const message of recent) {
-      compacted.append(message);
-    }
-    return compacted;
+    return appendPracticalSections(summary, input.details, skillBlocks);
   };
 }

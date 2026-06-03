@@ -1,7 +1,8 @@
-import { Chat, ChatMessage, type ChatMessageData, type LLM, type Tool } from "@lmstudio/sdk";
+import { type Chat, ChatMessage, type ChatMessageData, type LLM, type Tool } from "@lmstudio/sdk";
 import { assert } from "jsr:@std/assert@1/assert";
 import { assertEquals } from "jsr:@std/assert@1/equals";
 import { assertStringIncludes } from "jsr:@std/assert@1/string-includes";
+import type { SummaryCompactor } from "../src/agent/context/compactor.ts";
 import { SessionStore } from "../src/agent/context/session-store.ts";
 import { type ModelActObserver, SessionManager } from "../src/agent/context/session.ts";
 
@@ -137,8 +138,9 @@ function withDebugLogs(fn: () => Promise<void>): Promise<string[]> {
 async function withSession(
   fn: (spec: { session: SessionManager; store: SessionStore; model: FakeModel }) => Promise<void>,
   options?: {
-    compactPercentage?: number;
-    compactor?: (chat: Chat) => Promise<Chat>;
+    reserveTokens?: number;
+    keepRecentTokens?: number;
+    compactor?: SummaryCompactor;
     maxContextLength?: number;
     systemPrompt?: string;
   },
@@ -152,8 +154,9 @@ async function withSession(
       model: model as unknown as LLM,
       systemPrompt: options?.systemPrompt ?? "current system prompt",
       maxContextLength: options?.maxContextLength ?? 100,
-      compactPercentage: options?.compactPercentage,
-      compactor: options?.compactor ?? ((chat) => Promise.resolve(chat)),
+      reserveTokens: options?.reserveTokens,
+      keepRecentTokens: options?.keepRecentTokens,
+      compactor: options?.compactor ?? (() => Promise.resolve("summary")),
     });
     await fn({ session, store, model });
   } finally {
@@ -248,10 +251,19 @@ Deno.test("SessionManager newSession keeps the current system prompt", async () 
 Deno.test("SessionManager load reapplies the current prompt over saved prompt", async () => {
   await withSession(async ({ session, store, model }) => {
     const id = crypto.randomUUID();
-    await store.save(id, [
-      rawMessage("system", "old prompt"),
-      rawMessage("user", "from disk"),
-    ]);
+    await store.create(id);
+    await store.append(id, {
+      type: "message",
+      id: crypto.randomUUID(),
+      createdAt: "2026-06-03T00:00:00.000Z",
+      message: rawMessage("system", "old prompt"),
+    });
+    await store.append(id, {
+      type: "message",
+      id: crypto.randomUUID(),
+      createdAt: "2026-06-03T00:00:00.000Z",
+      message: rawMessage("user", "from disk"),
+    });
 
     await session.load(id);
     await session.runTurn("after load", { tools: [], signal: new AbortController().signal });
@@ -307,29 +319,57 @@ Deno.test("SessionManager fork preserves messages and reapplies the prompt", asy
   });
 });
 
-Deno.test("SessionManager keeps existsOnDisk true when a saved session becomes dirty", async () => {
+Deno.test("SessionManager persists turns immediately", async () => {
   await withSession(async ({ session }) => {
-    await session.save();
-    assertEquals(session.status().existsOnDisk, true);
-    assertEquals(session.status().dirty, false);
-
     await session.runTurn("change", { tools: [], signal: new AbortController().signal });
 
     assertEquals(session.status().existsOnDisk, true);
-    assertEquals(session.status().dirty, true);
+    assertEquals(session.status().dirty, false);
   });
 });
 
-Deno.test("SessionManager compacts over-budget turns and preserves the current prompt", async () => {
-  const compacted = Chat.empty();
-  compacted.replaceSystemPrompt("stale prompt from compactor");
-  compacted.append("user", "summary");
+Deno.test("SessionManager manual compaction runs below the automatic token budget", async () => {
+  const summarized: ChatMessageData[][] = [];
+  await withSession(
+    async ({ session, model }) => {
+      model.replies = ["first reply"];
+      await session.runTurn("first", { tools: [], signal: new AbortController().signal });
+      model.replies = ["second reply"];
+      await session.runTurn("second", { tools: [], signal: new AbortController().signal });
 
+      const result = await session.compact("manual checkpoint");
+
+      assertEquals(result.compacted, true);
+      assertEquals(result.beforeTokens, 16);
+      assertEquals(result.afterTokens, 4);
+      assertEquals(summarized[0]?.map((message) => message.role), ["user", "assistant", "user", "assistant"]);
+
+      model.replies = ["after manual"];
+      await session.runTurn("after compact", { tools: [], signal: new AbortController().signal });
+      const call = model.actCalls[2];
+      assert(call);
+      assertEquals(snapshot(call.chat), [
+        ["system", "current system prompt"],
+        ["user", "[Earlier conversation summary]\nmanual summary"],
+        ["user", "after compact"],
+      ]);
+    },
+    {
+      compactor: (input) => {
+        summarized.push(input.messages);
+        assertEquals(input.instructions, "manual checkpoint");
+        return Promise.resolve("manual summary");
+      },
+    },
+  );
+});
+
+Deno.test("SessionManager appends compaction checkpoints and preserves the current prompt", async () => {
   await withSession(
     async ({ session, model }) => {
       const first = await session.runTurn("too much context", { tools: [], signal: new AbortController().signal });
       assertEquals(first.compacted, true);
-      assertEquals(first.totalTokens, 4);
+      assertEquals(first.totalTokens, 9);
 
       await session.runTurn("after compact", { tools: [], signal: new AbortController().signal });
 
@@ -337,14 +377,16 @@ Deno.test("SessionManager compacts over-budget turns and preserves the current p
       assert(call);
       assertEquals(snapshot(call.chat), [
         ["system", "current system prompt"],
-        ["user", "summary"],
+        ["user", "[Earlier conversation summary]\nsummary"],
+        ["assistant", "reply"],
         ["user", "after compact"],
       ]);
     },
     {
-      maxContextLength: 5,
-      compactPercentage: 0.1,
-      compactor: () => Promise.resolve(compacted),
+      maxContextLength: 10,
+      reserveTokens: 2,
+      keepRecentTokens: 5,
+      compactor: () => Promise.resolve("summary"),
     },
   );
 });

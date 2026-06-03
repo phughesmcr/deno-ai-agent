@@ -10,6 +10,8 @@ class FakeSession {
   saveError: Error | undefined;
   loadError: Error | undefined;
   forkError: Error | undefined;
+  compactError: Error | undefined;
+  compactInstructions: (string | undefined)[] = [];
   statusValue: SessionStatus = {
     id: "current",
     dirty: false,
@@ -53,6 +55,12 @@ class FakeSession {
   list(): Promise<string[]> {
     return Promise.resolve(this.sessions);
   }
+
+  compact(instructions?: string): Promise<{ compacted: boolean; beforeTokens: number; afterTokens: number }> {
+    this.compactInstructions.push(instructions);
+    if (this.compactError) return Promise.reject(this.compactError);
+    return Promise.resolve({ compacted: true, beforeTokens: 90, afterTokens: 30 });
+  }
 }
 
 function createHandler(session = new FakeSession()): { handler: TelegramCommandHandler; session: FakeSession } {
@@ -87,6 +95,8 @@ Deno.test("TelegramCommandHandler returns text for successful session commands",
   assertEquals(handler.help(), SESSION_HELP);
   assertEquals(handler.newSession(), "New session.\nID: new-id\n\nUse /save to persist.");
   assertEquals(await handler.save(), "Saved.\nID: new-id");
+  assertEquals(await handler.compact("keep file paths"), "Compacted.\nTokens before: 90\nTokens after: 30");
+  assertEquals(session.compactInstructions, ["keep file paths"]);
   assertEquals(
     await handler.load("archived"),
     [
@@ -123,6 +133,7 @@ Deno.test("TelegramCommandHandler returns user-facing command failure text", asy
   session.saveError = new Error("disk full");
   session.loadError = new Error("missing");
   session.forkError = new Error("cannot fork");
+  session.compactError = new Error("model unavailable");
   session.sessions = [];
   const { handler } = createHandler(session);
 
@@ -130,5 +141,6 @@ Deno.test("TelegramCommandHandler returns user-facing command failure text", asy
   assertEquals(await handler.load(), "Usage: /load <session-id>\n\n/list shows saved ids.");
   assertEquals(await handler.load("bad"), "Load failed: missing");
   assertEquals(await handler.fork(), "Fork failed: cannot fork");
+  assertEquals(await handler.compact(), "Compaction failed: model unavailable");
   assertEquals(await handler.list(), "No saved sessions. /save writes the current chat.");
 });

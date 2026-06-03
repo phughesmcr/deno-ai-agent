@@ -2,7 +2,7 @@ import { copyTodosForSession, type SessionManager, type SessionStatus } from "..
 
 /** One-line help text for supported session commands. */
 export const SESSION_HELP =
-  "Sessions: /new - fresh chat | /save - write to disk | /load <id> - restore | /fork - branch copy | /list - saved ids | /session - status | /stats - tokens | /todos - task list";
+  "Sessions: /new - fresh chat | /save - write to disk | /load <id> - restore | /fork - branch copy | /list - saved ids | /session - status | /stats - tokens | /compact [instructions] - summarize history | /todos - task list";
 
 interface CommandSession {
   readonly id: string;
@@ -13,6 +13,7 @@ interface CommandSession {
   load(id: string): Promise<void>;
   fork(): Promise<{ fromId: string; toId: string }>;
   list(): Promise<string[]>;
+  compact(instructions?: string): Promise<{ compacted: boolean; beforeTokens: number; afterTokens: number }>;
 }
 
 /** Formats session status for Telegram commands. */
@@ -61,6 +62,20 @@ export class TelegramCommandHandler {
 
   async stats(): Promise<string> {
     return formatSessionStatus(await this.#session.refreshStatus());
+  }
+
+  async compact(instructions?: string): Promise<string> {
+    try {
+      const result = await this.#session.compact(instructions);
+      const state = result.compacted ? "Compacted." : "Nothing to compact.";
+      return [
+        state,
+        `Tokens before: ${result.beforeTokens}`,
+        `Tokens after: ${result.afterTokens}`,
+      ].join("\n");
+    } catch (error) {
+      return `Compaction failed: ${errorMessage(error)}`;
+    }
   }
 
   async fork(): Promise<string> {

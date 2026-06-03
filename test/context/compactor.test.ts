@@ -1,5 +1,5 @@
-import { Chat, ChatMessage, type ChatMessageData, type LLM, type Tool } from "@lmstudio/sdk";
-import { assert, assertEquals, assertStringIncludes } from "jsr:@std/assert@1";
+import { type Chat, ChatMessage, type ChatMessageData, type LLM, type Tool } from "@lmstudio/sdk";
+import { assertEquals, assertStringIncludes } from "jsr:@std/assert@1";
 
 import { createSummaryCompactor } from "../../src/agent/context/compactor.ts";
 
@@ -28,83 +28,57 @@ function rawToolMessage(content: string): ChatMessageData {
   };
 }
 
-function skillToolMessage(name: string, body: string): ChatMessage {
-  return ChatMessage.from(rawToolMessage(`<skill_content name="${name}">\n${body}\n</skill_content>`));
+function skillToolMessage(name: string, body: string): ChatMessageData {
+  return rawToolMessage(`<skill_content name="${name}">\n${body}\n</skill_content>`);
 }
 
 function rawMessage(role: "assistant" | "system" | "user", text: string): ChatMessageData {
   return (ChatMessage.create(role, text) as ChatMessageWithRaw).getRaw();
 }
 
-function snapshot(chat: Chat): [string, string][] {
-  return chat.getMessagesArray().map((message) => [message.getRole(), message.getText() || message.toString()]);
-}
-
-Deno.test("createSummaryCompactor preserves latest skill content outside the summary", async () => {
-  const chat = Chat.empty();
-  chat.replaceSystemPrompt("system prompt");
-  chat.append("user", "first");
-  chat.append(skillToolMessage("docs", "old docs instructions"));
-  chat.append("assistant", "second");
-  chat.append("user", "third");
-  chat.append(skillToolMessage("docs", "new docs instructions"));
-  chat.append("assistant", "fourth");
-  chat.append("user", "fifth");
-  chat.append("assistant", "sixth");
-  chat.append("user", "seventh");
+Deno.test("createSummaryCompactor uses structured prompt input and preserves latest skill content", async () => {
+  const messages = [
+    rawMessage("user", "first"),
+    skillToolMessage("docs", "old docs instructions"),
+    rawMessage("assistant", "second"),
+    skillToolMessage("docs", "new docs instructions"),
+  ];
 
   const model = new FakeSummaryModel();
   const compact = createSummaryCompactor(model as unknown as LLM);
 
-  const compacted = await compact(chat);
-  const compactedText = compacted.getMessagesArray().map((message) => message.toString()).join("\n");
+  const summary = await compact({
+    systemPrompt: "system prompt",
+    previousSummary: "previous checkpoint",
+    messages,
+    instructions: "focus on files",
+    details: { readFiles: ["src/a.ts"], modifiedFiles: ["src/b.ts"] },
+  });
   const summaryInput = model.actCalls[0]?.getMessagesArray().at(-1)?.toString() ?? "";
 
-  assertStringIncludes(compactedText, '<skill_content name="docs">');
-  assertStringIncludes(compactedText, "new docs instructions");
-  assertEquals(compactedText.includes("old docs instructions"), false);
-  assertEquals((compactedText.match(/<skill_content name="docs">/g) ?? []).length, 1);
-  assertEquals(summaryInput.includes("<skill_content"), false);
-
-  const messages = snapshot(compacted);
-  const skillIndex = messages.findIndex(([, text]) => text.includes('<skill_content name="docs">'));
-  const recentIndex = messages.findIndex(([, text]) => text.includes("fourth"));
-  assert(skillIndex !== -1);
-  assert(recentIndex !== -1);
-  assert(skillIndex < recentIndex);
-  assertEquals(messages[0], ["system", "system prompt"]);
-  assertEquals(messages[1], ["user", "[Earlier conversation summary]\nshort summary"]);
+  assertStringIncludes(summary, "short summary");
+  assertStringIncludes(summary, '<skill_content name="docs">');
+  assertStringIncludes(summary, "new docs instructions");
+  assertEquals(summary.includes("old docs instructions"), false);
+  assertStringIncludes(summary, "<read-files>\nsrc/a.ts\n</read-files>");
+  assertStringIncludes(summary, "<modified-files>\nsrc/b.ts\n</modified-files>");
+  assertStringIncludes(summaryInput, "Goal");
+  assertStringIncludes(summaryInput, "Previous checkpoint summary:");
+  assertStringIncludes(summaryInput, "Additional user compaction instructions:");
 });
 
-Deno.test("createSummaryCompactor leaves chats without skill content unchanged apart from normal summary", async () => {
-  const chat = Chat.empty();
-  chat.replaceSystemPrompt("system prompt");
-  for (
-    const [role, text] of [
-      ["user", "one"],
-      ["assistant", "two"],
-      ["user", "three"],
-      ["assistant", "four"],
-      ["user", "five"],
-      ["assistant", "six"],
-      ["user", "seven"],
-      ["assistant", "eight"],
-    ] as const
-  ) {
-    chat.append(ChatMessage.from(rawMessage(role, text)));
-  }
-
+Deno.test("createSummaryCompactor truncates large tool output in summary input", async () => {
   const model = new FakeSummaryModel();
-  const compacted = await createSummaryCompactor(model as unknown as LLM)(chat);
+  const compact = createSummaryCompactor(model as unknown as LLM, undefined, 12);
 
-  assertEquals(snapshot(compacted), [
-    ["system", "system prompt"],
-    ["user", "[Earlier conversation summary]\nshort summary"],
-    ["user", "three"],
-    ["assistant", "four"],
-    ["user", "five"],
-    ["assistant", "six"],
-    ["user", "seven"],
-    ["assistant", "eight"],
-  ]);
+  await compact({
+    systemPrompt: "system prompt",
+    messages: [rawToolMessage("abcdefghijklmnopqrstuvwxyz")],
+    details: { readFiles: [], modifiedFiles: [] },
+  });
+
+  const summaryInput = model.actCalls[0]?.getMessagesArray().at(-1)?.toString() ?? "";
+  assertStringIncludes(summaryInput, "abcdefghijkl");
+  assertStringIncludes(summaryInput, "[tool result truncated at 12 chars]");
+  assertEquals(summaryInput.includes("mnopqrstuvwxyz"), false);
 });

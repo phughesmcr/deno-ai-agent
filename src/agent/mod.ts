@@ -16,12 +16,22 @@ export {
 } from "./subagents.ts";
 export {
   type ModelActObserver,
+  type SessionCompactionResult,
   SessionManager,
   type SessionStatus,
   type SessionTurnResult,
 } from "./context/session.ts";
-export { FORMAT_VERSION, type SessionFile, SessionStore } from "./context/session-store.ts";
-export { createSummaryCompactor } from "./context/compactor.ts";
+export {
+  FORMAT_VERSION,
+  type SessionCompactionEntry,
+  type SessionEntry,
+  type SessionFileDetails,
+  type SessionHeader,
+  type SessionLog,
+  type SessionMessageEntry,
+  SessionStore,
+} from "./context/session-store.ts";
+export { createSummaryCompactor, type SummaryCompactionInput, type SummaryCompactor } from "./context/compactor.ts";
 export {
   type AgentAction,
   type AgentToolParams,

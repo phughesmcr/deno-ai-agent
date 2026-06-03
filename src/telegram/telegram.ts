@@ -59,6 +59,12 @@ function sessionArg(ctx: TelegramContext): string | undefined {
   return ctx.message?.text?.split(/\s+/)[1];
 }
 
+function commandRest(ctx: TelegramContext): string | undefined {
+  const text = ctx.message?.text ?? "";
+  const rest = text.replace(/^\/\S+\s*/, "").trim();
+  return rest.length > 0 ? rest : undefined;
+}
+
 const PENDING_INTERACTION_HINT = "Please resolve the pending question or approval first.";
 
 /**
@@ -191,6 +197,11 @@ export function createTelegramManager({
   bot.command("stats", async (ctx: TelegramContext) => {
     if (blockIfInteractionPending(ctx)) return;
     await ctx.reply(await commands.stats());
+  });
+
+  bot.command("compact", async (ctx: TelegramContext) => {
+    if (blockIfInteractionPending(ctx)) return;
+    await ctx.reply(await commands.compact(commandRest(ctx)));
   });
 
   bot.command("fork", async (ctx: TelegramContext) => {
