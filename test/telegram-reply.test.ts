@@ -48,7 +48,7 @@ Deno.test("sendModelTextReply sends MarkdownV2 with reply parameters", async () 
 Deno.test("sendModelTextReply formats thinking per reply chunk", async () => {
   const sender = new FakeSender();
 
-  await sendModelTextReply(sender, ["<think>a</think>First", "<think>b</think>Second"], 42, 99);
+  await sendModelTextReply(sender, ["<redacted_thinking>a</redacted_thinking>First", "<redacted_thinking>b</redacted_thinking>Second"], 42, 99);
 
   assertEquals(sender.calls, [
     {
@@ -66,7 +66,7 @@ Deno.test("sendModelTextReply falls back to plain text on Telegram 400", async (
   const sender = new FakeSender();
   sender.failures = [telegramError("bad markdown", 400)];
 
-  await sendModelTextReply(sender, "<think>secret</think>Hello *world*", 7, 11);
+  await sendModelTextReply(sender, "<redacted_thinking>secret</redacted_thinking>Hello *world*", 7, 11);
 
   assertEquals(sender.calls, [
     {
@@ -91,7 +91,7 @@ Deno.test("sendModelTextReply plain fallback strips thinking per reply chunk", a
   const sender = new FakeSender();
   sender.failures = [telegramError("bad markdown", 400)];
 
-  await sendModelTextReply(sender, ["<think>a</think>First", "<think>b</think>Second"], 7, 11);
+  await sendModelTextReply(sender, ["<redacted_thinking>a</redacted_thinking>First", "<redacted_thinking>b</redacted_thinking>Second"], 7, 11);
 
   assertEquals(sender.calls, [
     {

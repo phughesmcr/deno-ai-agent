@@ -2,6 +2,7 @@ import { Chat, ChatMessage, type ChatMessageData, type LLM, type Tool, type Tool
 
 import { logDebug } from "../../shared/log.ts";
 import { traceSpan } from "../../shared/otel.ts";
+import { getActReasoningParsing } from "../../shared/reasoning.ts";
 import type { SummaryCompactor } from "./compactor.ts";
 import type {
   SessionCompactionEntry,
@@ -304,6 +305,11 @@ export class SessionManager {
     let firstTokenMs: number | undefined;
 
     await this.#model.act(this.#snapshot(), tools, {
+      allowParallelToolExecution: true,
+      contextOverflowPolicy: "stopAtLimit",
+      maxTokens: 4096,
+      maxPredictionRounds: 30,
+      reasoningParsing: getActReasoningParsing(),
       onMessage: (msg) => {
         observer?.onMessage();
         const { message, persisted } = this.#appendAssistant(msg);

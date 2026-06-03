@@ -50,5 +50,8 @@ export function preprocessSystemPrompt(raw: string, workspacePath: string): stri
     result += TOOL_NOTES;
   }
 
+  const prepend = Deno.env.get("PREPEND_SYSTEM_PROMPT");
+  if (prepend) result = prepend + result;
+
   return result;
 }

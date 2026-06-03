@@ -18,3 +18,17 @@ Deno.test("preprocessSystemPrompt substitutes tool names and injects workspace p
   assertStringIncludes(out, "`skill`");
   assertEquals(out.includes("`todo_write`"), false);
 });
+
+Deno.test("preprocessSystemPrompt prepends PREPEND_SYSTEM_PROMPT when set", () => {
+  const key = "PREPEND_SYSTEM_PROMPT";
+  const previous = Deno.env.get(key);
+  try {
+    Deno.env.set(key, "<|think|>");
+    const out = preprocessSystemPrompt("body", "/workspace/.silas");
+    assertEquals(out.startsWith("<|think|>"), true);
+    assertStringIncludes(out, "body");
+  } finally {
+    if (previous === undefined) Deno.env.delete(key);
+    else Deno.env.set(key, previous);
+  }
+});

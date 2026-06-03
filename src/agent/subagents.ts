@@ -1,5 +1,6 @@
 import { Chat, type Tool } from "@lmstudio/sdk";
 
+import { type ActReasoningParsing, getActReasoningParsing } from "../shared/reasoning.ts";
 import type { SkillManager } from "./skills/mod.ts";
 import type { ToolContext } from "./tools/context.ts";
 import { createFindTool } from "./tools/find.ts";
@@ -68,6 +69,16 @@ export interface SubagentActMessage {
 
 /** Minimal options accepted by the subagent model adapter. */
 export interface SubagentActOptions {
+  /** Whether to allow parallel tool execution. */
+  allowParallelToolExecution?: boolean;
+  /** What to do when the context overflows. */
+  contextOverflowPolicy?: "truncateMiddle" | "stopAtLimit" | "rollingWindow";
+  /** Maximum number of tokens to generate. */
+  maxTokens?: number;
+  /** Maximum number of prediction rounds to allow. */
+  maxPredictionRounds?: number;
+  /** LM Studio reasoning delimiter parsing (see `getActReasoningParsing`). */
+  reasoningParsing?: ActReasoningParsing;
   /** Called for each emitted message. */
   onMessage?: (message: SubagentActMessage) => void;
   /** Abort signal for cancellation. */
@@ -330,6 +341,11 @@ export class SubagentManager implements SubagentPort {
 
     let result = "";
     await this.#model.act(chat, createReadOnlySubagentTools(this.#workspace, this.#skills), {
+      allowParallelToolExecution: true,
+      contextOverflowPolicy: "truncateMiddle",
+      maxTokens: 4096,
+      maxPredictionRounds: 30,
+      reasoningParsing: getActReasoningParsing(),
       onMessage: (message) => {
         if (message.getRole() !== "assistant") return;
         const text = message.getText();

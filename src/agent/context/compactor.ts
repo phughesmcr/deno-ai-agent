@@ -1,5 +1,6 @@
 import { Chat, type ChatMessageData, type LLM, type ToolCallRequest } from "@lmstudio/sdk";
 
+import { getActReasoningParsing } from "../../shared/reasoning.ts";
 import type { SessionFileDetails } from "./session-store.ts";
 
 const SKILL_CONTENT_PATTERN = /<skill_content name="([^"]+)">[\s\S]*?<\/skill_content>/g;
@@ -171,6 +172,11 @@ export function createSummaryCompactor(
     summaryChat.append("user", prompt);
 
     await model.act(summaryChat, [], {
+      reasoningParsing: getActReasoningParsing(),
+      allowParallelToolExecution: true,
+      contextOverflowPolicy: "truncateMiddle",
+      maxTokens: 4096,
+      maxPredictionRounds: 10,
       onMessage: (msg) => {
         summary = msg.getText();
       },
