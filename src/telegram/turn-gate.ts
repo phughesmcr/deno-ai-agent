@@ -12,24 +12,24 @@ export interface ActiveTurn {
 
 /** Tracks the one model turn that can be aborted out-of-band from Telegram commands. */
 export class ActiveTurnRegistry {
-  #active: ActiveTurn | undefined;
+  private _active: ActiveTurn | undefined;
 
   /** Sets the active turn and returns an idempotent cleanup function. */
   setActiveTurn(turn: ActiveTurn): () => void {
-    this.#active = turn;
+    this._active = turn;
     return () => {
-      if (this.#active === turn) this.#active = undefined;
+      if (this._active === turn) this._active = undefined;
     };
   }
 
   /** Active model-act signal, if a turn is currently running. */
   get actSignal(): AbortSignal | undefined {
-    return this.#active?.actController.signal;
+    return this._active?.actController.signal;
   }
 
   /** Aborts the active turn, if present. */
   abortActiveTurn(): boolean {
-    const turn = this.#active;
+    const turn = this._active;
     if (!turn) return false;
     turn.actController.abort();
     turn.approvalController.abort();

@@ -126,7 +126,7 @@ Deno.test("Telegram approval gate ignores stale callbacks while pending", async 
   assertEquals(decision.reason, "approved");
 });
 
-Deno.test("Telegram approval gate denies wrong-user callbacks", async () => {
+Deno.test("Telegram approval gate leaves pending approval untouched for wrong-user callbacks", async () => {
   const gate = createTelegramApprovalGate();
   const ctx = fakeContext();
   gate.setTurnContext({ ctx, signal: new AbortController().signal });
@@ -134,15 +134,24 @@ Deno.test("Telegram approval gate denies wrong-user callbacks", async () => {
   const pending = gate.requestApproval(request());
   await Promise.resolve();
 
+  const wrongUserCtx = fakeContext();
   await gate.handleCallback({
-    ...fakeContext(),
+    ...wrongUserCtx,
     from: { id: 7 },
     callbackQuery: { data: encodeApprovalCallback("approval-1", "approve") },
   });
 
+  assertEquals(gate.isPending(), true);
+  assertEquals(wrongUserCtx.callbackAnswers.at(-1), "Not authorized.");
+
+  await gate.handleCallback({
+    ...fakeContext(),
+    callbackQuery: { data: encodeApprovalCallback("approval-1", "deny") },
+  });
+
   const decision = await pending;
   assertEquals(decision.approved, false);
-  assertEquals(decision.reason, "wrong_user");
+  assertEquals(decision.reason, "denied");
 });
 
 Deno.test("Telegram approval gate denies when no turn context is active", async () => {

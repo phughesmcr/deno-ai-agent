@@ -1,8 +1,9 @@
-import type { Context } from "grammy";
+// deno-lint-ignore-file camelcase -- Telegram API field names are snake_case.
 import { readTodoFile, type TodoDisplayPort, type TodoUpdatePayload } from "../agent/mod.ts";
 import { logDebug } from "../shared/mod.ts";
 import { formatTodoListMarkdown, formatTodoListPlain } from "./todo-list-format.ts";
-import type { TelegramContext } from "./telegram.ts";
+
+type TodoEditMessageOptions = { parse_mode?: "MarkdownV2"; message_thread_id?: number };
 
 /**
  * Minimal Telegram context for todo status messages.
@@ -18,11 +19,10 @@ export interface TodoDisplayContext {
       chatId: number,
       messageId: number,
       text: string,
-      options?: unknown,
+      options?: TodoEditMessageOptions,
     ): Promise<unknown>;
   };
   chat?: { id?: number };
-  // deno-lint-ignore camelcase -- Telegram API field name
   message?: { message_thread_id?: number };
 }
 
@@ -32,12 +32,14 @@ function isTelegramBadRequest(error: unknown): boolean {
   );
 }
 
-type ReplyContext = TodoDisplayContext;
+function isTodoDisplayContext(ctx: unknown): ctx is TodoDisplayContext {
+  return typeof ctx === "object" && ctx !== null && "reply" in ctx && "api" in ctx;
+}
 
 type StoredTelegramMeta = { chatId: number; threadId?: number; messageId: number };
 
 async function sendOrEditTodoMessage(
-  ctx: ReplyContext,
+  ctx: TodoDisplayContext,
   textMarkdown: string,
   textPlain: string,
   telegram: StoredTelegramMeta | undefined,
@@ -55,7 +57,7 @@ async function sendOrEditTodoMessage(
         {
           parse_mode: "MarkdownV2",
           message_thread_id: messageThreadId,
-        } as Parameters<Context["api"]["editMessageText"]>[3],
+        },
       );
       return {
         chatId: telegram.chatId,
@@ -71,7 +73,7 @@ async function sendOrEditTodoMessage(
             textPlain,
             {
               message_thread_id: messageThreadId,
-            } as Parameters<Context["api"]["editMessageText"]>[3],
+            },
           );
           return {
             chatId: telegram.chatId,
@@ -122,13 +124,16 @@ export function createTelegramTodoDisplayPort(deps: {
     meta: { chatId: number; threadId?: number; messageId: number },
   ) => Promise<void>;
 }): TodoDisplayPort {
-  let turn: { ctx: TelegramContext; signal: AbortSignal } | undefined;
+  let turn: { ctx: TodoDisplayContext; signal: AbortSignal } | undefined;
   const editChains = new Map<string, Promise<void>>();
 
   const port: TodoDisplayPort = {
     isAvailable: () => true,
     setTurnContext(target: { ctx: unknown; signal: AbortSignal }): void {
-      turn = target as { ctx: TelegramContext; signal: AbortSignal };
+      if (!isTodoDisplayContext(target.ctx)) {
+        throw new Error("Todo display requires a Telegram context");
+      }
+      turn = { ctx: target.ctx, signal: target.signal };
     },
     clearTurnContext(): void {
       turn = undefined;

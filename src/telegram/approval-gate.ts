@@ -7,6 +7,7 @@ import {
   denyDecision,
   logDebug,
 } from "../shared/mod.ts";
+import { createPendingInteractionStore } from "./pending-interaction.ts";
 
 /** Telegram approval button action. */
 export type ApprovalAction = "approve" | "deny";
@@ -49,14 +50,6 @@ export interface TelegramTurnTarget {
   /** Telegram message context for the active model turn. */
   ctx: TelegramApprovalTurnContext;
   /** Signal cancelled when the active turn shuts down. */
-  signal: AbortSignal;
-}
-
-interface PendingApproval {
-  request: ApprovalRequest;
-  resolve: (decision: ApprovalDecision) => void;
-  timeoutId: ReturnType<typeof setTimeout>;
-  abortHandler: () => void;
   signal: AbortSignal;
 }
 
@@ -112,28 +105,24 @@ function approvalText(request: ApprovalRequest): string {
 /** Telegram inline-keyboard implementation of the app-layer approval gate. */
 export function createTelegramApprovalGate(): TelegramApprovalGate {
   let turn: TelegramTurnTarget | undefined;
-  let pending: PendingApproval | undefined;
-
-  function settle(reason: string, approved: boolean, decidedBy?: string): void {
-    const current = pending;
-    if (!current) return;
-    pending = undefined;
-    clearTimeout(current.timeoutId);
-    current.signal.removeEventListener("abort", current.abortHandler);
-    const decision = approved ? approveDecision(decidedBy) : denyDecision(reason, decidedBy);
+  const pending = createPendingInteractionStore<ApprovalRequest, ApprovalDecision>((request, decision) => {
     logDebug("approval.decision", {
-      operation: current.request.operation,
-      risk: current.request.risk,
-      sessionId: current.request.sessionId,
-      turnId: current.request.turnId,
+      operation: request.operation,
+      risk: request.risk,
+      sessionId: request.sessionId,
+      turnId: request.turnId,
       approved: String(decision.approved),
       reason: decision.reason,
     });
-    current.resolve(decision);
+  });
+
+  function settle(reason: string, approved: boolean, decidedBy?: string): void {
+    const decision = approved ? approveDecision(decidedBy) : denyDecision(reason, decidedBy);
+    pending.settle(decision);
   }
 
   return {
-    isPending: () => pending !== undefined,
+    isPending: () => pending.isPending(),
     setTurnContext(target: TelegramTurnTarget): void {
       turn = target;
     },
@@ -142,19 +131,28 @@ export function createTelegramApprovalGate(): TelegramApprovalGate {
     },
     async requestApproval(rawRequest: ApprovalRequest, signal?: AbortSignal): Promise<ApprovalDecision> {
       if (!turn || turn.signal.aborted) return denyDecision("missing_telegram_turn");
-      if (pending) return denyDecision("approval_already_pending");
+      if (pending.isPending()) return denyDecision("approval_already_pending");
 
       const request = { ...rawRequest, id: requestId(rawRequest) };
       const effectiveSignal = signal ?? turn.signal;
       if (effectiveSignal.aborted) return denyDecision("cancelled");
 
       return await new Promise<ApprovalDecision>((resolve) => {
-        const abortHandler = (): void => settle("cancelled", false);
-        const timeoutId = setTimeout(() => settle("timeout", false), request.timeoutMs);
-        pending = { request, resolve, timeoutId, abortHandler, signal: effectiveSignal };
-        effectiveSignal.addEventListener("abort", abortHandler, { once: true });
+        pending.begin({
+          request,
+          signal: effectiveSignal,
+          timeoutMs: request.timeoutMs,
+          resolve,
+          abortResult: () => denyDecision("cancelled"),
+          timeoutResult: () => denyDecision("timeout"),
+        });
 
-        console.log(`Approval requested: ${request.operation} → ${request.target}`);
+        logDebug("approval.requested", {
+          operation: request.operation,
+          risk: request.risk,
+          sessionId: request.sessionId,
+          turnId: request.turnId,
+        });
         turn?.ctx.reply(approvalText(request), {
           reply_markup: keyboard(request.id),
           message_thread_id: turn.ctx.message?.["message_thread_id"],
@@ -171,7 +169,7 @@ export function createTelegramApprovalGate(): TelegramApprovalGate {
       if (!parsed) return false;
       logDebug("approval.callback", { id: parsed.id, action: parsed.action });
 
-      const current = pending;
+      const current = pending.current();
       const actorId = ctx.from?.id;
       if (!current) {
         await ctx.answerCallbackQuery({ text: "This approval has expired." });
@@ -181,7 +179,6 @@ export function createTelegramApprovalGate(): TelegramApprovalGate {
 
       if (actorId !== ctx.config.adminId) {
         await ctx.answerCallbackQuery({ text: "Not authorized.", show_alert: true });
-        settle("wrong_user", false, actorId === undefined ? undefined : String(actorId));
         return true;
       }
 

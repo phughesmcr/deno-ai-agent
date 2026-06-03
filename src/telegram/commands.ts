@@ -39,12 +39,12 @@ function errorMessage(error: unknown): string {
  * @internal
  */
 export class TelegramCommandHandler {
-  readonly #session: CommandSession;
-  readonly #todosDir?: string;
+  private readonly _session: CommandSession;
+  private readonly _todosDir?: string;
 
   constructor(session: SessionManager, todosDir?: string) {
-    this.#session = session;
-    this.#todosDir = todosDir;
+    this._session = session;
+    this._todosDir = todosDir;
   }
 
   help(): string {
@@ -52,21 +52,21 @@ export class TelegramCommandHandler {
   }
 
   newSession(): string {
-    const id = this.#session.newSession();
+    const id = this._session.newSession();
     return `New session.\nID: ${id}\n\nUse /save to persist.`;
   }
 
   session(): string {
-    return formatSessionStatus(this.#session.status());
+    return formatSessionStatus(this._session.status());
   }
 
   async stats(): Promise<string> {
-    return formatSessionStatus(await this.#session.refreshStatus());
+    return formatSessionStatus(await this._session.refreshStatus());
   }
 
   async compact(instructions?: string): Promise<string> {
     try {
-      const result = await this.#session.compact(instructions);
+      const result = await this._session.compact(instructions);
       const state = result.compacted ? "Compacted." : "Nothing to compact.";
       return [
         state,
@@ -80,9 +80,9 @@ export class TelegramCommandHandler {
 
   async fork(): Promise<string> {
     try {
-      const { fromId, toId } = await this.#session.fork();
-      if (this.#todosDir) {
-        await copyTodosForSession(this.#todosDir, fromId, toId);
+      const { fromId, toId } = await this._session.fork();
+      if (this._todosDir) {
+        await copyTodosForSession(this._todosDir, fromId, toId);
       }
       return `Forked.\nFrom: ${fromId}\nTo: ${toId}\n\nUse /save on the new branch when ready.`;
     } catch (error) {
@@ -93,8 +93,8 @@ export class TelegramCommandHandler {
   async load(id?: string): Promise<string> {
     if (!id) return "Usage: /load <session-id>\n\n/list shows saved ids.";
     try {
-      await this.#session.load(id);
-      return `Loaded session ${id}.\n\n${formatSessionStatus(this.#session.status())}`;
+      await this._session.load(id);
+      return `Loaded session ${id}.\n\n${formatSessionStatus(this._session.status())}`;
     } catch (error) {
       return `Load failed: ${errorMessage(error)}`;
     }
@@ -102,7 +102,7 @@ export class TelegramCommandHandler {
 
   async save(): Promise<string> {
     try {
-      const id = await this.#session.save();
+      const id = await this._session.save();
       return `Saved.\nID: ${id}`;
     } catch (error) {
       return `Save failed: ${errorMessage(error)}`;
@@ -110,9 +110,9 @@ export class TelegramCommandHandler {
   }
 
   async list(): Promise<string> {
-    const sessions = await this.#session.list();
+    const sessions = await this._session.list();
     if (sessions.length === 0) return "No saved sessions. /save writes the current chat.";
-    const current = this.#session.id;
+    const current = this._session.id;
     const lines = sessions.map((id) => (id === current ? `${id} (current)` : id));
     return `Saved sessions:\n${lines.join("\n")}`;
   }
