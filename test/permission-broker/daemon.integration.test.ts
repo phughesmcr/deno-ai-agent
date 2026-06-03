@@ -1,6 +1,7 @@
 import * as path from "@std/path";
 import { assertEquals } from "jsr:@std/assert@1";
 import { formatControlMessage, parseControlMessage } from "../../src/permission-broker/control-protocol.ts";
+import { ControlSocketSession } from "../../src/permission-broker/control-socket.ts";
 import { type BrokerDaemonEnv, PermissionBrokerDaemon } from "../../src/permission-broker/daemon.ts";
 import { JsonlConnection } from "../../src/permission-broker/jsonl.ts";
 
@@ -162,6 +163,59 @@ Deno.test({
 
     const runResp = await brokerJsonl.readLine();
     assertEquals(JSON.parse(runResp!).result, "allow");
+  } finally {
+    controlConn.close();
+    brokerConn.close();
+    controller.abort();
+    await done;
+    await cleanupEnv(env);
+  }
+});
+
+Deno.test({
+  name: "broker daemon handles two sequential control prompts",
+  ignore: !integrationEnabled(),
+}, async () => {
+  const { env, controller, done } = await makeEnv(true);
+
+  const controlConn = await Deno.connect({ transport: "unix", path: env.controlPath });
+  const brokerConn = await Deno.connect({ transport: "unix", path: env.brokerPath });
+  const control = new ControlSocketSession();
+  control.attach(controlConn);
+  const brokerJsonl = new JsonlConnection(brokerConn);
+
+  try {
+    await control.writeLine(formatControlMessage({ type: "register", pid: 42 }));
+    await new Promise((r) => setTimeout(r, 20));
+
+    for (const [id, value] of [[10, "/bin/sh"], [11, "/bin/ls"]] as const) {
+      await brokerJsonl.writeLine(JSON.stringify({
+        v: 1,
+        pid: 1,
+        id,
+        datetime: "2025-01-01T00:00:00.000Z",
+        permission: "run",
+        value,
+      }));
+
+      const promptLine = await control.readLine();
+      assertEquals(parseControlMessage(promptLine!).type, "prompt");
+      const prompt = parseControlMessage(promptLine!);
+      if (prompt.type !== "prompt") throw new Error("expected prompt");
+
+      await control.writeLine(
+        formatControlMessage({
+          type: "decision",
+          requestId: prompt.requestId,
+          result: "allow",
+          grant: "once",
+        }),
+      );
+
+      const runResp = await brokerJsonl.readLine();
+      assertEquals(JSON.parse(runResp!).id, id);
+      assertEquals(JSON.parse(runResp!).result, "allow");
+    }
   } finally {
     controlConn.close();
     brokerConn.close();

@@ -2,7 +2,14 @@ import { type Tool, tool } from "@lmstudio/sdk";
 import * as path from "@std/path";
 import { z } from "zod/v3";
 
-import { approveToolOperation, displayPath, resolvePath, type ToolContext } from "./context.ts";
+import { grantBrokerRunForCommands } from "../../permission-broker/mod.ts";
+import {
+  approveHostAwareToolOperation,
+  displayPath,
+  grantBrokerHostRead,
+  resolveHostAwarePath,
+  type ToolContext,
+} from "./context.ts";
 import {
   appendSearchNotices,
   commandExists,
@@ -162,7 +169,9 @@ export function createGrepTool(ctx: ToolContext): Tool {
       }KB (whichever is hit first).`,
     parameters: {
       pattern: z.string().describe("Search pattern (regex or literal string)"),
-      path: z.string().optional().describe("Directory or file to search (default: workspace root)"),
+      path: z.string().optional().describe(
+        "Directory or file to search: relative (workspace), or absolute / ~/... for host paths outside the workspace",
+      ),
       glob: z.string().optional().describe("Filter files by glob pattern"),
       ignoreCase: z.boolean().optional().describe("Case-insensitive search"),
       literal: z.boolean().optional().describe("Treat pattern as literal string"),
@@ -171,34 +180,38 @@ export function createGrepTool(ctx: ToolContext): Tool {
     },
     implementation: async ({ pattern, path: searchDir, glob, ignoreCase, literal, context, limit }) => {
       const effectiveLimit = Math.max(1, limit ?? DEFAULT_LIMIT);
+      const { absolutePath, outsideWorkspace } = await resolveHostAwarePath(ctx, searchDir ?? ".");
+      const display = displayPath(ctx, absolutePath);
+      await approveHostAwareToolOperation(ctx, {
+        operation: "grep",
+        absolutePath,
+        outsideWorkspace,
+        display,
+        summary: `search text, limit=${effectiveLimit}, context=${context ?? 0}`,
+      });
+      if (outsideWorkspace) await grantBrokerHostRead(absolutePath, ctx.signal);
+      await grantBrokerRunForCommands(["rg"], ctx.signal);
+
       let searchPath: string;
       let targetIsFile = false;
       try {
-        const resolved = await resolvePath(ctx, searchDir ?? ".");
-        const stat = await Deno.stat(resolved);
+        const stat = await Deno.stat(absolutePath);
         if (!stat.isDirectory && !stat.isFile) {
-          throw new Error(`Not a file or directory: ${displayPath(ctx, resolved)}`);
+          throw new Error(`Not a file or directory: ${display}`);
         }
-        searchPath = resolved;
+        searchPath = absolutePath;
         targetIsFile = stat.isFile;
       } catch (error) {
         if (error instanceof Deno.errors.NotFound) throw new Error(`Path not found: ${searchDir ?? "."}`);
         throw error;
       }
 
-      await approveToolOperation(ctx, {
-        operation: "grep",
-        target: displayPath(ctx, searchPath),
-        risk: "low",
-        summary: `search text, limit=${effectiveLimit}, context=${context ?? 0}`,
-      });
-
       let output: string;
       let usedRg = false;
       let linesTruncated = false;
       let matchLimitReached = false;
 
-      if (await commandExists("rg")) {
+      if (await commandExists("rg", ctx.signal)) {
         const result = await grepWithRg(searchPath, pattern, {
           glob,
           ignoreCase,

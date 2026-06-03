@@ -1,7 +1,7 @@
 import { type Tool, tool } from "@lmstudio/sdk";
 import { z } from "zod/v3";
 
-import { grantBrokerRunValues, shouldRunPermissionControlClient } from "../../permission-broker/mod.ts";
+import { grantBrokerRunForCommands } from "../../permission-broker/mod.ts";
 import { approveToolOperation, type ToolContext } from "./context.ts";
 import { readStreamToString } from "./search-support.ts";
 import { DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES, formatSize, truncateTail } from "./truncate.ts";
@@ -77,9 +77,7 @@ export function createTypeScriptReplTool(ctx: ToolContext): Tool {
         risk: "high",
         summary: `run typescript, timeout=${timeoutSeconds}s, ${typescript.length} bytes`,
       });
-      if (shouldRunPermissionControlClient()) {
-        await grantBrokerRunValues([Deno.execPath()]);
-      }
+      await grantBrokerRunForCommands([Deno.execPath()], ctx.signal);
 
       let scriptPath: string | undefined;
       const timeoutController = new AbortController();

@@ -14,6 +14,14 @@ export type PermissionPromptResult = {
   grant?: "once" | "session";
 };
 
+/** Result of handling a Telegram permission prompt inline button. */
+export interface PermissionCallbackDispatch {
+  /** True when the callback was a permission prompt button (consumed). */
+  handled: boolean;
+  /** Optional Telegram answerCallbackQuery payload. */
+  answer?: { text?: string; show_alert?: boolean };
+}
+
 /** Minimal Telegram context for permission prompts. */
 export interface PermissionPromptTurnContext {
   config: { adminId: number; isAdmin: boolean };
@@ -42,8 +50,12 @@ export interface PermissionPromptPort {
   setTurnContext(target: PermissionPromptTurnTarget): void;
   clearTurnContext(): void;
   prompt(request: PermissionPromptRequest, signal?: AbortSignal): Promise<PermissionPromptResult>;
-  handleCallback(data: string, actorId: number | undefined, adminId: number): Promise<boolean>;
-  abortPending(reason?: string): void;
+  handleCallback(
+    data: string,
+    actorId: number | undefined,
+    adminId: number,
+  ): Promise<PermissionCallbackDispatch>;
+  abortPending(): void;
 }
 
 /** Port used when the control channel is unavailable. */
@@ -53,7 +65,7 @@ export function createUnavailablePermissionPromptPort(): PermissionPromptPort {
     setTurnContext: () => {},
     clearTurnContext: () => {},
     prompt: () => Promise.resolve({ result: "deny" }),
-    handleCallback: () => Promise.resolve(false),
+    handleCallback: () => Promise.resolve({ handled: false }),
     abortPending: () => {},
   };
 }

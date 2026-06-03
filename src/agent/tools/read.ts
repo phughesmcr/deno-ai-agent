@@ -1,9 +1,13 @@
 import { type Tool, tool } from "@lmstudio/sdk";
 import { z } from "zod/v3";
 
-import { grantBrokerReadPath, shouldRunPermissionControlClient } from "../../permission-broker/mod.ts";
-import { DEFAULT_APPROVAL_TIMEOUT_MS } from "../../shared/approval.ts";
-import { approveToolOperation, displayPath, resolveReadPath, type ToolContext } from "./context.ts";
+import {
+  approveHostAwareToolOperation,
+  displayPath,
+  grantBrokerHostRead,
+  resolveReadPath,
+  type ToolContext,
+} from "./context.ts";
 import { DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES, formatSize, truncateHead } from "./truncate.ts";
 
 const IMAGE_EXTENSIONS = new Set([".jpg", ".jpeg", ".png", ".gif", ".webp"]);
@@ -41,16 +45,14 @@ export function createReadTool(ctx: ToolContext): Tool {
       if (outsideWorkspace) {
         console.log(`read (host): ${absolutePath} — waiting for Telegram approval`);
       }
-      await approveToolOperation(ctx, {
+      await approveHostAwareToolOperation(ctx, {
         operation: "read",
-        target: outsideWorkspace ? absolutePath : display,
-        risk: outsideWorkspace ? "high" : "low",
+        absolutePath,
+        outsideWorkspace,
+        display,
         summary: outsideWorkspace ? `host ${rangeSummary}` : rangeSummary,
-        timeoutMs: outsideWorkspace ? DEFAULT_APPROVAL_TIMEOUT_MS * 2 : undefined,
       });
-      if (outsideWorkspace && shouldRunPermissionControlClient()) {
-        await grantBrokerReadPath(absolutePath);
-      }
+      if (outsideWorkspace) await grantBrokerHostRead(absolutePath);
 
       let text: string;
       try {

@@ -163,6 +163,47 @@ Deno.test("Telegram approval gate denies when no turn context is active", async 
   assertEquals(decision.reason, "missing_telegram_turn");
 });
 
+Deno.test("Telegram approval gate handles two sequential approvals", async () => {
+  const gate = createTelegramApprovalGate();
+  const ctx = fakeContext();
+  gate.setTurnContext({ ctx, signal: new AbortController().signal });
+
+  const first = gate.requestApproval(request({ id: "approval-a", operation: "list" }));
+  await Promise.resolve();
+  await gate.handleCallback({
+    ...fakeContext(),
+    callbackQuery: { data: encodeApprovalCallback("approval-a", "approve") },
+  });
+  assertEquals((await first).approved, true);
+  assertEquals(gate.isPending(), false);
+
+  const second = gate.requestApproval(request({ id: "approval-b", operation: "find" }));
+  await Promise.resolve();
+  assertEquals(ctx.replies.length, 2);
+
+  await gate.handleCallback({
+    ...fakeContext(),
+    callbackQuery: { data: encodeApprovalCallback("approval-b", "approve") },
+  });
+  assertEquals((await second).approved, true);
+  assertEquals(gate.isPending(), false);
+});
+
+Deno.test("Telegram approval gate abortPending settles in-flight approval", async () => {
+  const gate = createTelegramApprovalGate();
+  const ctx = fakeContext();
+  gate.setTurnContext({ ctx, signal: new AbortController().signal });
+
+  const pending = gate.requestApproval(request());
+  await Promise.resolve();
+  gate.abortPending();
+
+  const decision = await pending;
+  assertEquals(decision.approved, false);
+  assertEquals(decision.reason, "cancelled");
+  assertEquals(gate.isPending(), false);
+});
+
 Deno.test("Telegram approval gate denies when the turn is aborted", async () => {
   const gate = createTelegramApprovalGate();
   const controller = new AbortController();

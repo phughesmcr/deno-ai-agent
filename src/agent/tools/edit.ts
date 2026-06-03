@@ -1,7 +1,13 @@
 import { type Tool, tool } from "@lmstudio/sdk";
 import { z } from "zod/v3";
 
-import { approveToolOperation, displayPath, resolvePath, type ToolContext } from "./context.ts";
+import {
+  approveHostAwareToolOperation,
+  displayPath,
+  grantBrokerHostReadWrite,
+  resolveHostAwarePath,
+  type ToolContext,
+} from "./context.ts";
 import {
   applyEditsToNormalizedContent,
   detectLineEnding,
@@ -41,19 +47,24 @@ export function createEditTool(ctx: ToolContext): Tool {
     description:
       "Edit a file using exact text replacement. Each edits[].oldText must match a unique, non-overlapping region of the original file. Edits are matched against the original file, not incrementally.",
     parameters: {
-      path: z.string().describe("Path to the file to edit (relative or absolute, under workspace)"),
+      path: z.string().describe(
+        "Path to edit: relative (workspace), or absolute / ~/... for host files outside the workspace",
+      ),
       edits: z.array(editEntrySchema).describe("One or more targeted replacements"),
     },
     implementation: async (raw: EditInput) => {
       const { path: userPath, edits } = prepareEditInput(raw);
-      const absolutePath = await resolvePath(ctx, userPath);
+      const { absolutePath, outsideWorkspace } = await resolveHostAwarePath(ctx, userPath);
       const display = displayPath(ctx, absolutePath);
-      await approveToolOperation(ctx, {
+      await approveHostAwareToolOperation(ctx, {
         operation: "edit",
-        target: display,
-        risk: "medium",
+        absolutePath,
+        outsideWorkspace,
+        display,
+        workspaceRisk: "medium",
         summary: `replace ${edits.length} block(s)`,
       });
+      if (outsideWorkspace) await grantBrokerHostReadWrite(absolutePath);
 
       return await withFileMutationQueue(absolutePath, async () => {
         let rawContent: string;

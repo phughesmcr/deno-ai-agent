@@ -4,9 +4,9 @@ export { formatSessionStatus, SESSION_HELP, TelegramCommandHandler } from "./com
 export { createTelegramPermissionPromptPort } from "./grammy-permission-prompt-adapter.ts";
 export { createTelegramAskUserQuestionPort } from "./grammy-questions-adapter.ts";
 export { createTelegramTodoDisplayPort, showTodosForSession } from "./grammy-todo-display-adapter.ts";
-export { isBotCommand } from "./is-bot-command.ts";
+export { botCommandName, isBotCommand } from "./is-bot-command.ts";
 export { recordTelegramMessage } from "./metrics.ts";
 export { replyError, replyWithModelText } from "./telegram-reply.ts";
 export { createTelegramManager, type TelegramContext } from "./telegram.ts";
-export { startTelegramTypingIndicator } from "./typing-indicator.ts";
 export { ActiveTurnRegistry, withTurnMutex } from "./turn-gate.ts";
+export { startTelegramTypingIndicator } from "./typing-indicator.ts";

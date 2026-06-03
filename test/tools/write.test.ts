@@ -1,8 +1,8 @@
 import { assertEquals, assertRejects } from "jsr:@std/assert@1";
 
-import { createDenyApprovalGate } from "../../src/shared/approval.ts";
 import { createToolContext } from "../../src/agent/tools/context.ts";
 import { createWriteTool } from "../../src/agent/tools/write.ts";
+import { createDenyApprovalGate } from "../../src/shared/approval.ts";
 import { createTestWorkspace, runToolImplementation } from "./helpers.ts";
 
 Deno.test("write creates nested file", async () => {
@@ -44,6 +44,21 @@ Deno.test("write requests approval before creating a file", async () => {
     assertEquals(exists, false);
   } finally {
     await Deno.remove(dir, { recursive: true });
+  }
+});
+
+Deno.test("write creates host file outside workspace when given an absolute path", async () => {
+  const outside = await Deno.makeTempDir({ prefix: "silas-outside-" });
+  const { ctx, cleanup } = await createTestWorkspace();
+  try {
+    const file = `${outside}/host-write.txt`;
+    const tool = createWriteTool(ctx);
+    const msg = await runToolImplementation(tool, { path: file, content: "host data" });
+    assertEquals(msg.includes("Successfully wrote"), true);
+    assertEquals(await Deno.readTextFile(file), "host data");
+  } finally {
+    await cleanup();
+    await Deno.remove(outside, { recursive: true });
   }
 });
 

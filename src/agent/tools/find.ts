@@ -2,7 +2,14 @@ import { type Tool, tool } from "@lmstudio/sdk";
 import * as path from "@std/path";
 import { z } from "zod/v3";
 
-import { approveToolOperation, displayPath, resolveDirectoryPath, type ToolContext } from "./context.ts";
+import { grantBrokerRunForCommands } from "../../permission-broker/mod.ts";
+import {
+  approveHostAwareToolOperation,
+  displayPath,
+  grantBrokerHostRead,
+  resolveHostAwarePath,
+  type ToolContext,
+} from "./context.ts";
 import {
   appendSearchNotices,
   commandExists,
@@ -108,23 +115,36 @@ export function createFindTool(ctx: ToolContext): Tool {
       }KB (whichever is hit first).`,
     parameters: {
       pattern: z.string().describe("Glob pattern, e.g. '*.ts' or '**/*.json'"),
-      path: z.string().optional().describe("Directory to search (default: workspace root)"),
+      path: z.string().optional().describe(
+        "Directory to search: relative (workspace), or absolute / ~/... for host directories outside the workspace",
+      ),
       limit: z.number().optional().describe(`Maximum results (default: ${DEFAULT_LIMIT})`),
     },
     implementation: async ({ pattern, path: searchDir, limit }) => {
-      const searchPath = await resolveDirectoryPath(ctx, searchDir ?? ".");
+      const { absolutePath, outsideWorkspace } = await resolveHostAwarePath(ctx, searchDir ?? ".");
+      const display = displayPath(ctx, absolutePath);
       const effectiveLimit = limit ?? DEFAULT_LIMIT;
-      await approveToolOperation(ctx, {
+      await approveHostAwareToolOperation(ctx, {
         operation: "find",
-        target: displayPath(ctx, searchPath),
-        risk: "low",
+        absolutePath,
+        outsideWorkspace,
+        display,
         summary: `find files, limit=${effectiveLimit}`,
       });
+      ctx.signal?.throwIfAborted();
+      console.log(`find: approved, running in ${display}`);
+      if (outsideWorkspace) await grantBrokerHostRead(absolutePath, ctx.signal);
+      await grantBrokerRunForCommands(["fd"], ctx.signal);
+      ctx.signal?.throwIfAborted();
+
+      const dirStat = await Deno.stat(absolutePath);
+      if (!dirStat.isDirectory) throw new Error(`Not a directory: ${display}`);
+      const searchPath = absolutePath;
 
       let relativized: string[];
       let usedFd = false;
 
-      if (await commandExists("fd")) {
+      if (await commandExists("fd", ctx.signal)) {
         relativized = await findWithFd(searchPath, pattern, effectiveLimit, ctx.signal);
         usedFd = true;
       } else {

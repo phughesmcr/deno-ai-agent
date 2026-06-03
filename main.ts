@@ -21,6 +21,7 @@ import {
 import { ApprovalDeniedError, logDebug, traceSpan } from "./src/shared/mod.ts";
 import {
   ActiveTurnRegistry,
+  botCommandName,
   createTelegramApprovalGate,
   createTelegramAskUserQuestionPort,
   createTelegramManager,
@@ -37,7 +38,7 @@ import {
 } from "./src/telegram/mod.ts";
 
 const PENDING_INTERACTION_HINT =
-  "Please resolve the pending approval or permission prompt first (or wait for it to time out).";
+  "Please resolve the pending Telegram approval or broker permission prompt first (or wait for it to time out).";
 
 function getEnv(): { maxContextLength: number } {
   const maxContextLength = Number(Deno.env.get("CONTEXT_LENGTH"));
@@ -133,12 +134,24 @@ async function main(): Promise<void> {
     }) as Tool[];
   };
 
+  function abortActiveTurn(): boolean {
+    permissionPrompts.abortPending();
+    approvals.abortPending();
+    const aborted = activeTurns.abortActiveTurn();
+    if (aborted) {
+      console.log("Turn aborted (act, approvals, and broker prompts cancelled).");
+    }
+    return aborted;
+  }
+
+  const turnAbort = { abortActiveTurn };
+
   const telegram = createTelegramManager({
     session: agent.session,
     userQuestions,
     permissionPrompts,
     approvals,
-    turnAbort: activeTurns,
+    turnAbort,
     todosDir: workspace.todosDir,
     updateTelegramMeta: bindUpdateTelegramMeta,
   });
@@ -154,6 +167,14 @@ async function main(): Promise<void> {
   });
 
   telegram.bot.on("message", async (ctx: TelegramContext) => {
+    if (ctx.message && isBotCommand(ctx.message) && botCommandName(ctx.message) === "q") {
+      const aborted = abortActiveTurn();
+      await ctx.reply(aborted ? "Aborted current turn." : "No active turn.", {
+        message_thread_id: ctx.message.message_thread_id,
+      });
+      return;
+    }
+
     if (userQuestions.isPending() || permissionPrompts.isPending() || approvals.isPending()) {
       if (ctx.message) {
         await ctx.reply(PENDING_INTERACTION_HINT, {
@@ -268,6 +289,8 @@ async function main(): Promise<void> {
                 clearActiveTurn();
                 controller.signal.removeEventListener("abort", onShutdown);
                 approvalController.abort();
+                permissionPrompts.abortPending();
+                approvals.abortPending();
                 userQuestions.clearTurnContext();
                 permissionPrompts.clearTurnContext();
                 todoDisplay.clearTurnContext();

@@ -1,12 +1,10 @@
+import { botCommandName } from "./is-bot-command.ts";
 import type { TelegramContext } from "./telegram.ts";
-import { isBotCommand } from "./is-bot-command.ts";
 
 function commandName(ctx: TelegramContext): string | undefined {
   const message = ctx.message;
-  if (!message || !isBotCommand(message)) return undefined;
-  const command = message.entities?.find((entity) => entity.type === "bot_command" && entity.offset === 0);
-  if (!command || !message.text) return undefined;
-  return message.text.slice(1, command.length).split("@", 1)[0];
+  if (!message) return undefined;
+  return botCommandName(message);
 }
 
 /** Returns the runner sequentialization key for an update. */

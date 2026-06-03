@@ -2,7 +2,13 @@ import { type Tool, tool } from "@lmstudio/sdk";
 import * as path from "@std/path";
 import { z } from "zod/v3";
 
-import { approveToolOperation, displayPath, resolvePath, type ToolContext } from "./context.ts";
+import {
+  approveHostAwareToolOperation,
+  displayPath,
+  grantBrokerHostWrite,
+  resolveHostAwarePath,
+  type ToolContext,
+} from "./context.ts";
 import { withFileMutationQueue } from "./file-mutation-queue.ts";
 
 export function createWriteTool(ctx: ToolContext): Tool {
@@ -11,19 +17,24 @@ export function createWriteTool(ctx: ToolContext): Tool {
     description:
       "Write content to a file. Creates the file if it doesn't exist, overwrites if it does. Automatically creates parent directories.",
     parameters: {
-      path: z.string().describe("Path to the file to write (relative or absolute, under workspace)"),
+      path: z.string().describe(
+        "Path to write: relative (workspace), or absolute / ~/... for host files outside the workspace",
+      ),
       content: z.string().describe("Content to write to the file"),
     },
     implementation: async ({ path: userPath, content }) => {
-      const absolutePath = await resolvePath(ctx, userPath);
+      const { absolutePath, outsideWorkspace } = await resolveHostAwarePath(ctx, userPath);
       const dir = path.dirname(absolutePath);
       const display = displayPath(ctx, absolutePath);
-      await approveToolOperation(ctx, {
+      await approveHostAwareToolOperation(ctx, {
         operation: "write",
-        target: display,
-        risk: "medium",
+        absolutePath,
+        outsideWorkspace,
+        display,
+        workspaceRisk: "medium",
         summary: `write ${content.length} bytes`,
       });
+      if (outsideWorkspace) await grantBrokerHostWrite(absolutePath);
 
       return await withFileMutationQueue(absolutePath, async () => {
         await Deno.mkdir(dir, { recursive: true });

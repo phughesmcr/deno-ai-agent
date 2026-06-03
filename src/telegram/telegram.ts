@@ -2,6 +2,7 @@ import { Bot, type Context, GrammyError, HttpError } from "grammy";
 
 import { questions, type QuestionsFlavor } from "grammy-questions";
 import type { AskUserQuestionPort, SessionManager, TodoTelegramMeta } from "../agent/mod.ts";
+import type { PermissionCallbackDispatch } from "../permission-broker/mod.ts";
 import { logDebug } from "../shared/mod.ts";
 import { installConcurrentUpdates } from "./bot-runner.ts";
 import { SESSION_HELP, TelegramCommandHandler } from "./commands.ts";
@@ -39,7 +40,11 @@ interface TelegramTurnAbortPort {
 
 interface TelegramPermissionPromptPort {
   isPending(): boolean;
-  handleCallback(data: string, actorId: number | undefined, adminId: number): Promise<boolean>;
+  handleCallback(
+    data: string,
+    actorId: number | undefined,
+    adminId: number,
+  ): Promise<PermissionCallbackDispatch>;
 }
 
 function getEnv(): { token: string; adminId: number } {
@@ -147,9 +152,9 @@ export function createTelegramManager({
   bot.on("callback_query:data", async (ctx, next) => {
     const data = ctx.callbackQuery?.data;
     if (data && isPermissionCallback(data)) {
-      const handled = await permissionPrompts?.handleCallback(data, ctx.from?.id, adminId);
-      if (handled) {
-        await ctx.answerCallbackQuery();
+      const dispatch = await permissionPrompts?.handleCallback(data, ctx.from?.id, adminId);
+      if (dispatch?.handled) {
+        await ctx.answerCallbackQuery(dispatch.answer);
         if (!permissionPrompts?.isPending()) {
           try {
             await ctx.editMessageReplyMarkup({ reply_markup: undefined });

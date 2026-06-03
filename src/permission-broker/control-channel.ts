@@ -1,97 +1,49 @@
 import { formatControlMessage } from "./control-protocol.ts";
-import { JsonlConnection } from "./jsonl.ts";
+import { ControlSocketSession } from "./control-socket.ts";
 
-const GRANT_WRITE_TIMEOUT_MS = 2_000;
+const CONTROL_WRITE_TIMEOUT_MS = 5_000;
 
-/** Sequential writer for broker control grant messages. */
-export class ControlGrantWriter {
-  readonly #timeoutMs: number;
-  #rawConn: Deno.Conn | undefined;
-  #jsonlConn: JsonlConnection | undefined;
-  #writeChain: Promise<void> = Promise.resolve();
+const controlSession = new ControlSocketSession();
 
-  constructor(timeoutMs = GRANT_WRITE_TIMEOUT_MS) {
-    this.#timeoutMs = timeoutMs;
-  }
-
-  /** Attaches the active control socket used for outbound grant messages. */
-  attach(conn: Deno.Conn): void {
-    this.#rawConn = conn;
-    this.#jsonlConn = new JsonlConnection(conn);
-    this.#writeChain = Promise.resolve();
-  }
-
-  /** Clears the active control socket. */
-  detach(): void {
-    this.#rawConn = undefined;
-    this.#jsonlConn = undefined;
-    this.#writeChain = Promise.resolve();
-  }
-
-  /**
-   * Pre-grants a permission in the broker daemon.
-   * @internal
-   */
-  async grant(
-    permission: string,
-    value: string | null,
-    scope: "once" | "session" = "session",
-  ): Promise<void> {
-    const write = this.#writeChain.catch(() => {}).then(() => this.#writeGrant(permission, value, scope));
-    this.#writeChain = write.catch(() => {});
-    await write;
-  }
-
-  async #writeGrant(permission: string, value: string | null, scope: "once" | "session"): Promise<void> {
-    const rawConn = this.#rawConn;
-    const jsonlConn = this.#jsonlConn;
-    if (!rawConn || !jsonlConn) return;
-
-    const line = formatControlMessage({ type: "grant", permission, value, scope });
-    let timeoutId: ReturnType<typeof setTimeout> | undefined;
-    let timedOut = false;
-    const timeout = new Promise<never>((_resolve, reject) => {
-      timeoutId = setTimeout(() => {
-        timedOut = true;
-        this.#clearActive(rawConn, true);
-        reject(new Error("Control grant write timed out."));
-      }, this.#timeoutMs);
-    });
-
-    try {
-      await Promise.race([jsonlConn.writeLine(line), timeout]);
-    } catch (error) {
-      if (!timedOut) this.#clearActive(rawConn, true);
-      throw error;
-    } finally {
-      if (timeoutId !== undefined) clearTimeout(timeoutId);
-    }
-  }
-
-  #clearActive(conn: Deno.Conn, close: boolean): void {
-    if (this.#rawConn !== conn) return;
-    this.#rawConn = undefined;
-    this.#jsonlConn = undefined;
-    if (close) {
-      try {
-        conn.close();
-      } catch {
-        /* already closed */
-      }
-    }
-  }
+function writeTimedOut(): Error {
+  return new Error(`Control socket write timed out after ${CONTROL_WRITE_TIMEOUT_MS}ms.`);
 }
 
-const controlGrantWriter = new ControlGrantWriter();
-
-/** Attaches the active control socket used for outbound grant messages. */
+/** Attaches the active control socket used by the Silas control client. */
 export function attachControlConnection(conn: Deno.Conn): void {
-  controlGrantWriter.attach(conn);
+  controlSession.attach(conn);
 }
 
 /** Clears the active control socket. */
 export function detachControlConnection(): void {
-  controlGrantWriter.detach();
+  controlSession.detach();
+}
+
+/** Reads the next inbound control message line. */
+export function readControlLine(): Promise<string | null> {
+  return controlSession.readLine();
+}
+
+/** Writes one outbound control message line in order with other writers. */
+export async function writeControlLine(line: string, signal?: AbortSignal): Promise<void> {
+  if (!controlSession.isAttached()) return;
+  if (signal?.aborted) return;
+
+  let timeoutId: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<never>((_resolve, reject) => {
+    timeoutId = setTimeout(() => reject(writeTimedOut()), CONTROL_WRITE_TIMEOUT_MS);
+  });
+  const onAbort = (): void => {
+    if (timeoutId !== undefined) clearTimeout(timeoutId);
+  };
+  signal?.addEventListener("abort", onAbort, { once: true });
+
+  try {
+    await Promise.race([controlSession.writeLine(line), timeout]);
+  } finally {
+    if (timeoutId !== undefined) clearTimeout(timeoutId);
+    signal?.removeEventListener("abort", onAbort);
+  }
 }
 
 /**
@@ -102,6 +54,14 @@ export async function sendControlGrant(
   permission: string,
   value: string | null,
   scope: "once" | "session" = "session",
+  signal?: AbortSignal,
 ): Promise<void> {
-  await controlGrantWriter.grant(permission, value, scope);
+  if (!controlSession.isAttached()) return;
+  const line = formatControlMessage({ type: "grant", permission, value, scope });
+  try {
+    await writeControlLine(line, signal);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    console.error(`Control grant failed (${permission}): ${message}`);
+  }
 }

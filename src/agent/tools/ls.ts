@@ -2,7 +2,13 @@ import { type Tool, tool } from "@lmstudio/sdk";
 import * as path from "@std/path";
 import { z } from "zod/v3";
 
-import { approveToolOperation, displayPath, resolveDirectoryPath, type ToolContext } from "./context.ts";
+import {
+  approveHostAwareToolOperation,
+  displayPath,
+  grantBrokerHostRead,
+  resolveHostAwarePath,
+  type ToolContext,
+} from "./context.ts";
 import { DEFAULT_MAX_BYTES, formatSize, truncateHead } from "./truncate.ts";
 
 const DEFAULT_LIMIT = 500;
@@ -15,18 +21,30 @@ export function createLsTool(ctx: ToolContext): Tool {
         DEFAULT_MAX_BYTES / 1024
       }KB (whichever is hit first).`,
     parameters: {
-      path: z.string().optional().describe("Directory to list (default: workspace root)"),
+      path: z.string().optional().describe(
+        "Directory to list: relative (workspace), or absolute / ~/... for host directories outside the workspace",
+      ),
       limit: z.number().optional().describe(`Maximum number of entries to return (default: ${DEFAULT_LIMIT})`),
     },
     implementation: async ({ path: userPath, limit }) => {
-      const dirPath = await resolveDirectoryPath(ctx, userPath ?? ".");
+      const { absolutePath, outsideWorkspace } = await resolveHostAwarePath(ctx, userPath ?? ".");
+      const display = displayPath(ctx, absolutePath);
       const effectiveLimit = limit ?? DEFAULT_LIMIT;
-      await approveToolOperation(ctx, {
+      await approveHostAwareToolOperation(ctx, {
         operation: "list",
-        target: displayPath(ctx, dirPath),
-        risk: "low",
+        absolutePath,
+        outsideWorkspace,
+        display,
         summary: `list directory, limit=${effectiveLimit}`,
       });
+      ctx.signal?.throwIfAborted();
+      console.log(`list: approved, running in ${display}`);
+      if (outsideWorkspace) await grantBrokerHostRead(absolutePath, ctx.signal);
+      ctx.signal?.throwIfAborted();
+
+      const dirStat = await Deno.stat(absolutePath);
+      if (!dirStat.isDirectory) throw new Error(`Not a directory: ${display}`);
+      const dirPath = absolutePath;
 
       const entries: string[] = [];
       for await (const entry of Deno.readDir(dirPath)) {

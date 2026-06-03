@@ -36,7 +36,7 @@ export function preprocessSystemPrompt(raw: string, workspacePath: string): stri
 
   const workspaceNote =
     `\nTool workspace root: \`${workspacePath}\`. Relative paths (and absolutes under this directory) are sandboxed. ` +
-    `To read host files outside it (e.g. \`~/.codex/config.toml\`), use \`read\` with an absolute or \`~/\` path (approval required). ` +
+    `For host paths outside it (e.g. \`~/.codex/config.toml\`), use \`read\`, \`write\`, \`edit\`, \`ls\`, \`grep\`, or \`find\` with an absolute or \`~/\` path (Telegram approval required). ` +
     "`bash` runs with this directory as cwd.\n";
 
   const firstNewline = result.indexOf("\n");

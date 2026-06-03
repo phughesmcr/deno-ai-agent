@@ -1,12 +1,16 @@
-import { attachControlConnection, detachControlConnection } from "./control-channel.ts";
+import { logDebug } from "../shared/log.ts";
+import {
+  attachControlConnection,
+  detachControlConnection,
+  readControlLine,
+  writeControlLine,
+} from "./control-channel.ts";
 import {
   type ControlDecision,
   type ControlPrompt,
   formatControlMessage,
   parseControlMessage,
 } from "./control-protocol.ts";
-import { logDebug } from "../shared/log.ts";
-import { JsonlConnection } from "./jsonl.ts";
 import type { PermissionPromptPort } from "./permission-prompt-port.ts";
 
 /** Options for the permission broker control client. */
@@ -59,15 +63,14 @@ export async function runPermissionControlClient(
       attachControlConnection(conn);
       logDebug("permission_broker.control_connected", { path: options.controlPath });
       try {
-        const jsonl = new JsonlConnection(conn);
         // deno-lint-ignore no-await-in-loop -- Registration belongs to the current sequential connection attempt.
-        await jsonl.writeLine(formatControlMessage({ type: "register", pid: Deno.pid }));
+        await writeControlLine(formatControlMessage({ type: "register", pid: Deno.pid }));
         if (!registered) {
           registered = true;
           markControlReady();
         }
         // deno-lint-ignore no-await-in-loop -- Serving one control connection completes before reconnecting.
-        await serveControl(conn, jsonl, options.promptPort, signal);
+        await serveControl(conn, options.promptPort, signal);
       } finally {
         detachControlConnection();
         conn.close();
@@ -85,7 +88,6 @@ export async function runPermissionControlClient(
 
 async function serveControl(
   conn: Deno.Conn,
-  jsonl: JsonlConnection,
   port: PermissionPromptPort,
   signal: AbortSignal,
 ): Promise<void> {
@@ -97,14 +99,14 @@ async function serveControl(
   try {
     while (!signal.aborted) {
       // deno-lint-ignore no-await-in-loop -- Control prompts must be handled in socket order.
-      const line = await jsonl.readLine();
+      const line = await readControlLine();
       if (line === null) return;
       const message = parseControlMessage(line);
       if (message.type !== "prompt") continue;
       // deno-lint-ignore no-await-in-loop -- Prompt decisions must preserve request ordering.
-      const decision = await handlePrompt(message, port, signal);
+      const decision = await handlePrompt(message, port);
       // deno-lint-ignore no-await-in-loop -- Prompt responses must be written in socket order.
-      await jsonl.writeLine(formatControlMessage(decision));
+      await writeControlLine(formatControlMessage(decision));
     }
   } finally {
     signal.removeEventListener("abort", abortHandler);
@@ -114,14 +116,13 @@ async function serveControl(
 async function handlePrompt(
   prompt: ControlPrompt,
   port: PermissionPromptPort,
-  signal: AbortSignal,
 ): Promise<ControlDecision> {
   const result = await port.prompt({
     requestId: prompt.requestId,
     brokerId: prompt.brokerId,
     permission: prompt.permission,
     value: prompt.value,
-  }, signal);
+  });
 
   if (result.result === "allow") {
     return {

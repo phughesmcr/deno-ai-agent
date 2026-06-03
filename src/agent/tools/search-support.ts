@@ -1,12 +1,15 @@
 import * as path from "@std/path";
 
+import { grantBrokerRunForCommands } from "../../permission-broker/mod.ts";
+
 export const SEARCH_SKIP_DIRS = new Set([".git", "node_modules"]);
 
 export function toPosixPath(value: string): string {
   return value.split(path.SEPARATOR).join("/");
 }
 
-export async function commandExists(name: string): Promise<boolean> {
+export async function commandExists(name: string, signal?: AbortSignal): Promise<boolean> {
+  await grantBrokerRunForCommands(["which"], signal);
   try {
     const { success } = await new Deno.Command("which", { args: [name], stdout: "null", stderr: "null" }).output();
     return success;

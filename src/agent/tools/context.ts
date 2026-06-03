@@ -1,6 +1,11 @@
 import * as path from "@std/path";
 
 import {
+  grantBrokerReadPath,
+  grantBrokerWritePath,
+  shouldRunPermissionControlClient,
+} from "../../permission-broker/mod.ts";
+import {
   type ApprovalGate,
   type ApprovalOperation,
   type ApprovalRequest,
@@ -95,25 +100,79 @@ export function normalizeUserPath(userPath: string): string {
 }
 
 /** True when the user path is resolved outside the workspace (absolute or `~`). */
-export function isHostReadPath(userPath: string): boolean {
+export function isHostPath(userPath: string): boolean {
   const normalized = normalizeUserPath(userPath);
   return normalized.startsWith("~") || path.isAbsolute(expandTilde(normalized));
 }
 
-/** Resolves a path for `read`: workspace-relative paths stay sandboxed; host paths do not. */
-export async function resolveReadPath(
-  ctx: ToolContext,
-  userPath: string,
-): Promise<{ absolutePath: string; outsideWorkspace: boolean }> {
+/** @deprecated Use {@link isHostPath}. */
+export const isHostReadPath = isHostPath;
+
+/** Resolved tool path, workspace-sandboxed or host-absolute. */
+export interface HostAwarePath {
+  absolutePath: string;
+  outsideWorkspace: boolean;
+}
+
+/**
+ * Resolves a tool path: workspace-relative paths stay sandboxed; host paths do not.
+ * Avoids filesystem canonicalization on host paths so broker prompts stay after Telegram approval.
+ */
+export async function resolveHostAwarePath(ctx: ToolContext, userPath: string): Promise<HostAwarePath> {
   const normalized = normalizeUserPath(userPath);
   const expanded = expandTilde(normalized);
   if (path.isAbsolute(expanded) && ctx.sandbox.containsPath(path.resolve(expanded))) {
     return { absolutePath: await ctx.sandbox.resolvePath(expanded), outsideWorkspace: false };
   }
-  // Host paths: expand only. Avoid Deno.realPath here — the permission broker would
-  // prompt before the Telegram tool-approval step (resolveHostPath uses realPath).
-  const absolutePath = isHostReadPath(normalized) ? path.resolve(expanded) : await ctx.sandbox.resolvePath(normalized);
+  const absolutePath = isHostPath(normalized) ? path.resolve(expanded) : await ctx.sandbox.resolvePath(normalized);
   return { absolutePath, outsideWorkspace: !ctx.sandbox.containsPath(absolutePath) };
+}
+
+/** Resolves a path for `read`: workspace-relative paths stay sandboxed; host paths do not. */
+export async function resolveReadPath(ctx: ToolContext, userPath: string): Promise<HostAwarePath> {
+  return await resolveHostAwarePath(ctx, userPath);
+}
+
+/** Requests Telegram approval for a host-aware tool operation. */
+export async function approveHostAwareToolOperation(
+  ctx: ToolContext,
+  spec: {
+    operation: ApprovalOperation;
+    absolutePath: string;
+    outsideWorkspace: boolean;
+    display: string;
+    workspaceRisk?: ApprovalRisk;
+    summary?: string;
+  },
+): Promise<void> {
+  const workspaceRisk = spec.workspaceRisk ?? "low";
+  await approveToolOperation(ctx, {
+    operation: spec.operation,
+    target: spec.outsideWorkspace ? spec.absolutePath : spec.display,
+    risk: spec.outsideWorkspace ? "high" : workspaceRisk,
+    summary: spec.summary,
+    timeoutMs: spec.outsideWorkspace ? DEFAULT_APPROVAL_TIMEOUT_MS * 2 : undefined,
+  });
+}
+
+/** Pre-grants broker read for a host path when the permission broker is active. */
+export async function grantBrokerHostRead(absolutePath: string, signal?: AbortSignal): Promise<void> {
+  if (shouldRunPermissionControlClient()) {
+    await grantBrokerReadPath(absolutePath, signal);
+  }
+}
+
+/** Pre-grants broker write for a host path when the permission broker is active. */
+export async function grantBrokerHostWrite(absolutePath: string, signal?: AbortSignal): Promise<void> {
+  if (shouldRunPermissionControlClient()) {
+    await grantBrokerWritePath(absolutePath, signal);
+  }
+}
+
+/** Pre-grants broker read and write for a host path when the permission broker is active. */
+export async function grantBrokerHostReadWrite(absolutePath: string, signal?: AbortSignal): Promise<void> {
+  await grantBrokerHostRead(absolutePath, signal);
+  await grantBrokerHostWrite(absolutePath, signal);
 }
 
 /** @throws Error if path is not an existing directory under the workspace. */

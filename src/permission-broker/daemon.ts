@@ -1,12 +1,13 @@
 import * as path from "@std/path";
 
+import { logDebug } from "../shared/log.ts";
 import {
   type ControlDecision,
   type ControlPrompt,
   formatControlMessage,
   parseControlMessage,
 } from "./control-protocol.ts";
-import { logDebug } from "../shared/log.ts";
+import { ControlSocketSession } from "./control-socket.ts";
 import { JsonlConnection } from "./jsonl.ts";
 import { normalizeAbsolutePath } from "./paths.ts";
 import { createPolicyContext, decidePolicy, type PolicyContext } from "./policy.ts";
@@ -72,6 +73,7 @@ export class PermissionBrokerDaemon {
   readonly #env: BrokerDaemonEnv;
   readonly #cache = new SessionCache();
   #controlConn: Deno.Conn | undefined;
+  #controlSession: ControlSocketSession | undefined;
   #controlRegistered = false;
   readonly #brokerConns = new Set<Deno.Conn>();
   #pending: PendingPrompt | undefined;
@@ -219,6 +221,7 @@ export class PermissionBrokerDaemon {
         }
       } finally {
         this.#controlConn = undefined;
+        this.#controlSession = undefined;
         this.#controlRegistered = false;
         try {
           conn.close();
@@ -230,10 +233,12 @@ export class PermissionBrokerDaemon {
   }
 
   async #serveControl(conn: Deno.Conn): Promise<void> {
-    const jsonl = new JsonlConnection(conn);
+    const session = new ControlSocketSession();
+    session.attach(conn);
+    this.#controlSession = session;
     while (true) {
       // deno-lint-ignore no-await-in-loop -- Control messages must be processed in socket order.
-      const line = await jsonl.readLine();
+      const line = await session.readLine();
       if (line === null) return;
       const message = parseControlMessage(line);
       if (message.type === "register") {
@@ -313,6 +318,11 @@ export class PermissionBrokerDaemon {
       value,
     };
 
+    const session = this.#controlSession;
+    if (!session) {
+      return { id: brokerId, result: "deny", reason: "Control session not ready." };
+    }
+
     return await new Promise<BrokerResponse>((resolve) => {
       const timeoutId = setTimeout(() => {
         this.#pending = undefined;
@@ -332,8 +342,7 @@ export class PermissionBrokerDaemon {
         timeoutId,
       };
 
-      const controlJsonl = new JsonlConnection(this.#controlConn!);
-      controlJsonl.writeLine(formatControlMessage(prompt)).catch(() => {
+      session.writeLine(formatControlMessage(prompt)).catch(() => {
         clearTimeout(timeoutId);
         this.#pending = undefined;
         resolve({ id: brokerId, result: "deny", reason: "Failed to send control prompt." });

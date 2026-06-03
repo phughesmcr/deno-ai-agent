@@ -13,7 +13,7 @@ function isPathInsideRoot(resolved: string, root: string): boolean {
 function workspaceEscapeMessage(userPath: string, root: string): string {
   const displayRoot = root.split(path.SEPARATOR).join("/");
   return `Path escapes workspace: "${userPath}" is outside the tool root (${displayRoot}). ` +
-    "Use relative paths under the workspace, or use bash to inspect parent directories.";
+    "Use relative paths under the workspace, or an absolute / ~/... path for approved host access.";
 }
 
 /** Expands a leading `~` using `HOME` when set. */

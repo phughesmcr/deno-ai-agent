@@ -61,6 +61,8 @@ export interface TelegramApprovalGate extends ApprovalGate {
   setTurnContext(target: TelegramTurnTarget): void;
   /** Clears the active Telegram turn context. */
   clearTurnContext(): void;
+  /** Denies and clears any in-flight approval wait. */
+  abortPending(): void;
   /** Handles approval callback queries; returns true when consumed. */
   handleCallback(ctx: TelegramApprovalCallbackContext): Promise<boolean>;
 }
@@ -129,6 +131,9 @@ export function createTelegramApprovalGate(): TelegramApprovalGate {
     clearTurnContext(): void {
       turn = undefined;
     },
+    abortPending(): void {
+      pending.settle(denyDecision("cancelled"));
+    },
     async requestApproval(rawRequest: ApprovalRequest, signal?: AbortSignal): Promise<ApprovalDecision> {
       if (!turn || turn.signal.aborted) return denyDecision("missing_telegram_turn");
       if (pending.isPending()) return denyDecision("approval_already_pending");
@@ -138,14 +143,19 @@ export function createTelegramApprovalGate(): TelegramApprovalGate {
       if (effectiveSignal.aborted) return denyDecision("cancelled");
 
       return await new Promise<ApprovalDecision>((resolve) => {
-        pending.begin({
-          request,
-          signal: effectiveSignal,
-          timeoutMs: request.timeoutMs,
-          resolve,
-          abortResult: () => denyDecision("cancelled"),
-          timeoutResult: () => denyDecision("timeout"),
-        });
+        if (
+          !pending.begin({
+            request,
+            signal: effectiveSignal,
+            timeoutMs: request.timeoutMs,
+            resolve,
+            abortResult: () => denyDecision("cancelled"),
+            timeoutResult: () => denyDecision("timeout"),
+          })
+        ) {
+          resolve(denyDecision("approval_already_pending"));
+          return;
+        }
 
         logDebug("approval.requested", {
           operation: request.operation,
