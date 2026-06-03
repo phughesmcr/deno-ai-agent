@@ -11,9 +11,16 @@ Tech stack:
 - LLM Provider: LMStudio Typescript SDK
 - LLM Model: Qwen3.6 27B
 - Presentation interface: Telegram (GrammY)
-- Observability: OTEL (Jager)
+- Observability: OTEL (Deno / Jager)
 
-Always prefer modern (ES2025+) WebPlatform APIs, and Deno APIs, including the Deno `@std` JSR library over other libraryies where possible.
+# Code Style
+
+- Always prefer modern (ES2025+) WebPlatform APIs, and Deno APIs, including the Deno `@std` JSR library over other libraryies where possible.
+- Never use modern private fields on classes ("#") - these are ugly and hard to read. Use `private _{varName}` instead.
+- Top-level functions must always be functions and not consts.
+- Make use of `Promise.try` and `Disposable`/`AsyncDisposable` where relevant.
+- Prefer OTEL to console logging. If you must console log use `console.error` only to avoid printing to STDOUT.
+- Formatting and linting rules are defined in `deno.json`
 
 # Coding Guidance
 
