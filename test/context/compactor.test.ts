@@ -82,3 +82,25 @@ Deno.test("createSummaryCompactor truncates large tool output in summary input",
   assertStringIncludes(summaryInput, "[tool result truncated at 12 chars]");
   assertEquals(summaryInput.includes("mnopqrstuvwxyz"), false);
 });
+
+Deno.test("createSummaryCompactor serializes image attachment metadata", async () => {
+  const model = new FakeSummaryModel();
+  const compact = createSummaryCompactor(model as unknown as LLM);
+
+  const imagePart = {
+    type: "file",
+    name: "photo.jpg",
+    identifier: "id-1",
+    sizeBytes: 100,
+    fileType: "image",
+  } as const;
+
+  await compact({
+    systemPrompt: "system prompt",
+    messages: [{ role: "user", content: [{ type: "text", text: "see this" }, imagePart] }],
+    details: { readFiles: [], modifiedFiles: [] },
+  });
+
+  const summaryInput = model.actCalls[0]?.getMessagesArray().at(-1)?.toString() ?? "";
+  assertStringIncludes(summaryInput, "attachments: 1 image(s): photo.jpg");
+});

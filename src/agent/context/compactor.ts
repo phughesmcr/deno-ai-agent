@@ -1,6 +1,7 @@
 import { Chat, type ChatMessageData, type LLM, type ToolCallRequest } from "@lmstudio/sdk";
 
 import { getActReasoningParsing } from "../../shared/reasoning.ts";
+import { imageFileParts } from "./message-materialize.ts";
 import type { SessionFileDetails } from "./session-store.ts";
 
 const SKILL_CONTENT_PATTERN = /<skill_content name="([^"]+)">[\s\S]*?<\/skill_content>/g;
@@ -99,6 +100,12 @@ function serializeMessage(message: ChatMessageData, index: number, toolResultLim
   const sections = [`[${index + 1}] role=${message.role}`];
   const text = textParts(message).join("\n");
   if (text) sections.push(text);
+
+  const images = imageFileParts(message);
+  if (images.length > 0) {
+    const names = images.map((part) => part.name).join(", ");
+    sections.push(`attachments: ${images.length} image(s): ${names}`);
+  }
 
   const requests = toolCallRequests(message);
   if (requests.length > 0) {

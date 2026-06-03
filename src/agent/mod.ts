@@ -89,5 +89,6 @@ export {
   validateTodoWriteParams,
   writeTodoFile,
 } from "./tools/index.ts";
+export { normalizeUserTurnInput, type UserTurnInput } from "./user-turn.ts";
 export { WorkspaceSandbox } from "./workspace-sandbox.ts";
 export { createWorkspace, type FsSubscriber, notifyWorkspaceSubscribers, type Workspace } from "./workspace.ts";

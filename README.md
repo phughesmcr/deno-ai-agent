@@ -34,6 +34,14 @@ deno task start
 
 Only the Telegram user matching `TELEGRAM_ADMIN_ID` can chat with the bot (others get a short refusal).
 
+### Images (Telegram + LM Studio)
+
+Send a **photo** or image **document** (JPEG, PNG, WebP) with an optional caption. Photo **albums** are debounced into a single model turn (up to 10 images).
+
+- `MODEL` must be a **vision-language model (VLM)** loaded in LM Studio (for example `qwen2-vl-2b-instruct`). Text-only models cannot see pixels.
+- Images are **ephemeral**: they work while the bot and LM Studio stay running. After a bot restart or `/load`, prior images appear as placeholder text in context, not as pixels.
+- Optional integration tests: set `LMSTUDIO_IMAGE_TEST=1` with LM Studio running.
+
 ## Environment variables
 
 
@@ -42,7 +50,7 @@ Only the Telegram user matching `TELEGRAM_ADMIN_ID` can chat with the bot (other
 | `TELEGRAM_BOT_TOKEN`            | Bot token from BotFather                                                               |
 | `TELEGRAM_ADMIN_ID`             | Numeric Telegram user ID allowed to use the bot                                        |
 | `TELEGRAM_BOT_ID`               | Bot username or label (informational)                                                  |
-| `MODEL`                         | LM Studio model identifier                                                             |
+| `MODEL`                         | LM Studio model identifier (use a VLM for image messages)                              |
 | `CONTEXT_LENGTH`                | Max context tokens passed to the model                                                 |
 | `BOT_NAME`                      | Agent display name                                                                     |
 | `WORKSPACE_PATH`                | Directory under the repo root containing `SYSTEM.md`                                   |
@@ -113,7 +121,7 @@ flowchart LR
 
 
 
-1. An incoming Telegram message is appended to the current session.
+1. An incoming Telegram text or image message is appended to the current session (photos are uploaded to LM Studio as temporary vision inputs).
 2. `model.act()` runs against LM Studio with the current history and tools.
 3. Assistant text is streamed into context and sent back as a MarkdownV2 reply (`stripThinking` removes model “thinking” blocks).
 4. Changes to `SYSTEM.md` in the workspace reload the system prompt without restarting.

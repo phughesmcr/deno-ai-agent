@@ -1,11 +1,12 @@
 import type { Tool } from "@lmstudio/sdk";
 
+import { traceSpan } from "../shared/otel.ts";
+import { createModelActObserver, tokenBucket } from "./act-telemetry.ts";
 import { createSummaryCompactor } from "./context/compactor.ts";
 import { SessionStore } from "./context/session-store.ts";
 import { SessionManager, type SessionTurnResult } from "./context/session.ts";
 import type { LMStudioManager } from "./lmstudio.ts";
-import { createModelActObserver, tokenBucket } from "./act-telemetry.ts";
-import { traceSpan } from "../shared/otel.ts";
+import { normalizeUserTurnInput, type UserTurnInput } from "./user-turn.ts";
 import type { Workspace } from "./workspace.ts";
 
 /** Wired agent: session state and LM Studio model. */
@@ -34,6 +35,7 @@ export async function createAgent(spec: CreateAgentOptions): Promise<Agent> {
 
   const store = new SessionStore(workspace.sessionsDir);
   const session = new SessionManager({
+    client: lmstudio.client,
     model: lmstudio.model,
     store,
     systemPrompt: workspace.systemPrompt,
@@ -68,9 +70,14 @@ export interface RunTurnOptions {
  * Runs one user turn with telemetry around the session-owned model act.
  * @internal
  */
-export async function runTurn(agent: Agent, userText: string, options: RunTurnOptions): Promise<TurnResult> {
+export async function runTurn(
+  agent: Agent,
+  userInput: string | UserTurnInput,
+  options: RunTurnOptions,
+): Promise<TurnResult> {
   const { session } = agent;
   const { tools, signal } = options;
+  const input = normalizeUserTurnInput(userInput);
 
   let result: SessionTurnResult | undefined;
 
@@ -78,8 +85,10 @@ export async function runTurn(agent: Agent, userText: string, options: RunTurnOp
     "lmstudio.act",
     async (actSpan) => {
       const observer = createModelActObserver();
+      const imageCount = input.images?.length ?? 0;
+      if (imageCount > 0) actSpan.setAttribute("user.images.count", imageCount);
 
-      result = await session.runTurn(userText, {
+      result = await session.runTurn(input, {
         tools,
         signal,
         observer,

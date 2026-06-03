@@ -1,4 +1,4 @@
-import { type Chat, ChatMessage, type ChatMessageData, type LLM, type Tool } from "@lmstudio/sdk";
+import { type Chat, ChatMessage, type ChatMessageData, type LLM, type LMStudioClient, type Tool } from "@lmstudio/sdk";
 import { assert } from "jsr:@std/assert@1/assert";
 import { assertEquals } from "jsr:@std/assert@1/equals";
 import { assertStringIncludes } from "jsr:@std/assert@1/string-includes";
@@ -89,6 +89,20 @@ function snapshot(chat: Chat): [string, string][] {
   return chat.getMessagesArray().map((message) => [message.getRole(), message.getText()]);
 }
 
+function fakeLmClient(): LMStudioClient {
+  return {
+    files: {
+      createFileHandleFromChatMessagePartFileData() {
+        throw new Error("file unavailable in test");
+      },
+    },
+  } as unknown as LMStudioClient;
+}
+
+function messageHasImagePart(data: ChatMessageData): boolean {
+  return data.content.some((part) => part.type === "file" && part.fileType === "image");
+}
+
 function recordingObserver(events: string[]): ModelActObserver {
   return {
     onMessage: () => events.push("message"),
@@ -143,6 +157,7 @@ async function withSession(
     compactor?: SummaryCompactor;
     maxContextLength?: number;
     systemPrompt?: string;
+    client?: LMStudioClient;
   },
 ): Promise<void> {
   const dir = await Deno.makeTempDir({ prefix: "deno-ai-agent-session-" });
@@ -150,6 +165,7 @@ async function withSession(
     const store = new SessionStore(dir);
     const model = new FakeModel();
     const session = new SessionManager({
+      client: options?.client ?? fakeLmClient(),
       store,
       model: model as unknown as LLM,
       systemPrompt: options?.systemPrompt ?? "current system prompt",
@@ -438,4 +454,53 @@ Deno.test("SessionManager appends compaction checkpoints and preserves the curre
       compactor: () => Promise.resolve("summary"),
     },
   );
+});
+
+const TINY_PNG_BASE64 =
+  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
+
+Deno.test({
+  name: "SessionManager persists image file parts on runTurn",
+  ignore: !Deno.env.get("LMSTUDIO_IMAGE_TEST"),
+}, async () => {
+  const { LMStudioClient } = await import("@lmstudio/sdk");
+  const client = new LMStudioClient();
+  const handle = await client.files.prepareImageBase64("session-test.png", TINY_PNG_BASE64);
+
+  await withSession(async ({ session, model }) => {
+    await session.runTurn({ text: "describe", images: [handle] }, {
+      tools: [],
+      signal: new AbortController().signal,
+    });
+
+    const call = model.actCalls[0];
+    assert(call);
+    const userMessage = call.chat.getMessagesArray().find((m) => m.getRole() === "user");
+    assert(userMessage);
+    const raw = (userMessage as ChatMessageWithRaw).getRaw();
+    assert(messageHasImagePart(raw));
+  }, { client });
+});
+
+Deno.test({
+  name: "SessionManager keeps image parts in context on a follow-up turn",
+  ignore: !Deno.env.get("LMSTUDIO_IMAGE_TEST"),
+}, async () => {
+  const { LMStudioClient } = await import("@lmstudio/sdk");
+  const client = new LMStudioClient();
+  const handle = await client.files.prepareImageBase64("follow-up.png", TINY_PNG_BASE64);
+
+  await withSession(async ({ session, model }) => {
+    await session.runTurn({ text: "look", images: [handle] }, {
+      tools: [],
+      signal: new AbortController().signal,
+    });
+    await session.runTurn("follow up", { tools: [], signal: new AbortController().signal });
+
+    const call = model.actCalls[1];
+    assert(call);
+    const userMessages = call.chat.getMessagesArray().filter((m) => m.getRole() === "user");
+    const withImage = userMessages.some((m) => messageHasImagePart((m as ChatMessageWithRaw).getRaw()));
+    assert(withImage);
+  }, { client });
 });

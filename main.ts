@@ -7,10 +7,12 @@ import {
   createToolContext,
   createWorkspace,
   getModelTools,
+  normalizeUserTurnInput,
   recordActDuration,
   runTurn,
   SubagentManager,
   updateTelegramMeta,
+  type UserTurnInput,
 } from "./src/agent/mod.ts";
 import {
   assertPermissionBrokerSupported,
@@ -22,18 +24,26 @@ import { ApprovalDeniedError, logDebug, traceSpan } from "./src/shared/mod.ts";
 import {
   ActiveTurnRegistry,
   botCommandName,
+  createMediaGroupBuffer,
   createTelegramApprovalGate,
   createTelegramAskUserQuestionPort,
   createTelegramManager,
   createTelegramPermissionPromptPort,
   createTelegramTodoDisplayPort,
+  DEFAULT_IMAGE_PROMPT,
+  downloadTelegramMessageImage,
+  getTelegramBotToken,
+  ImageTooLargeError,
   isBotCommand,
+  parseTelegramUserTurn,
+  prepareTelegramImages,
   recordTelegramMessage,
   replyError,
   replyWithModelText,
   startTelegramBot,
   startTelegramTypingIndicator,
   type TelegramContext,
+  UnsupportedImageError,
   withTurnMutex,
 } from "./src/telegram/mod.ts";
 
@@ -68,6 +78,10 @@ function isAbortError(error: unknown): boolean {
   return error.name === "AbortError" || error.message.toLowerCase().includes("aborted");
 }
 
+function isImageInputError(error: unknown): boolean {
+  return error instanceof ImageTooLargeError || error instanceof UnsupportedImageError;
+}
+
 async function main(): Promise<void> {
   if (Deno.env.get("DENO_PERMISSION_BROKER_PATH")) {
     assertPermissionBrokerSupported();
@@ -75,6 +89,7 @@ async function main(): Promise<void> {
 
   const controller = new AbortController();
   const { maxContextLength } = getEnv();
+  const botToken = getTelegramBotToken();
 
   const userQuestions = createTelegramAskUserQuestionPort();
   const permissionPrompts = createTelegramPermissionPromptPort(permissionPromptTimeoutMs());
@@ -158,7 +173,154 @@ async function main(): Promise<void> {
 
   let telegramRunner: ReturnType<typeof startTelegramBot> | undefined;
 
+  async function executeTelegramTurn(
+    ctx: TelegramContext,
+    input: UserTurnInput,
+    replyToMessageId: number,
+    updateId: number,
+  ): Promise<number> {
+    const normalized = normalizeUserTurnInput(input);
+    const imageCount = normalized.images?.length ?? 0;
+    const message = ctx.message;
+    if (!message) return 0;
+
+    const stopTyping = startTelegramTypingIndicator({
+      api: ctx.api,
+      chatId: ctx.chat!.id,
+      threadId: message.message_thread_id,
+      signal: controller.signal,
+    });
+
+    let actMs = 0;
+    try {
+      try {
+        await ctx.reply("Working on it...", {
+          message_thread_id: message.message_thread_id,
+        });
+      } catch {
+        /* best-effort ack while the model turn runs */
+      }
+
+      await withTurnMutex(async () => {
+        const toolsList = await createTurnTools();
+        activeTurnId = String(updateId);
+
+        const turnController = new AbortController();
+        const approvalController = new AbortController();
+        const onShutdown = (): void => {
+          turnController.abort();
+          approvalController.abort();
+        };
+        controller.signal.addEventListener("abort", onShutdown);
+        const clearActiveTurn = activeTurns.setActiveTurn({
+          id: activeTurnId,
+          actController: turnController,
+          approvalController,
+        });
+
+        userQuestions.setTurnContext({ ctx, signal: turnController.signal });
+        permissionPrompts.setTurnContext({ ctx, signal: approvalController.signal });
+        todoDisplay.setTurnContext({ ctx, signal: turnController.signal });
+        approvals.setTurnContext({ ctx, signal: turnController.signal });
+        const actStarted = performance.now();
+        try {
+          console.log(`Model turn started${imageCount > 0 ? ` (${imageCount} image(s))` : ""}.`);
+          const { replyTexts, compacted } = await runTurn(agent, normalized, {
+            tools: toolsList,
+            signal: turnController.signal,
+          });
+          console.log(`Model turn finished (${replyTexts.length} reply chunk(s)).`);
+
+          if (replyTexts.length > 0) {
+            await replyWithModelText(ctx, replyTexts, replyToMessageId, message.message_thread_id);
+          } else {
+            await ctx.reply("The model finished without a reply. Try again or rephrase.", {
+              message_thread_id: message.message_thread_id,
+            });
+          }
+
+          if (compacted) {
+            logDebug("session.compacted", { sessionId: agent.session.id });
+          }
+        } finally {
+          actMs = performance.now() - actStarted;
+          clearActiveTurn();
+          controller.signal.removeEventListener("abort", onShutdown);
+          approvalController.abort();
+          permissionPrompts.abortPending();
+          approvals.abortPending();
+          userQuestions.clearTurnContext();
+          permissionPrompts.clearTurnContext();
+          todoDisplay.clearTurnContext();
+          approvals.clearTurnContext();
+          activeTurnId = "no-active-turn";
+        }
+      });
+    } finally {
+      stopTyping();
+    }
+    return actMs;
+  }
+
+  const mediaGroupBuffer = createMediaGroupBuffer(async (payload) => {
+    let outcome: "error" | "ok" = "ok";
+    let actMs = 0;
+    try {
+      if (payload.items.length === 0) return;
+
+      await traceSpan(
+        "telegram.album.flush",
+        async (span) => {
+          span.setAttributes({
+            "telegram.media_group_id": payload.mediaGroupId,
+            "telegram.album.size": payload.items.length,
+            "telegram.has_images": true,
+            "telegram.image_count": payload.items.length,
+            "session.id": agent.session.id,
+          });
+
+          const images = await prepareTelegramImages(lmstudio.client, payload.items);
+          const input: UserTurnInput = {
+            text: payload.text ?? DEFAULT_IMAGE_PROMPT,
+            images,
+          };
+
+          console.log(
+            `Telegram album flush (${payload.items.length} image(s), media_group_id=${payload.mediaGroupId}).`,
+          );
+
+          actMs = await executeTelegramTurn(
+            payload.turnCtx,
+            input,
+            payload.context.replyToMessageId,
+            payload.turnCtx.update.update_id,
+          );
+        },
+        { root: true },
+      );
+    } catch (error) {
+      outcome = "error";
+      const ctx = payload.turnCtx;
+      if (isImageInputError(error) && ctx.message) {
+        const text = error instanceof Error ? error.message : String(error);
+        await ctx.reply(text, { message_thread_id: ctx.message.message_thread_id });
+        return;
+      }
+      logDebug("telegram.album.error", {
+        message: error instanceof Error ? error.message : String(error),
+      });
+      console.error(error);
+      if (ctx.message) {
+        await replyError(ctx, ctx.message.message_thread_id);
+      }
+    } finally {
+      recordTelegramMessage(outcome, false);
+      recordActDuration(actMs, outcome);
+    }
+  });
+
   registerShutdown(controller, async () => {
+    mediaGroupBuffer.dispose();
     await telegramRunner?.stop();
     await telegram.bot.stop();
     await subagents.shutdown();
@@ -187,120 +349,93 @@ async function main(): Promise<void> {
     let outcome: "error" | "ok" = "ok";
     let skipped = false;
     let actMs = 0;
+    let recordMetrics = true;
 
     try {
       await traceSpan(
         "telegram.message",
         async (span) => {
-          const message = ctx.message?.text;
-          if (!ctx.message || !message) {
+          const message = ctx.message;
+          if (!message || !ctx.chat) {
             skipped = true;
             span.setAttribute("skipped", true);
-            span.setAttribute("skip.reason", "non_text");
+            span.setAttribute("skip.reason", "non_actionable");
             return;
           }
 
-          if (isBotCommand(ctx.message)) {
+          if (isBotCommand(message)) {
             skipped = true;
             span.setAttribute("skipped", true);
             span.setAttribute("skip.reason", "bot_command");
             return;
           }
 
+          const mediaGroupId = message.media_group_id;
+          if (mediaGroupId) {
+            recordMetrics = false;
+            const item = await downloadTelegramMessageImage(ctx.api, botToken, message);
+            mediaGroupBuffer.enqueue({
+              mediaGroupId,
+              turnCtx: ctx,
+              context: {
+                chatId: ctx.chat.id,
+                threadId: message.message_thread_id,
+                replyToMessageId: message.message_id,
+              },
+              item,
+              caption: message.caption,
+            });
+            span.setAttributes({
+              "telegram.media_group_id": mediaGroupId,
+              "telegram.has_images": true,
+            });
+            logDebug("telegram.album.enqueue", { mediaGroupId });
+            return;
+          }
+
+          if (message.text?.trim()) {
+            mediaGroupBuffer.flushPendingForChat(ctx.chat.id);
+          }
+
+          let userInput: UserTurnInput | null;
+          try {
+            userInput = await parseTelegramUserTurn(ctx, lmstudio.client, botToken);
+          } catch (error) {
+            if (isImageInputError(error)) {
+              const text = error instanceof Error ? error.message : String(error);
+              await ctx.reply(text, { message_thread_id: message.message_thread_id });
+              return;
+            }
+            throw error;
+          }
+
+          if (!userInput) {
+            skipped = true;
+            span.setAttribute("skipped", true);
+            span.setAttribute("skip.reason", "non_actionable");
+            return;
+          }
+
+          const imageCount = userInput.images?.length ?? 0;
           span.setAttributes({
             "telegram.update_id": ctx.update.update_id,
-            "message.length": message.length,
+            "message.length": userInput.text.length,
             "session.id": agent.session.id,
+            ...(imageCount > 0 ? { "telegram.has_images": true, "telegram.image_count": imageCount } : {}),
           });
 
           logDebug("telegram.message.received", {
             updateId: String(ctx.update.update_id),
-            length: String(message.length),
+            length: String(userInput.text.length),
+            ...(imageCount > 0 ? { imageCount: String(imageCount) } : {}),
           });
-          console.log(`Telegram message received (${message.length} chars).`);
+          console.log(
+            `Telegram message received (${userInput.text.length} chars${
+              imageCount > 0 ? `, ${imageCount} image(s)` : ""
+            }).`,
+          );
 
-          const stopTyping = startTelegramTypingIndicator({
-            api: ctx.api,
-            chatId: ctx.chat!.id,
-            threadId: ctx.message.message_thread_id,
-            signal: controller.signal,
-          });
-          try {
-            try {
-              await ctx.reply("Working on it...", {
-                message_thread_id: ctx.message.message_thread_id,
-              });
-            } catch {
-              /* best-effort ack while the model turn runs */
-            }
-
-            await withTurnMutex(async () => {
-              const toolsList = await createTurnTools();
-              span.setAttribute("tools.count", toolsList.length);
-              activeTurnId = String(ctx.update.update_id);
-
-              // LM Studio may abort the act signal mid-turn; approvals must use a separate signal.
-              const turnController = new AbortController();
-              const approvalController = new AbortController();
-              const onShutdown = (): void => {
-                turnController.abort();
-                approvalController.abort();
-              };
-              controller.signal.addEventListener("abort", onShutdown);
-              const clearActiveTurn = activeTurns.setActiveTurn({
-                id: activeTurnId,
-                actController: turnController,
-                approvalController,
-              });
-
-              userQuestions.setTurnContext({ ctx, signal: turnController.signal });
-              permissionPrompts.setTurnContext({ ctx, signal: approvalController.signal });
-              todoDisplay.setTurnContext({ ctx, signal: turnController.signal });
-              approvals.setTurnContext({ ctx, signal: approvalController.signal });
-              const actStarted = performance.now();
-              try {
-                console.log("Model turn started.");
-                const { replyTexts, compacted } = await runTurn(agent, message, {
-                  tools: toolsList,
-                  signal: turnController.signal,
-                });
-                console.log(`Model turn finished (${replyTexts.length} reply chunk(s)).`);
-
-                if (ctx.message) {
-                  if (replyTexts.length > 0) {
-                    await replyWithModelText(
-                      ctx,
-                      replyTexts,
-                      ctx.message.message_id,
-                      ctx.message.message_thread_id,
-                    );
-                  } else {
-                    await ctx.reply("The model finished without a reply. Try again or rephrase.", {
-                      message_thread_id: ctx.message.message_thread_id,
-                    });
-                  }
-                }
-
-                if (compacted) {
-                  logDebug("session.compacted", { sessionId: agent.session.id });
-                }
-              } finally {
-                actMs = performance.now() - actStarted;
-                clearActiveTurn();
-                controller.signal.removeEventListener("abort", onShutdown);
-                approvalController.abort();
-                permissionPrompts.abortPending();
-                approvals.abortPending();
-                userQuestions.clearTurnContext();
-                permissionPrompts.clearTurnContext();
-                todoDisplay.clearTurnContext();
-                approvals.clearTurnContext();
-                activeTurnId = "no-active-turn";
-              }
-            });
-          } finally {
-            stopTyping();
-          }
+          actMs = await executeTelegramTurn(ctx, userInput, message.message_id, ctx.update.update_id);
         },
         { root: true },
       );
@@ -323,6 +458,11 @@ async function main(): Promise<void> {
         );
         return;
       }
+      if (isImageInputError(error) && ctx.message) {
+        const text = error instanceof Error ? error.message : String(error);
+        await ctx.reply(text, { message_thread_id: ctx.message.message_thread_id });
+        return;
+      }
       logDebug("telegram.message.error", {
         message: error instanceof Error ? error.message : String(error),
       });
@@ -331,8 +471,10 @@ async function main(): Promise<void> {
         await replyError(ctx, ctx.message.message_thread_id);
       }
     } finally {
-      recordTelegramMessage(outcome, skipped);
-      recordActDuration(actMs, outcome);
+      if (recordMetrics) {
+        recordTelegramMessage(outcome, skipped);
+        recordActDuration(actMs, outcome);
+      }
     }
   });
 

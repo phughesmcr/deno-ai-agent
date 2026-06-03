@@ -60,6 +60,11 @@ function getEnv(): { token: string; adminId: number } {
   return { token, adminId };
 }
 
+/** Bot token for Telegram file downloads (shared with {@link createTelegramManager}). */
+export function getTelegramBotToken(): string {
+  return getEnv().token;
+}
+
 function sessionArg(ctx: TelegramContext): string | undefined {
   return ctx.message?.text?.split(/\s+/)[1];
 }

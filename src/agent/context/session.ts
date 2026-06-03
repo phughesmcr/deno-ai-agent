@@ -1,9 +1,19 @@
-import { Chat, ChatMessage, type ChatMessageData, type LLM, type Tool, type ToolCallRequest } from "@lmstudio/sdk";
+import {
+  Chat,
+  ChatMessage,
+  type ChatMessageData,
+  type LLM,
+  type LMStudioClient,
+  type Tool,
+  type ToolCallRequest,
+} from "@lmstudio/sdk";
 
 import { logDebug } from "../../shared/log.ts";
 import { traceSpan } from "../../shared/otel.ts";
 import { getActReasoningParsing } from "../../shared/reasoning.ts";
+import { normalizeUserTurnInput, type UserTurnInput } from "../user-turn.ts";
 import type { SummaryCompactor } from "./compactor.ts";
+import { materializeMessageForChat } from "./message-materialize.ts";
 import {
   isValidSessionName,
   type SessionCompactionEntry,
@@ -166,6 +176,7 @@ export interface ModelActObserver {
 }
 
 interface SessionManagerOptions {
+  client: LMStudioClient;
   store: SessionStore;
   model: LLM;
   systemPrompt: string;
@@ -186,6 +197,7 @@ interface RunTurnOptions {
  * @internal
  */
 export class SessionManager {
+  readonly #client: LMStudioClient;
   readonly #store: SessionStore;
   readonly #model: LLM;
   readonly #maxContextLength: number;
@@ -204,6 +216,7 @@ export class SessionManager {
   #writeQueue: Promise<void> = Promise.resolve();
 
   constructor(spec: SessionManagerOptions) {
+    this.#client = spec.client;
     this.#store = spec.store;
     this.#model = spec.model;
     this.#systemPrompt = spec.systemPrompt;
@@ -333,10 +346,11 @@ export class SessionManager {
    * Appends the user message, runs `model.act`, and finalizes the context.
    * @internal
    */
-  async runTurn(userText: string, options: RunTurnOptions): Promise<SessionTurnResult> {
+  async runTurn(userInput: string | UserTurnInput, options: RunTurnOptions): Promise<SessionTurnResult> {
     const { tools, signal, observer } = options;
+    const input = normalizeUserTurnInput(userInput);
 
-    await this.#appendUser(userText);
+    await this.#appendUser(input);
 
     const replyTexts: string[] = [];
     const turnTokenCounts: Promise<number>[] = [];
@@ -411,8 +425,18 @@ export class SessionManager {
     return this.#chat.asMutableCopy();
   }
 
-  async #appendUser(text: string): Promise<ChatMessage> {
-    const message = this.#append("user", text);
+  async #appendUser(input: UserTurnInput): Promise<ChatMessage> {
+    const message = ChatMessage.create("user", input.text);
+    for (const image of input.images ?? []) {
+      message.appendFile(image);
+    }
+    this.#chat.append(message);
+    const imageCount = input.images?.length ?? 0;
+    logDebug("chat.append", {
+      role: message.getRole(),
+      textLength: message.getText().length,
+      ...(imageCount > 0 ? { imageCount } : {}),
+    });
     await this.#persistNewEntry(createMessageEntry(messageToData(message)));
     return message;
   }
@@ -473,7 +497,7 @@ export class SessionManager {
         const isKeptFromCheckpoint = firstKeptIndex >= 0 && index >= firstKeptIndex;
         if (!isAfterCompaction && !isKeptFromCheckpoint) continue;
       }
-      chat.append(ChatMessage.from(entry.message));
+      chat.append(materializeMessageForChat(this.#client, entry.message));
     }
     return chat;
   }
