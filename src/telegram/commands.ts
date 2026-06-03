@@ -1,8 +1,13 @@
-import { copyTodosForSession, type SessionManager, type SessionStatus } from "../agent/mod.ts";
+import {
+  copyTodosForSession,
+  type SavedSessionSummary,
+  type SessionManager,
+  type SessionStatus,
+} from "../agent/mod.ts";
 
 /** One-line help text for supported session commands. */
 export const SESSION_HELP =
-  "Sessions: /new - fresh chat | /save - write to disk | /load <id> - restore | /fork - branch copy | /list - saved ids | /session - status | /stats - tokens | /compact [instructions] - summarize history | /todos - task list";
+  "Sessions: /new - fresh chat | /save - write to disk | /load <id|name> - restore | /resume <id|name> - alias for load | /rename <name> - label session | /fork - branch copy | /list - saved sessions | /session - status | /stats - tokens | /compact [instructions] - summarize history | /todos - task list";
 
 interface CommandSession {
   readonly id: string;
@@ -10,10 +15,15 @@ interface CommandSession {
   refreshStatus(): Promise<SessionStatus>;
   newSession(): string;
   save(): Promise<string>;
-  load(id: string): Promise<void>;
+  load(ref: string): Promise<void>;
+  rename(name: string): Promise<void>;
   fork(): Promise<{ fromId: string; toId: string }>;
-  list(): Promise<string[]>;
+  listSaved(): Promise<SavedSessionSummary[]>;
   compact(instructions?: string): Promise<{ compacted: boolean; beforeTokens: number; afterTokens: number }>;
+}
+
+function formatSessionLabel(status: Pick<SessionStatus, "id" | "name">): string {
+  return status.name ? `${status.name} (${status.id})` : status.id;
 }
 
 /** Formats session status for Telegram commands. */
@@ -23,11 +33,16 @@ export function formatSessionStatus(status: SessionStatus): string {
     (status.dirty ? "saved (unsaved changes)" : "saved") :
     (status.dirty ? "not saved (unsaved changes)" : "not saved");
   return [
-    `Session: ${status.id}`,
+    `Session: ${formatSessionLabel(status)}`,
     `State: ${persist}`,
     `Messages: ${status.messageCount}`,
     `Tokens: ${status.tokenCount} / ${status.maxContextLength} (${filled}%)`,
   ].join("\n");
+}
+
+function formatListLine(summary: SavedSessionSummary, currentId: string): string {
+  const label = summary.name ? `${summary.name} — ${summary.id}` : summary.id;
+  return summary.id === currentId ? `${label} (current)` : label;
 }
 
 function errorMessage(error: unknown): string {
@@ -90,30 +105,44 @@ export class TelegramCommandHandler {
     }
   }
 
-  async load(id?: string): Promise<string> {
-    if (!id) return "Usage: /load <session-id>\n\n/list shows saved ids.";
+  async load(ref?: string): Promise<string> {
+    if (!ref) return "Usage: /load <id|name>\n\n/list shows saved sessions.";
     try {
-      await this._session.load(id);
-      return `Loaded session ${id}.\n\n${formatSessionStatus(this._session.status())}`;
+      await this._session.load(ref);
+      const status = this._session.status();
+      return `Loaded session ${formatSessionLabel(status)}.\n\n${formatSessionStatus(status)}`;
     } catch (error) {
       return `Load failed: ${errorMessage(error)}`;
+    }
+  }
+
+  async rename(name?: string): Promise<string> {
+    if (!name) return "Usage: /rename <name>";
+    try {
+      await this._session.rename(name);
+      const status = this._session.status();
+      return `Renamed session to "${name}".\n${formatSessionLabel(status)}`;
+    } catch (error) {
+      return `Rename failed: ${errorMessage(error)}`;
     }
   }
 
   async save(): Promise<string> {
     try {
       const id = await this._session.save();
-      return `Saved.\nID: ${id}`;
+      const status = this._session.status();
+      const label = status.name ? `${status.name} (${id})` : id;
+      return `Saved.\n${label}`;
     } catch (error) {
       return `Save failed: ${errorMessage(error)}`;
     }
   }
 
   async list(): Promise<string> {
-    const sessions = await this._session.list();
+    const sessions = await this._session.listSaved();
     if (sessions.length === 0) return "No saved sessions. /save writes the current chat.";
     const current = this._session.id;
-    const lines = sessions.map((id) => (id === current ? `${id} (current)` : id));
+    const lines = sessions.map((summary) => formatListLine(summary, current));
     return `Saved sessions:\n${lines.join("\n")}`;
   }
 }

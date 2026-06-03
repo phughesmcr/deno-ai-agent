@@ -4,12 +4,13 @@ import { logDebug } from "../../shared/log.ts";
 import { traceSpan } from "../../shared/otel.ts";
 import { getActReasoningParsing } from "../../shared/reasoning.ts";
 import type { SummaryCompactor } from "./compactor.ts";
-import type {
-  SessionCompactionEntry,
-  SessionEntry,
-  SessionFileDetails,
-  SessionMessageEntry,
-  SessionStore,
+import {
+  isValidSessionName,
+  type SessionCompactionEntry,
+  type SessionEntry,
+  type SessionFileDetails,
+  type SessionMessageEntry,
+  type SessionStore,
 } from "./session-store.ts";
 
 /** @internal SDK exposes getRaw() at runtime but not in public types. */
@@ -86,10 +87,22 @@ function isSafeFirstKept(message: ChatMessageData): boolean {
   return toolRequests(message).length === 0;
 }
 
+/** Summary of a saved session for list commands. */
+export interface SavedSessionSummary {
+  /** Session identifier. */
+  id: string;
+  /** ISO timestamp when the session log was created. */
+  createdAt: string;
+  /** User-facing alias when set. */
+  name?: string;
+}
+
 /** Snapshot of session state for status commands. */
 export interface SessionStatus {
   /** Current session id. */
   id: string;
+  /** User-facing alias when set. */
+  name?: string;
   /** Whether unsaved changes exist in memory. */
   dirty: boolean;
   /** Whether the current id exists on disk. */
@@ -183,6 +196,7 @@ export class SessionManager {
   #chat: Chat;
   #systemPrompt: string;
   #id: string;
+  #name: string | undefined;
   #dirty = false;
   #existsOnDisk = false;
   #tokenCount = 0;
@@ -199,6 +213,7 @@ export class SessionManager {
     this.#compactor = spec.compactor;
     this.#chat = this.#freshChat();
     this.#id = crypto.randomUUID();
+    this.#name = undefined;
   }
 
   get id(): string {
@@ -208,6 +223,7 @@ export class SessionManager {
   status(): SessionStatus {
     return {
       id: this.#id,
+      name: this.#name,
       dirty: this.#dirty,
       existsOnDisk: this.#existsOnDisk,
       messageCount: this.#chat.getMessagesArray().length,
@@ -233,6 +249,7 @@ export class SessionManager {
   newSession(): string {
     this.#chat = this.#freshChat();
     this.#id = crypto.randomUUID();
+    this.#name = undefined;
     this.#dirty = false;
     this.#existsOnDisk = false;
     this.#tokenCount = 0;
@@ -244,7 +261,7 @@ export class SessionManager {
   async save(): Promise<string> {
     await this.#writeQueue;
     if (!this.#existsOnDisk) {
-      await this.#store.create(this.#id);
+      await this.#store.create(this.#id, { name: this.#name });
       await this.#store.appendMany(this.#id, this.#entries);
       this.#existsOnDisk = true;
     }
@@ -254,9 +271,12 @@ export class SessionManager {
     return this.#id;
   }
 
-  async load(id: string): Promise<void> {
+  async load(ref: string): Promise<void> {
+    await this.#writeQueue;
+    const id = await this.#store.resolveId(ref);
     const log = await this.#store.read(id);
     this.#id = log.header.id;
+    this.#name = log.header.name;
     this.#entries = log.entries;
     this.#existsOnDisk = true;
     this.#dirty = false;
@@ -270,6 +290,7 @@ export class SessionManager {
     const fromId = this.#id;
     const copiedEntries = structuredClone(this.#entries) as SessionEntry[];
     this.#id = crypto.randomUUID();
+    this.#name = undefined;
     this.#entries = copiedEntries;
     this.#existsOnDisk = false;
     this.#dirty = true;
@@ -280,6 +301,25 @@ export class SessionManager {
 
   async list(): Promise<string[]> {
     return await this.#store.list();
+  }
+
+  async listSaved(): Promise<SavedSessionSummary[]> {
+    return (await this.#store.listHeaders()).map((header) => ({
+      id: header.id,
+      createdAt: header.createdAt,
+      name: header.name,
+    }));
+  }
+
+  /** Sets a user-facing alias for the current session. */
+  async rename(name: string): Promise<void> {
+    if (!isValidSessionName(name)) throw new Error("Invalid session name");
+    const matches = await this.#store.findIdsByName(name, this.#id);
+    if (matches.length > 0) throw new Error("Session name already in use");
+    this.#name = name;
+    if (!this.#existsOnDisk) return;
+    await this.#writeQueue;
+    await this.#store.setName(this.#id, name);
   }
 
   /** Manually compacts the current session. */
@@ -400,7 +440,7 @@ export class SessionManager {
   async #persistNewEntry(entry: SessionEntry): Promise<void> {
     this.#writeQueue = this.#writeQueue.then(async () => {
       if (!this.#existsOnDisk) {
-        await this.#store.create(this.#id);
+        await this.#store.create(this.#id, { name: this.#name });
         await this.#store.appendMany(this.#id, this.#entries);
         this.#existsOnDisk = true;
       }

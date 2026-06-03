@@ -132,17 +132,18 @@ The `subagent` tool tracks subagents per current session with in-memory Deno KV.
 ### Session commands (admin)
 
 
-| Command      | Action                                                                |
-| ------------ | --------------------------------------------------------------------- |
-| `/new`       | Fresh in-memory session (new id; does not save the previous one)      |
-| `/save`      | Write current chat to `{WORKSPACE_PATH}/sessions/{id}.json`           |
-| `/load <id>` | Restore a saved session (`/resume` is an alias)                       |
-| `/fork`      | Save current session, then branch into a new id with the same history |
-| `/list`      | List saved session ids                                                |
-| `/session`   | Current id, save state, message and token counts                      |
-| `/stats`     | Same as `/session` but refreshes token count first                    |
-| `/todos`     | Show or refresh the current session task list in Telegram             |
-| `/help`      | Session command summary                                               |
+| Command           | Action                                                                                    |
+| ----------------- | ----------------------------------------------------------------------------------------- |
+| `/new`            | Fresh in-memory session (new id; does not save the previous one)                          |
+| `/save`           | Write current chat to `{WORKSPACE_PATH}/sessions/{id}.jsonl`                              |
+| `/load <id\|name>` | Restore a saved session (`/resume` is an alias; use `/rename` to set a name)              |
+| `/rename <name>`  | Label the current session (`[a-zA-Z0-9_-]`, one word, unique among saved sessions)        |
+| `/fork`           | Save current session, then branch into a new id with the same history (name not copied)   |
+| `/list`           | List saved sessions (names and ids)                                                       |
+| `/session`        | Current session, save state, message and token counts                                     |
+| `/stats`          | Same as `/session` but refreshes token count first                                        |
+| `/todos`          | Show or refresh the current session task list in Telegram                                 |
+| `/help`           | Session command summary                                                                   |
 
 
 Custom OpenTelemetry spans: `telegram.message` (root span per turn), `lmstudio.act`, and `context.compact`. Deno also auto-instruments `fetch` and `console.*` when `OTEL_DENO=true`. The collector redacts Telegram bot tokens in `url.full` before export.

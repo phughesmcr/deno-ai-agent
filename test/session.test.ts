@@ -183,12 +183,10 @@ Deno.test("SessionManager sends prompt, user text, tools, replies, tokens, and o
       ["system", "current system prompt"],
       ["user", "hello"],
     ]);
-    assertEquals(result, {
-      replyTexts: ["reply"],
-      turnTokens: 5,
-      compacted: false,
-      totalTokens: 9,
-    });
+    assertEquals(result.replyTexts, ["reply"]);
+    assertEquals(result.turnTokens, 5);
+    assertEquals(result.compacted, false);
+    assertEquals(result.totalTokens, 9);
     assertEquals(events, [
       "round-start:0",
       "first:0:number",
@@ -245,6 +243,57 @@ Deno.test("SessionManager newSession keeps the current system prompt", async () 
       ["system", "current system prompt"],
       ["user", "fresh"],
     ]);
+  });
+});
+
+Deno.test("SessionManager rename before save writes name on first persist", async () => {
+  await withSession(async ({ session, store }) => {
+    await session.rename("my-alias");
+    await session.runTurn("hello", { tools: [], signal: new AbortController().signal });
+    const header = await store.readHeader(session.id);
+    assertEquals(header.name, "my-alias");
+    assertEquals(header.version, 3);
+  });
+});
+
+Deno.test("SessionManager rename on saved session updates header", async () => {
+  await withSession(async ({ session, store }) => {
+    await session.runTurn("hello", { tools: [], signal: new AbortController().signal });
+    await session.rename("saved-alias");
+    const header = await store.readHeader(session.id);
+    assertEquals(header.name, "saved-alias");
+  });
+});
+
+Deno.test("SessionManager load resolves session by name", async () => {
+  await withSession(async ({ session, store }) => {
+    const id = crypto.randomUUID();
+    await store.create(id, { name: "disk-alias" });
+    await store.append(id, {
+      type: "message",
+      id: crypto.randomUUID(),
+      createdAt: "2026-06-03T00:00:00.000Z",
+      message: rawMessage("user", "from disk"),
+    });
+
+    await session.load("disk-alias");
+    assertEquals(session.id, id);
+    assertEquals(session.status().name, "disk-alias");
+  });
+});
+
+Deno.test("SessionManager fork and newSession clear name", async () => {
+  await withSession(async ({ session }) => {
+    await session.rename("branch");
+    await session.runTurn("x", { tools: [], signal: new AbortController().signal });
+    assertEquals(session.status().name, "branch");
+
+    const { toId } = await session.fork();
+    assertEquals(session.status().name, undefined);
+    assertEquals(session.id, toId);
+
+    session.newSession();
+    assertEquals(session.status().name, undefined);
   });
 });
 

@@ -1,12 +1,17 @@
 import { assertEquals } from "jsr:@std/assert@1/equals";
-import type { SessionManager, SessionStatus } from "../src/agent/context/session.ts";
+import type { SavedSessionSummary, SessionManager, SessionStatus } from "../src/agent/context/session.ts";
 import { formatSessionStatus, SESSION_HELP, TelegramCommandHandler } from "../src/telegram/commands.ts";
 
 class FakeSession {
   id = "current";
   refreshCalls = 0;
   loadIds: string[] = [];
-  sessions = ["archived", "current"];
+  renameNames: string[] = [];
+  renameError: Error | undefined;
+  listSavedResult: SavedSessionSummary[] = [
+    { id: "archived", createdAt: "2026-06-03T00:00:00.000Z" },
+    { id: "current", createdAt: "2026-06-03T00:00:00.000Z", name: "active" },
+  ];
   saveError: Error | undefined;
   loadError: Error | undefined;
   forkError: Error | undefined;
@@ -14,6 +19,7 @@ class FakeSession {
   compactInstructions: (string | undefined)[] = [];
   statusValue: SessionStatus = {
     id: "current",
+    name: "active",
     dirty: false,
     existsOnDisk: true,
     messageCount: 3,
@@ -32,7 +38,7 @@ class FakeSession {
 
   newSession(): string {
     this.id = "new-id";
-    this.statusValue = { ...this.statusValue, dirty: false, existsOnDisk: false };
+    this.statusValue = { ...this.statusValue, id: "new-id", name: undefined, dirty: false, existsOnDisk: false };
     return this.id;
   }
 
@@ -40,11 +46,24 @@ class FakeSession {
     return this.saveError ? Promise.reject(this.saveError) : Promise.resolve(this.id);
   }
 
-  load(id: string): Promise<void> {
-    this.loadIds.push(id);
+  load(ref: string): Promise<void> {
+    this.loadIds.push(ref);
     if (this.loadError) return Promise.reject(this.loadError);
-    this.id = id;
-    this.statusValue = { ...this.statusValue, dirty: false, existsOnDisk: true };
+    this.id = ref === "archived" ? "archived" : this.id;
+    this.statusValue = {
+      ...this.statusValue,
+      id: this.id,
+      name: ref === "archived" ? undefined : this.statusValue.name,
+      dirty: false,
+      existsOnDisk: true,
+    };
+    return Promise.resolve();
+  }
+
+  rename(name: string): Promise<void> {
+    this.renameNames.push(name);
+    if (this.renameError) return Promise.reject(this.renameError);
+    this.statusValue = { ...this.statusValue, name };
     return Promise.resolve();
   }
 
@@ -52,8 +71,8 @@ class FakeSession {
     return this.forkError ? Promise.reject(this.forkError) : Promise.resolve({ fromId: "current", toId: "forked" });
   }
 
-  list(): Promise<string[]> {
-    return Promise.resolve(this.sessions);
+  listSaved(): Promise<SavedSessionSummary[]> {
+    return Promise.resolve(this.listSavedResult);
   }
 
   compact(instructions?: string): Promise<{ compacted: boolean; beforeTokens: number; afterTokens: number }> {
@@ -70,10 +89,11 @@ function createHandler(session = new FakeSession()): { handler: TelegramCommandH
   };
 }
 
-Deno.test("formatSessionStatus renders persistence, messages, and token fill exactly", () => {
+Deno.test("formatSessionStatus renders name, persistence, messages, and token fill", () => {
   assertEquals(
     formatSessionStatus({
       id: "abc",
+      name: "demo",
       dirty: true,
       existsOnDisk: true,
       messageCount: 8,
@@ -81,7 +101,7 @@ Deno.test("formatSessionStatus renders persistence, messages, and token fill exa
       maxContextLength: 100,
     }),
     [
-      "Session: abc",
+      "Session: demo (abc)",
       "State: saved (unsaved changes)",
       "Messages: 8",
       "Tokens: 33 / 100 (33%)",
@@ -94,9 +114,11 @@ Deno.test("TelegramCommandHandler returns text for successful session commands",
 
   assertEquals(handler.help(), SESSION_HELP);
   assertEquals(handler.newSession(), "New session.\nID: new-id\n\nUse /save to persist.");
-  assertEquals(await handler.save(), "Saved.\nID: new-id");
+  assertEquals(await handler.save(), "Saved.\nnew-id");
   assertEquals(await handler.compact("keep file paths"), "Compacted.\nTokens before: 90\nTokens after: 30");
   assertEquals(session.compactInstructions, ["keep file paths"]);
+  assertEquals(await handler.rename("my-work"), 'Renamed session to "my-work".\nmy-work (new-id)');
+  assertEquals(session.renameNames, ["my-work"]);
   assertEquals(
     await handler.load("archived"),
     [
@@ -110,7 +132,10 @@ Deno.test("TelegramCommandHandler returns text for successful session commands",
   );
   assertEquals(session.loadIds, ["archived"]);
   assertEquals(await handler.fork(), "Forked.\nFrom: current\nTo: forked\n\nUse /save on the new branch when ready.");
-  assertEquals(await handler.list(), "Saved sessions:\narchived (current)\ncurrent");
+  assertEquals(
+    await handler.list(),
+    "Saved sessions:\narchived (current)\nactive — current",
+  );
 });
 
 Deno.test("TelegramCommandHandler stats refreshes through the session API", async () => {
@@ -119,7 +144,7 @@ Deno.test("TelegramCommandHandler stats refreshes through the session API", asyn
   assertEquals(
     await handler.stats(),
     [
-      "Session: current",
+      "Session: active (current)",
       "State: saved",
       "Messages: 3",
       "Tokens: 40 / 100 (40%)",
@@ -134,12 +159,15 @@ Deno.test("TelegramCommandHandler returns user-facing command failure text", asy
   session.loadError = new Error("missing");
   session.forkError = new Error("cannot fork");
   session.compactError = new Error("model unavailable");
-  session.sessions = [];
+  session.renameError = new Error("Invalid session name");
+  session.listSavedResult = [];
   const { handler } = createHandler(session);
 
   assertEquals(await handler.save(), "Save failed: disk full");
-  assertEquals(await handler.load(), "Usage: /load <session-id>\n\n/list shows saved ids.");
+  assertEquals(await handler.load(), "Usage: /load <id|name>\n\n/list shows saved sessions.");
   assertEquals(await handler.load("bad"), "Load failed: missing");
+  assertEquals(await handler.rename(), "Usage: /rename <name>");
+  assertEquals(await handler.rename("bad"), "Rename failed: Invalid session name");
   assertEquals(await handler.fork(), "Fork failed: cannot fork");
   assertEquals(await handler.compact(), "Compaction failed: model unavailable");
   assertEquals(await handler.list(), "No saved sessions. /save writes the current chat.");

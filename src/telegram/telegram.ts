@@ -224,6 +224,12 @@ export function createTelegramManager({
   bot.command("load", handleLoad);
   bot.command("resume", handleLoad);
 
+  bot.command("rename", async (ctx: TelegramContext) => {
+    if (blockIfInteractionPending(ctx)) return;
+    const name = commandRest(ctx)?.trim();
+    await ctx.reply(await commands.rename(name && name.length > 0 ? name : undefined));
+  });
+
   bot.command("save", async (ctx: TelegramContext) => {
     if (blockIfInteractionPending(ctx)) return;
     await ctx.reply(await commands.save());

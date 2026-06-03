@@ -1,7 +1,9 @@
 import type { ChatMessageData } from "@lmstudio/sdk";
 
 /** Session event-log file format version. */
-export const FORMAT_VERSION = 2 as const;
+export const FORMAT_VERSION = 3 as const;
+
+const LEGACY_FORMAT_VERSION = 2 as const;
 
 /**
  * File details carried by compaction checkpoints.
@@ -15,16 +17,18 @@ export interface SessionFileDetails {
 }
 
 /**
- * First line in a v2 session JSONL file.
+ * First line in a session JSONL file (v2 or v3).
  * @internal
  */
 export interface SessionHeader {
   /** Event-log format version. */
-  version: typeof FORMAT_VERSION;
+  version: typeof FORMAT_VERSION | typeof LEGACY_FORMAT_VERSION;
   /** Session identifier. */
   id: string;
   /** ISO timestamp when the session log was created. */
   createdAt: string;
+  /** User-facing alias for `/resume <name>`. */
+  name?: string;
 }
 
 /**
@@ -74,7 +78,7 @@ export interface SessionCompactionEntry {
 export type SessionEntry = SessionMessageEntry | SessionCompactionEntry;
 
 /**
- * Complete v2 session event log.
+ * Complete session event log.
  * @internal
  */
 export interface SessionLog {
@@ -84,22 +88,49 @@ export interface SessionLog {
   entries: SessionEntry[];
 }
 
-const SESSION_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
+const SESSION_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const SESSION_NAME_PATTERN = /^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$/;
 
-function isValidSessionId(id: string): boolean {
+export function isValidSessionId(id: string): boolean {
   return SESSION_ID_PATTERN.test(id);
+}
+
+export function isValidSessionName(name: string): boolean {
+  return SESSION_NAME_PATTERN.test(name) && !isValidSessionId(name);
 }
 
 function assertValidSessionId(id: string): void {
   if (!isValidSessionId(id)) throw new Error("Invalid session id");
 }
 
+function assertValidSessionName(name: string): void {
+  if (!isValidSessionName(name)) throw new Error("Invalid session name");
+}
+
+function isSupportedHeaderVersion(version: unknown): version is SessionHeader["version"] {
+  return version === FORMAT_VERSION || version === LEGACY_FORMAT_VERSION;
+}
+
 function assertSessionHeader(value: unknown, expectedId: string): asserts value is SessionHeader {
   if (!value || typeof value !== "object") throw new Error("Invalid session JSONL header");
   const header = value as Partial<SessionHeader>;
-  if (header.version !== FORMAT_VERSION) throw new Error("Invalid session JSONL header");
+  if (!isSupportedHeaderVersion(header.version)) throw new Error("Invalid session JSONL header");
   if (header.id !== expectedId) throw new Error(`Session file id mismatch: expected ${expectedId}, got ${header.id}`);
   if (typeof header.createdAt !== "string") throw new Error("Invalid session JSONL header");
+  if (header.name !== undefined) {
+    if (typeof header.name !== "string") throw new Error("Invalid session JSONL header");
+    assertValidSessionName(header.name);
+  }
+}
+
+function serializeHeader(header: SessionHeader): string {
+  const payload: Record<string, string | number> = {
+    version: FORMAT_VERSION,
+    id: header.id,
+    createdAt: header.createdAt,
+  };
+  if (header.name !== undefined) payload["name"] = header.name;
+  return JSON.stringify(payload);
 }
 
 function assertFileDetails(value: unknown): asserts value is SessionFileDetails {
@@ -166,12 +197,22 @@ export class SessionStore {
     this.#dir = sessionsDir;
   }
 
-  /** Creates an empty v2 session log if it does not already exist. */
-  async create(id: string): Promise<void> {
+  /** Creates an empty v3 session log if it does not already exist. */
+  async create(id: string, options?: { name?: string }): Promise<void> {
     assertValidSessionId(id);
     if (await this.exists(id)) return;
-    const header: SessionHeader = { version: FORMAT_VERSION, id, createdAt: new Date().toISOString() };
-    await Deno.writeTextFile(this.#path(id), `${JSON.stringify(header)}\n`, { createNew: true });
+    const name = options?.name;
+    if (name !== undefined) {
+      assertValidSessionName(name);
+      await this.#assertNameAvailable(name);
+    }
+    const header: SessionHeader = {
+      version: FORMAT_VERSION,
+      id,
+      createdAt: new Date().toISOString(),
+      ...(name !== undefined ? { name } : {}),
+    };
+    await Deno.writeTextFile(this.#path(id), `${serializeHeader(header)}\n`, { createNew: true });
   }
 
   /** Appends one entry to an existing session log. */
@@ -188,7 +229,18 @@ export class SessionStore {
     await Deno.writeTextFile(this.#path(id), text, { append: true });
   }
 
-  /** Reads a v2 session log. */
+  /** Reads the session JSONL header (line 1). */
+  async readHeader(id: string): Promise<SessionHeader> {
+    assertValidSessionId(id);
+    const text = await Deno.readTextFile(this.#path(id));
+    const line = text.split("\n").find((row) => row.length > 0);
+    if (!line) throw new Error("Invalid session JSONL header");
+    const header = parseJsonLine(line, 1);
+    assertSessionHeader(header, id);
+    return header;
+  }
+
+  /** Reads a session log. */
   async read(id: string): Promise<SessionLog> {
     assertValidSessionId(id);
     let text: string;
@@ -218,7 +270,63 @@ export class SessionStore {
     return { header, entries };
   }
 
-  /** Lists v2 session ids (filenames without `.jsonl`). */
+  /** Updates the session name in the JSONL header (rewrites the file). */
+  async setName(id: string, name: string | undefined): Promise<void> {
+    assertValidSessionId(id);
+    if (name !== undefined) {
+      assertValidSessionName(name);
+      await this.#assertNameAvailable(name, id);
+    }
+
+    const log = await this.read(id);
+    const header: SessionHeader = {
+      version: FORMAT_VERSION,
+      id: log.header.id,
+      createdAt: log.header.createdAt,
+      ...(name !== undefined ? { name } : {}),
+    };
+    const lines = [serializeHeader(header), ...log.entries.map((entry) => JSON.stringify(entry))];
+    const text = lines.join("\n") + "\n";
+    const tempPath = `${this.#path(id)}.tmp-${crypto.randomUUID()}`;
+    try {
+      await Deno.writeTextFile(tempPath, text);
+      await Deno.rename(tempPath, this.#path(id));
+    } catch (error) {
+      await Deno.remove(tempPath).catch(() => undefined);
+      throw error;
+    }
+  }
+
+  /** Returns session ids with the given name, excluding one id when provided. */
+  async findIdsByName(name: string, exceptId?: string): Promise<string[]> {
+    const matches: string[] = [];
+    for (const id of await this.list()) {
+      if (id === exceptId) continue;
+      const header = await this.readHeader(id);
+      if (header.name === name) matches.push(id);
+    }
+    return matches;
+  }
+
+  /** Resolves a session id or saved name to a session id. */
+  async resolveId(ref: string): Promise<string> {
+    if (isValidSessionId(ref)) return ref;
+    const matches = await this.findIdsByName(ref);
+    if (matches.length === 0) throw new Error(`No saved session named "${ref}"`);
+    if (matches.length > 1) throw new Error(`Ambiguous session name "${ref}"`);
+    return matches[0]!;
+  }
+
+  /** Lists headers for all saved sessions (uuid sort). */
+  async listHeaders(): Promise<SessionHeader[]> {
+    const headers: SessionHeader[] = [];
+    for (const id of await this.list()) {
+      headers.push(await this.readHeader(id));
+    }
+    return headers;
+  }
+
+  /** Lists session ids (filenames without `.jsonl`). */
   async list(): Promise<string[]> {
     const entries = await Array.fromAsync(Deno.readDir(this.#dir));
     return entries
@@ -250,6 +358,11 @@ export class SessionStore {
       if (error instanceof Deno.errors.NotFound) return false;
       throw error;
     }
+  }
+
+  async #assertNameAvailable(name: string, exceptId?: string): Promise<void> {
+    const matches = await this.findIdsByName(name, exceptId);
+    if (matches.length > 0) throw new Error("Session name already in use");
   }
 
   #path(id: string): string {
