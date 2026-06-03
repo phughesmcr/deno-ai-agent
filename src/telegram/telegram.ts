@@ -153,6 +153,8 @@ export function createTelegramManager({
 
   bot.command("start", async (ctx) => {
     if (ctx.config.isAdmin) {
+      if (blockIfInteractionPending(ctx)) return;
+      await ctx.reply(commands.newSession());
       await ctx.reply(`Hello, admin!\n\n${SESSION_HELP}`);
     } else {
       await ctx.reply("Sorry, you are not authorized to use this bot.");

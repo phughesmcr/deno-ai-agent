@@ -1,7 +1,6 @@
 import { BOOTSTRAP_ENV_VARS, BOOTSTRAP_NET_HOSTS, TRUSTED_IMPORT_HOSTS } from "./bootstrap-fixtures.ts";
 import { isUnderRoot, normalizeAbsolutePath, stripPathQuotes } from "./paths.ts";
 import { type BrokerRequest, normalizeBrokerValue, type PolicyDecision } from "./protocol.ts";
-import type { SessionCache } from "./session-cache.ts";
 
 /** Inputs used by the permission policy engine. */
 export interface PolicyContext {
@@ -11,8 +10,6 @@ export interface PolicyContext {
   repoSrcDir: string;
   brokerSocketPaths: readonly string[];
   runPromptsEnabled: boolean;
-  controlRegistered: boolean;
-  cache: SessionCache;
 }
 
 /** Builds policy context from environment and resolved paths. */
@@ -22,8 +19,6 @@ export function createPolicyContext(spec: {
   denoDir: string;
   brokerSocketPaths?: readonly string[];
   runPromptsEnabled: boolean;
-  controlRegistered: boolean;
-  cache: SessionCache;
 }): PolicyContext {
   const repoSrcDir = normalizeAbsolutePath(`${spec.projectRoot}/src`);
   return {
@@ -33,8 +28,6 @@ export function createPolicyContext(spec: {
     repoSrcDir,
     brokerSocketPaths: (spec.brokerSocketPaths ?? []).map(normalizeAbsolutePath),
     runPromptsEnabled: spec.runPromptsEnabled,
-    controlRegistered: spec.controlRegistered,
-    cache: spec.cache,
   };
 }
 
@@ -94,9 +87,8 @@ function decideEnv(value: string | null): PolicyDecision {
   return "auto_allow";
 }
 
-function decideRun(ctx: PolicyContext, value: string | null): PolicyDecision {
+function decideRun(ctx: PolicyContext): PolicyDecision {
   if (!ctx.runPromptsEnabled) return "auto_deny";
-  if (ctx.cache.has("run", value)) return "auto_allow";
   return "prompt";
 }
 
@@ -109,11 +101,10 @@ function decideImport(value: string | null): PolicyDecision {
 
 /**
  * Classifies a broker request.
- * When `controlRegistered` is false, `prompt` is coerced to `auto_deny` by the daemon.
+ * Mutable grants and prompt readiness are applied by the daemon before/after this classification.
  */
 export function decidePolicy(request: BrokerRequest, ctx: PolicyContext): PolicyDecision {
   const value = normalizeBrokerValue(request.value);
-  if (ctx.cache.has(request.permission, value)) return "auto_allow";
 
   switch (request.permission) {
     case "read":
@@ -125,7 +116,7 @@ export function decidePolicy(request: BrokerRequest, ctx: PolicyContext): Policy
     case "env":
       return decideEnv(value);
     case "run":
-      return decideRun(ctx, value);
+      return decideRun(ctx);
     case "import":
       return decideImport(value);
     case "ffi":
@@ -134,10 +125,4 @@ export function decidePolicy(request: BrokerRequest, ctx: PolicyContext): Policy
     default:
       return "prompt";
   }
-}
-
-/** Applies pre-register rule: never prompt before control client registers. */
-export function effectiveDecision(decision: PolicyDecision, ctx: PolicyContext): PolicyDecision {
-  if (decision === "prompt" && !ctx.controlRegistered) return "auto_deny";
-  return decision;
 }

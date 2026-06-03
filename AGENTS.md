@@ -1,3 +1,22 @@
+# Project Guidance
+
+This is a personal experimental project and is greenfield - be ambitious. Backward compatibility is never required. Remove all unused and deprecated code immediately.
+
+Silas is a monorepo. The project is a Deno-first AI Agent Harness.
+
+Tech stack:
+
+- Runtime: Deno 2.8.1
+- Database: Deno KV
+- LLM Provider: LMStudio Typescript SDK
+- LLM Model: Qwen3.6 27B
+- Presentation interface: Telegram (GrammY)
+- Observability: OTEL (Jager)
+
+Always prefer modern (ES2025+) WebPlatform APIs, and Deno APIs, including the Deno `@std` JSR library over other libraryies where possible.
+
+# Coding Guidance
+
 ## 1. Think Before Coding
 
 **Don't assume. Don't hide confusion. Surface tradeoffs.**
@@ -31,12 +50,11 @@ When editing existing code:
 - Don't "improve" adjacent code, comments, or formatting.
 - Don't refactor things that aren't broken.
 - Match existing style, even if you'd do it differently.
-- If you notice unrelated dead code, mention it - don't delete it.
+- If you notice unrelated dead code, mention it and delete it.
 
 When your changes create orphans:
 
 - Remove imports/variables/functions that YOUR changes made unused.
-- Don't remove pre-existing dead code unless asked.
 
 The test: Every changed line should trace directly to the user's request.
 

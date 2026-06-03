@@ -13,10 +13,13 @@ export class SessionCache {
     return `${permission}\0${value ?? ""}`;
   }
 
-  /** Returns true when this request was previously granted. */
-  has(permission: string, value: string | null): boolean {
+  /** Returns true for a matching grant, consuming one-time grants atomically. */
+  consume(permission: string, value: string | null): boolean {
     const key = this.key(permission, value);
-    return this.#session.has(key) || this.#once.has(key);
+    if (this.#session.has(key)) return true;
+    if (!this.#once.has(key)) return false;
+    this.#once.delete(key);
+    return true;
   }
 
   /** Records a grant; `once` entries are consumed on the next successful check. */
@@ -28,10 +31,5 @@ export class SessionCache {
       return;
     }
     this.#once.add(key);
-  }
-
-  /** Consumes a one-time grant after it was used to allow a request. */
-  consumeOnce(permission: string, value: string | null): void {
-    this.#once.delete(this.key(permission, value));
   }
 }

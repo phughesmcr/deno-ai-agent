@@ -24,6 +24,17 @@ Deno.test("parseBrokerRequest and formatBrokerResponse round-trip id", () => {
   assertEquals(JSON.parse(response.trim()), { id: 7, result: "allow" });
 });
 
+Deno.test("parseBrokerRequest normalizes omitted value to null", () => {
+  const line = JSON.stringify({
+    v: 1,
+    pid: 99,
+    id: 8,
+    datetime: "2025-01-01T00:00:00.000Z",
+    permission: "env",
+  });
+  assertEquals(parseBrokerRequest(line).value, null);
+});
+
 Deno.test("parseBrokerRequest rejects invalid json", () => {
   assertThrows(() => parseBrokerRequest("not-json"), Error);
 });

@@ -8,7 +8,11 @@ import {
   logDebug,
 } from "../shared/mod.ts";
 import { getShellCommand } from "../agent/mod.ts";
-import { grantBrokerReadPaths, sendControlGrant, shouldRunPermissionControlClient } from "../permission-broker/mod.ts";
+import {
+  grantBrokerReadPath,
+  grantBrokerRunValues,
+  shouldRunPermissionControlClient,
+} from "../permission-broker/mod.ts";
 
 /** Telegram approval button action. */
 export type ApprovalAction = "approve" | "deny";
@@ -200,10 +204,9 @@ export function createTelegramApprovalGate(): TelegramApprovalGate {
         try {
           if (current.request.operation === "shell") {
             const { cmd } = getShellCommand();
-            await sendControlGrant("run", cmd, "session");
-            await sendControlGrant("run", current.request.target, "session");
+            await grantBrokerRunValues([cmd, current.request.target]);
           } else if (current.request.operation === "read" && current.request.target.startsWith("/")) {
-            await grantBrokerReadPaths(current.request.target);
+            await grantBrokerReadPath(current.request.target);
           }
         } catch (error: unknown) {
           logDebug("approval.pregrant_error", {

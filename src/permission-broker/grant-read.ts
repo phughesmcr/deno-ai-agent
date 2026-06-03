@@ -10,8 +10,9 @@ function readGrantValues(absolutePath: string): string[] {
  * Pre-grants broker `read` for a host file path (multiple value shapes).
  * @internal
  */
-export async function grantBrokerReadPaths(absolutePath: string): Promise<void> {
+export async function grantBrokerReadPath(absolutePath: string): Promise<void> {
   for (const value of new Set(readGrantValues(absolutePath))) {
+    // deno-lint-ignore no-await-in-loop -- Grant frames must stay in order on the control socket.
     await sendControlGrant("read", value, "session");
   }
 }

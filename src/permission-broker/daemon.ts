@@ -7,9 +7,9 @@ import {
   parseControlMessage,
 } from "./control-protocol.ts";
 import { logDebug } from "./debug-log.ts";
-import { readJsonlLine, writeJsonlLine } from "./jsonl.ts";
+import { JsonlConnection } from "./jsonl.ts";
 import { normalizeAbsolutePath } from "./paths.ts";
-import { createPolicyContext, decidePolicy, effectiveDecision, type PolicyContext } from "./policy.ts";
+import { createPolicyContext, decidePolicy, type PolicyContext } from "./policy.ts";
 import { type BrokerResponse, formatBrokerResponse, normalizeBrokerValue, parseBrokerRequest } from "./protocol.ts";
 import { SessionCache } from "./session-cache.ts";
 import { removeSocketPath } from "./socket-path.ts";
@@ -87,8 +87,6 @@ export class PermissionBrokerDaemon {
       denoDir: this.#env.denoDir,
       brokerSocketPaths: [this.#env.brokerPath, this.#env.controlPath],
       runPromptsEnabled: this.#env.runPromptsEnabled,
-      controlRegistered: this.#controlRegistered,
-      cache: this.#cache,
     });
   }
 
@@ -151,6 +149,7 @@ export class PermissionBrokerDaemon {
     while (!signal.aborted) {
       let conn: Deno.Conn;
       try {
+        // deno-lint-ignore no-await-in-loop -- Listener accepts are inherently sequential.
         conn = await listener.accept();
       } catch (error) {
         if (signal.aborted || isSocketClosedError(error)) return;
@@ -190,6 +189,7 @@ export class PermissionBrokerDaemon {
     while (!signal.aborted) {
       let conn: Deno.Conn;
       try {
+        // deno-lint-ignore no-await-in-loop -- Listener accepts are inherently sequential.
         conn = await listener.accept();
       } catch (error) {
         if (signal.aborted || isSocketClosedError(error)) return;
@@ -208,6 +208,7 @@ export class PermissionBrokerDaemon {
       this.#controlConn = conn;
       logDebug("permission_broker.client_connected", { kind: "control" });
       try {
+        // deno-lint-ignore no-await-in-loop -- The daemon serves one control client before accepting a replacement.
         await this.#serveControl(conn);
       } catch (error) {
         if (!signal.aborted && !isSocketClosedError(error)) {
@@ -229,8 +230,10 @@ export class PermissionBrokerDaemon {
   }
 
   async #serveControl(conn: Deno.Conn): Promise<void> {
+    const jsonl = new JsonlConnection(conn);
     while (true) {
-      const line = await readJsonlLine(conn);
+      // deno-lint-ignore no-await-in-loop -- Control messages must be processed in socket order.
+      const line = await jsonl.readLine();
       if (line === null) return;
       const message = parseControlMessage(line);
       if (message.type === "register") {
@@ -258,35 +261,36 @@ export class PermissionBrokerDaemon {
   }
 
   async #serveBroker(conn: Deno.Conn): Promise<void> {
+    const jsonl = new JsonlConnection(conn);
     while (true) {
-      const line = await readJsonlLine(conn);
+      // deno-lint-ignore no-await-in-loop -- Broker requests must be answered in request order.
+      const line = await jsonl.readLine();
       if (line === null) return;
       const request = parseBrokerRequest(line);
+      // deno-lint-ignore no-await-in-loop -- Each Deno request must receive its matching response before the next.
       const response = await this.#handleRequest(request);
-      await writeJsonlLine(conn, formatBrokerResponse(response));
+      // deno-lint-ignore no-await-in-loop -- Responses must be written in request order.
+      await jsonl.writeLine(formatBrokerResponse(response));
     }
   }
 
   async #handleRequest(request: ReturnType<typeof parseBrokerRequest>): Promise<BrokerResponse> {
     const ctx = this.#policyContext();
-    const raw = decidePolicy(request, ctx);
-    const decision = effectiveDecision(raw, ctx);
     const value = normalizeBrokerValue(request.value);
+    const decision = this.#cache.consume(request.permission, value) ? "auto_allow" : decidePolicy(request, ctx);
+    const finalDecision = decision === "prompt" && !this.#controlRegistered ? "auto_deny" : decision;
 
     logDebug("permission_broker.request", {
       id: String(request.id),
       permission: request.permission,
-      decision,
+      decision: finalDecision,
       value: value ?? "",
     });
 
-    if (decision === "auto_allow") {
-      if (this.#cache.has(request.permission, value)) {
-        this.#cache.consumeOnce(request.permission, value);
-      }
+    if (finalDecision === "auto_allow") {
       return { id: request.id, result: "allow" };
     }
-    if (decision === "auto_deny") {
+    if (finalDecision === "auto_deny") {
       return { id: request.id, result: "deny", reason: "Denied by policy." };
     }
     return await this.#promptUser(request.id, request.permission, value);
@@ -328,7 +332,8 @@ export class PermissionBrokerDaemon {
         timeoutId,
       };
 
-      writeJsonlLine(this.#controlConn!, formatControlMessage(prompt)).catch(() => {
+      const controlJsonl = new JsonlConnection(this.#controlConn!);
+      controlJsonl.writeLine(formatControlMessage(prompt)).catch(() => {
         clearTimeout(timeoutId);
         this.#pending = undefined;
         resolve({ id: brokerId, result: "deny", reason: "Failed to send control prompt." });

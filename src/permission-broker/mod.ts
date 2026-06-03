@@ -1,5 +1,5 @@
-export { grantBrokerReadPaths } from "./grant-read.ts";
-export { sendControlGrant } from "./control-channel.ts";
+export { grantBrokerReadPath } from "./grant-read.ts";
+export { grantBrokerRunValues } from "./grant-run.ts";
 export {
   runPermissionControlClient,
   shouldRunPermissionControlClient,

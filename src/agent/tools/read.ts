@@ -1,7 +1,7 @@
 import { type Tool, tool } from "@lmstudio/sdk";
 import { z } from "zod/v3";
 
-import { grantBrokerReadPaths, shouldRunPermissionControlClient } from "../../permission-broker/mod.ts";
+import { grantBrokerReadPath, shouldRunPermissionControlClient } from "../../permission-broker/mod.ts";
 import { DEFAULT_APPROVAL_TIMEOUT_MS } from "../../shared/approval.ts";
 import { approveToolOperation, displayPath, resolveReadPath, type ToolContext } from "./context.ts";
 import { DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES, formatSize, truncateHead } from "./truncate.ts";
@@ -49,7 +49,7 @@ export function createReadTool(ctx: ToolContext): Tool {
         timeoutMs: outsideWorkspace ? DEFAULT_APPROVAL_TIMEOUT_MS * 2 : undefined,
       });
       if (outsideWorkspace && shouldRunPermissionControlClient()) {
-        await grantBrokerReadPaths(absolutePath);
+        await grantBrokerReadPath(absolutePath);
       }
 
       let text: string;
