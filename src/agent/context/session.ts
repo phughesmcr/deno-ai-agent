@@ -8,6 +8,7 @@ import {
   type ToolCallRequest,
 } from "@lmstudio/sdk";
 
+import { getActDraftModel } from "../../shared/draft-model.ts";
 import { logDebug } from "../../shared/log.ts";
 import { traceSpan } from "../../shared/otel.ts";
 import { getActReasoningParsing } from "../../shared/reasoning.ts";
@@ -359,6 +360,7 @@ export class SessionManager {
     let firstTokenMs: number | undefined;
 
     await this.#model.act(this.#snapshot(), tools, {
+      ...(getActDraftModel() ?? {}),
       allowParallelToolExecution: true,
       contextOverflowPolicy: "stopAtLimit",
       maxTokens: 4096,

@@ -1,5 +1,6 @@
 import { Chat, type ChatMessageData, type LLM, type ToolCallRequest } from "@lmstudio/sdk";
 
+import { getActDraftModel } from "../../shared/draft-model.ts";
 import { getActReasoningParsing } from "../../shared/reasoning.ts";
 import { imageFileParts } from "./message-materialize.ts";
 import type { SessionFileDetails } from "./session-store.ts";
@@ -179,6 +180,7 @@ export function createSummaryCompactor(
     summaryChat.append("user", prompt);
 
     await model.act(summaryChat, [], {
+      ...(getActDraftModel() ?? {}),
       reasoningParsing: getActReasoningParsing(),
       allowParallelToolExecution: true,
       contextOverflowPolicy: "truncateMiddle",

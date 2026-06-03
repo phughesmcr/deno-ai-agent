@@ -1,5 +1,6 @@
 import { Chat, type Tool } from "@lmstudio/sdk";
 
+import { getActDraftModel } from "../shared/draft-model.ts";
 import { type ActReasoningParsing, getActReasoningParsing } from "../shared/reasoning.ts";
 import type { SkillManager } from "./skills/mod.ts";
 import type { ToolContext } from "./tools/context.ts";
@@ -341,6 +342,7 @@ export class SubagentManager implements SubagentPort {
 
     let result = "";
     await this.#model.act(chat, createReadOnlySubagentTools(this.#workspace, this.#skills), {
+      ...(getActDraftModel() ?? {}),
       allowParallelToolExecution: true,
       contextOverflowPolicy: "truncateMiddle",
       maxTokens: 4096,
