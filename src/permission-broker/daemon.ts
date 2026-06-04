@@ -69,7 +69,6 @@ interface PendingPrompt {
   permission: string;
   value: string | null;
   resolve: (result: BrokerResponse) => void;
-  timeoutId: ReturnType<typeof setTimeout>;
 }
 
 function isSocketClosedError(error: unknown): boolean {
@@ -320,16 +319,14 @@ export class PermissionBrokerDaemon {
   }
 
   async _enqueuePrompt(task: () => Promise<BrokerResponse>): Promise<BrokerResponse> {
-    let release!: () => void;
     const previous = this._promptQueueTail;
-    this._promptQueueTail = new Promise<void>((resolve) => {
-      release = resolve;
-    });
+    const gate = Promise.withResolvers<void>();
+    this._promptQueueTail = gate.promise;
     await previous;
     try {
       return await task();
     } finally {
-      release();
+      gate.resolve();
     }
   }
 
@@ -352,31 +349,31 @@ export class PermissionBrokerDaemon {
       return { id: brokerId, result: "deny", reason: "Control session not ready." };
     }
 
-    return await new Promise<BrokerResponse>((resolve) => {
-      const timeoutId = setTimeout(() => {
-        this.#pending = undefined;
-        resolve({ id: brokerId, result: "deny", reason: "Permission prompt timed out." });
-      }, this.#env.promptTimeoutMs);
+    const response = Promise.withResolvers<BrokerResponse>();
+    const timeoutId = setTimeout(() => {
+      this.#pending = undefined;
+      response.resolve({ id: brokerId, result: "deny", reason: "Permission prompt timed out." });
+    }, this.#env.promptTimeoutMs);
+    using timeoutCleanup = { [Symbol.dispose]: () => clearTimeout(timeoutId) };
+    void timeoutCleanup;
 
-      this.#pending = {
-        requestId,
-        brokerId,
-        permission,
-        value,
-        resolve: (response) => {
-          clearTimeout(timeoutId);
-          this.#pending = undefined;
-          resolve(response);
-        },
-        timeoutId,
-      };
-
-      session.writeLine(formatControlMessage(prompt)).catch(() => {
-        clearTimeout(timeoutId);
+    this.#pending = {
+      requestId,
+      brokerId,
+      permission,
+      value,
+      resolve: (result) => {
         this.#pending = undefined;
-        resolve({ id: brokerId, result: "deny", reason: "Failed to send control prompt." });
-      });
+        response.resolve(result);
+      },
+    };
+
+    session.writeLine(formatControlMessage(prompt)).catch(() => {
+      this.#pending = undefined;
+      response.resolve({ id: brokerId, result: "deny", reason: "Failed to send control prompt." });
     });
+
+    return await response.promise;
   }
 
   #resolvePrompt(decision: ControlDecision): void {

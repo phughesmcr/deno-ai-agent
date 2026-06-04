@@ -34,7 +34,7 @@ interface AlbumState {
 }
 
 /** Buffers Telegram album photos into one debounced turn. */
-export interface MediaGroupBuffer {
+export interface MediaGroupBuffer extends Disposable {
   /** Queues one downloaded image for an album. */
   enqueue(payload: {
     mediaGroupId: string;
@@ -88,6 +88,12 @@ export function createMediaGroupBuffer(
     }, ALBUM_DEBOUNCE_MS);
   }
 
+  function dispose(): void {
+    for (const state of albums.values()) clearTimer(state);
+    albums.clear();
+    chatToGroup.clear();
+  }
+
   return {
     enqueue({ mediaGroupId, context, turnCtx, item, caption }): void {
       let state = albums.get(mediaGroupId);
@@ -134,10 +140,10 @@ export function createMediaGroupBuffer(
       });
     },
 
-    dispose(): void {
-      for (const state of albums.values()) clearTimer(state);
-      albums.clear();
-      chatToGroup.clear();
+    dispose,
+
+    [Symbol.dispose](): void {
+      dispose();
     },
   };
 }

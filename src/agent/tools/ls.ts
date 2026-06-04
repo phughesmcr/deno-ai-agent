@@ -61,12 +61,12 @@ export const lsToolDefinition: AgentToolDefinition<typeof lsParameters> = {
         entries.push(entry.name + suffix);
       }
 
-      entries.sort((a, b) => a.toLowerCase().localeCompare(b.toLowerCase()));
-      const limitedEntries = entries.slice(0, effectiveLimit);
+      const sortedEntries = entries.toSorted((a, b) => a.toLowerCase().localeCompare(b.toLowerCase()));
+      const limitedEntries = sortedEntries.slice(0, effectiveLimit);
 
       if (limitedEntries.length === 0) return "(empty directory)";
 
-      const entryLimitReached = entries.length > effectiveLimit;
+      const entryLimitReached = sortedEntries.length > effectiveLimit;
       const rawOutput = limitedEntries.join("\n");
       const truncation = truncateHead(rawOutput, { maxLines: Number.MAX_SAFE_INTEGER });
       let output = truncation.content;

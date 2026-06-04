@@ -20,12 +20,11 @@ export interface ControlClientOptions {
   reconnectDelayMs?: number;
 }
 
-let controlReadyResolve: (() => void) | undefined;
+const controlReady = Promise.withResolvers<void>();
+let controlReadyResolve: (() => void) | undefined = controlReady.resolve;
 
 /** Resolves once the control client has connected and sent `register` to the broker. */
-export const permissionControlClientReady: Promise<void> = new Promise((resolve) => {
-  controlReadyResolve = resolve;
-});
+export const permissionControlClientReady: Promise<void> = controlReady.promise;
 
 function markControlReady(): void {
   controlReadyResolve?.();

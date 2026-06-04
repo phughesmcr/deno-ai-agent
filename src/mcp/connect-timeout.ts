@@ -7,13 +7,9 @@ export async function withTimeout<T>(
   ms: number,
   label: string,
 ): Promise<T> {
-  let timeoutId: ReturnType<typeof setTimeout> | undefined;
-  const timeout = new Promise<never>((_resolve, reject) => {
-    timeoutId = setTimeout(() => reject(new Error(`${label} timed out after ${ms}ms`)), ms);
-  });
-  try {
-    return await Promise.race([promise, timeout]);
-  } finally {
-    if (timeoutId !== undefined) clearTimeout(timeoutId);
-  }
+  const timeout = Promise.withResolvers<never>();
+  const timeoutId = setTimeout(() => timeout.reject(new Error(`${label} timed out after ${ms}ms`)), ms);
+  using timeoutCleanup = { [Symbol.dispose]: () => clearTimeout(timeoutId) };
+  void timeoutCleanup;
+  return await Promise.race([promise, timeout.promise]);
 }

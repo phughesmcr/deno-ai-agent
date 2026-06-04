@@ -97,27 +97,27 @@ export function createTelegramUserInteractionPort(): UserInteractionPort {
       if (urlCompleteWaiters.has(elicitationId)) {
         return Promise.reject(new Error("Already waiting for elicitation"));
       }
-      return new Promise<void>((resolve, reject) => {
-        const onAbort = (): void => {
-          urlCompleteWaiters.delete(elicitationId);
-          reject(new UserQuestionAbortedError());
-        };
-        if (signal.aborted) {
-          onAbort();
-          return;
-        }
-        signal.addEventListener("abort", onAbort, { once: true });
-        urlCompleteWaiters.set(elicitationId, {
-          resolve: () => {
-            signal.removeEventListener("abort", onAbort);
-            resolve();
-          },
-          reject: (e) => {
-            signal.removeEventListener("abort", onAbort);
-            reject(e);
-          },
-        });
+      const wait = Promise.withResolvers<void>();
+      const onAbort = (): void => {
+        urlCompleteWaiters.delete(elicitationId);
+        wait.reject(new UserQuestionAbortedError());
+      };
+      if (signal.aborted) {
+        onAbort();
+        return wait.promise;
+      }
+      signal.addEventListener("abort", onAbort, { once: true });
+      urlCompleteWaiters.set(elicitationId, {
+        resolve: () => {
+          signal.removeEventListener("abort", onAbort);
+          wait.resolve();
+        },
+        reject: (e) => {
+          signal.removeEventListener("abort", onAbort);
+          wait.reject(e);
+        },
       });
+      return wait.promise;
     },
     async interact(request: UserInteractionRequest): Promise<UserInteractionResult> {
       if (!turn) throw new Error("No active Telegram turn context");
@@ -646,7 +646,7 @@ async function askMultiSelect(
             await repeatCtx.editMessageReplyMarkup({ reply_markup: undefined });
           } catch { /* ignore */ }
           signal.removeEventListener("abort", onAbort);
-          resolve([...selected].sort((a, b) => a - b).map((i) => labels[i] ?? "").join(", "));
+          resolve([...selected].toSorted((a, b) => a - b).map((i) => labels[i] ?? "").join(", "));
           return true;
         }
         const toggleIdx = parseToggleIndex(data);

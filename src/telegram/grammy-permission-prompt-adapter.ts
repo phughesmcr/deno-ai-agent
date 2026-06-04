@@ -130,10 +130,10 @@ export function createTelegramPermissionPromptPort(timeoutMs = 120_000): Permiss
         return { result: "deny" };
       }
 
-      return await new Promise<PermissionPromptResult>((resolve) => {
-        queue.push({ request, signal: effectiveSignal, resolve });
-        startNext();
-      });
+      const wait = Promise.withResolvers<PermissionPromptResult>();
+      queue.push({ request, signal: effectiveSignal, resolve: wait.resolve });
+      startNext();
+      return await wait.promise;
     },
     handleCallback(data: string, actorId: number | undefined, adminId: number): Promise<PermissionCallbackDispatch> {
       const parsed = parsePermissionCallback(data);

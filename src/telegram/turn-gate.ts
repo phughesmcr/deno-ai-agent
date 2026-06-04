@@ -10,16 +10,24 @@ export interface ActiveTurn {
   approvalController: AbortController;
 }
 
+export type ActiveTurnHandle = (() => void) & Disposable;
+
+function disposableCleanup(cleanup: () => void): ActiveTurnHandle {
+  const handle = cleanup as ActiveTurnHandle;
+  handle[Symbol.dispose] = cleanup;
+  return handle;
+}
+
 /** Tracks the one model turn that can be aborted out-of-band from Telegram commands. */
 export class ActiveTurnRegistry {
   private _active: ActiveTurn | undefined;
 
   /** Sets the active turn and returns an idempotent cleanup function. */
-  setActiveTurn(turn: ActiveTurn): () => void {
+  setActiveTurn(turn: ActiveTurn): ActiveTurnHandle {
     this._active = turn;
-    return () => {
+    return disposableCleanup(() => {
       if (this._active === turn) this._active = undefined;
-    };
+    });
   }
 
   /** Active model-act signal, if a turn is currently running. */
@@ -43,14 +51,12 @@ export class ActiveTurnRegistry {
  */
 export async function withTurnMutex(fn: () => Promise<void>): Promise<void> {
   const previous = activeTurn;
-  let release!: () => void;
-  activeTurn = new Promise<void>((resolve) => {
-    release = resolve;
-  });
+  const gate = Promise.withResolvers<void>();
+  activeTurn = gate.promise;
   await previous;
   try {
     await fn();
   } finally {
-    release();
+    gate.resolve();
   }
 }

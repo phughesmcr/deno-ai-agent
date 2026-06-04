@@ -200,10 +200,10 @@ export function createTelegramApprovalGate(): TelegramApprovalGate {
       const effectiveSignal = signal ?? turn.signal;
       if (effectiveSignal.aborted) return denyDecision("cancelled");
 
-      return await new Promise<ApprovalDecision>((resolve) => {
-        queue.push({ request, signal: effectiveSignal, resolve });
-        startNext();
-      });
+      const wait = Promise.withResolvers<ApprovalDecision>();
+      queue.push({ request, signal: effectiveSignal, resolve: wait.resolve });
+      startNext();
+      return await wait.promise;
     },
     async handleCallback(ctx: TelegramApprovalCallbackContext): Promise<boolean> {
       const data = ctx.callbackQuery?.data;

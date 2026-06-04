@@ -30,19 +30,18 @@ export async function writeControlLine(line: string, signal?: AbortSignal): Prom
   if (!controlSession.isAttached()) return;
   if (signal?.aborted) return;
 
-  let timeoutId: ReturnType<typeof setTimeout> | undefined;
-  const timeout = new Promise<never>((_resolve, reject) => {
-    timeoutId = setTimeout(() => reject(writeTimedOut()), CONTROL_WRITE_TIMEOUT_MS);
-  });
+  const timeout = Promise.withResolvers<never>();
+  const timeoutId = setTimeout(() => timeout.reject(writeTimedOut()), CONTROL_WRITE_TIMEOUT_MS);
+  using timeoutCleanup = { [Symbol.dispose]: () => clearTimeout(timeoutId) };
+  void timeoutCleanup;
   const onAbort = (): void => {
-    if (timeoutId !== undefined) clearTimeout(timeoutId);
+    clearTimeout(timeoutId);
   };
   signal?.addEventListener("abort", onAbort, { once: true });
 
   try {
-    await Promise.race([controlSession.writeLine(line), timeout]);
+    await Promise.race([controlSession.writeLine(line), timeout.promise]);
   } finally {
-    if (timeoutId !== undefined) clearTimeout(timeoutId);
     signal?.removeEventListener("abort", onAbort);
   }
 }

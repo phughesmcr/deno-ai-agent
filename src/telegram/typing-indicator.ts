@@ -11,6 +11,8 @@ interface TypingScheduler {
   clearInterval(id: unknown): void;
 }
 
+export type TelegramTypingIndicator = (() => void) & Disposable;
+
 const defaultScheduler: TypingScheduler = {
   setInterval(callback, intervalMs): unknown {
     return globalThis.setInterval(callback, intervalMs);
@@ -29,6 +31,12 @@ export interface TelegramTypingIndicatorOptions {
   scheduler?: TypingScheduler;
 }
 
+function disposableStop(stop: () => void): TelegramTypingIndicator {
+  const indicator = stop as TelegramTypingIndicator;
+  indicator[Symbol.dispose] = stop;
+  return indicator;
+}
+
 /** Starts Telegram's native typing indicator and refreshes it until stopped. @internal */
 export function startTelegramTypingIndicator({
   api,
@@ -37,8 +45,8 @@ export function startTelegramTypingIndicator({
   signal,
   intervalMs = 4_000,
   scheduler = defaultScheduler,
-}: TelegramTypingIndicatorOptions): () => void {
-  if (signal.aborted) return () => {};
+}: TelegramTypingIndicatorOptions): TelegramTypingIndicator {
+  if (signal.aborted) return disposableStop(() => {});
 
   let stopped = false;
   const options = threadId === undefined ? undefined : { message_thread_id: threadId };
@@ -62,5 +70,5 @@ export function startTelegramTypingIndicator({
   };
   signal.addEventListener("abort", stop, { once: true });
 
-  return stop;
+  return disposableStop(stop);
 }
