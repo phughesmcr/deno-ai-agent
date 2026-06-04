@@ -6,6 +6,7 @@ import { createSummaryCompactor } from "./context/compactor.ts";
 import { SessionStore } from "./context/session-store.ts";
 import { SessionManager, type SessionTurnResult } from "./context/session.ts";
 import type { LMStudioManager } from "./lmstudio.ts";
+import type { ToolCallGuard } from "./tools/authorization.ts";
 import { normalizeUserTurnInput, type UserTurnInput } from "./user-turn.ts";
 import type { Workspace } from "./workspace.ts";
 
@@ -62,6 +63,8 @@ export type TurnResult = SessionTurnResult;
 export interface RunTurnOptions {
   /** Tools available to the model during this turn. */
   tools: Tool[];
+  /** App-level guard for approving or denying model tool calls. */
+  guardToolCall?: ToolCallGuard;
   /** Signal that cancels the active turn. */
   signal: AbortSignal;
 }
@@ -76,7 +79,7 @@ export async function runTurn(
   options: RunTurnOptions,
 ): Promise<TurnResult> {
   const { session } = agent;
-  const { tools, signal } = options;
+  const { tools, guardToolCall, signal } = options;
   const input = normalizeUserTurnInput(userInput);
 
   let result: SessionTurnResult | undefined;
@@ -90,6 +93,7 @@ export async function runTurn(
 
       result = await session.runTurn(input, {
         tools,
+        guardToolCall,
         signal,
         observer,
       });

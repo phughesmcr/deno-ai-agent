@@ -2,13 +2,7 @@ import { type Tool, tool } from "@lmstudio/sdk";
 import { z } from "zod/v3";
 
 import { logDebug } from "../../shared/mod.ts";
-import {
-  approveHostAwareToolOperation,
-  displayPath,
-  grantBrokerHostRead,
-  resolveReadPath,
-  type ToolContext,
-} from "./context.ts";
+import { displayPath, grantBrokerHostRead, resolveReadPath, type ToolContext } from "./context.ts";
 import { DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES, formatSize, truncateHead } from "./truncate.ts";
 
 const IMAGE_EXTENSIONS = new Set([".jpg", ".jpeg", ".png", ".gif", ".webp"]);
@@ -40,19 +34,9 @@ export function createReadTool(ctx: ToolContext): Tool {
         throw new Error(`Cannot read image file as text: ${displayPath(ctx, absolutePath)}`);
       }
       const display = displayPath(ctx, absolutePath);
-      const rangeSummary = offset || limit ?
-        `read text with offset=${offset ?? 1}, limit=${limit ?? "default"}` :
-        "read text";
       if (outsideWorkspace) {
         logDebug("read.host_approval_required", { path: absolutePath });
       }
-      await approveHostAwareToolOperation(ctx, {
-        operation: "read",
-        absolutePath,
-        outsideWorkspace,
-        display,
-        summary: outsideWorkspace ? `host ${rangeSummary}` : rangeSummary,
-      });
       if (outsideWorkspace) await grantBrokerHostRead(absolutePath, ctx.signal);
 
       let text: string;

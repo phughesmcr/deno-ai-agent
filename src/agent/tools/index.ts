@@ -3,6 +3,7 @@ import type { Tool } from "@lmstudio/sdk";
 import { createSkillManager, type SkillManager } from "../skills/mod.ts";
 import { createUnavailableSubagentPort, type SubagentPort } from "../subagents.ts";
 import { createAskUserQuestionTool } from "./ask-user-question.ts";
+import { createToolCallGuard, type ToolAuthorizationDeps, type ToolCallGuard } from "./authorization.ts";
 import { createBashTool } from "./bash.ts";
 import { createToolContext, type ToolContext } from "./context.ts";
 import { createEditTool } from "./edit.ts";
@@ -34,6 +35,14 @@ export {
 } from "./ask-user-question.ts";
 export { createToolContext, normalizeRoot } from "./context.ts";
 export type { ToolContext, ToolContextOptions } from "./context.ts";
+export {
+  approvalRequestForToolCall,
+  createToolCallGuard,
+  type GuardedToolCallRequest,
+  type ToolAuthorizationDeps,
+  type ToolCallGuard,
+  type ToolCallGuardController,
+} from "./authorization.ts";
 export { preprocessSystemPrompt } from "./prompt.ts";
 export { getShellCommand } from "./shell-command.ts";
 export { createSubagentTool } from "./subagent.ts";
@@ -114,6 +123,12 @@ export interface ModelToolDeps {
   subagents: SubagentPort;
 }
 
+/** Full tool set for normal model turns, including the central approval guard. */
+export interface ModelToolSet {
+  tools: Tool[];
+  guardToolCall: ToolCallGuard;
+}
+
 /** Returns all coding tools for the given workspace root. */
 export function getModelTools(deps: ModelToolDeps): Tool[] {
   return [
@@ -125,12 +140,20 @@ export function getModelTools(deps: ModelToolDeps): Tool[] {
     createGrepTool(deps.workspace),
     createFindTool(deps.workspace),
     createLsTool(deps.workspace),
-    createSkillTool(deps.skills.manager, deps.workspace),
+    createSkillTool(deps.skills.manager),
     createTodoWriteTool({ ...deps.todos, workspace: deps.workspace }),
     createWebFetchTool(deps.workspace),
     createAskUserQuestionTool(deps.userQuestions),
     createSubagentTool(deps.subagents),
   ].map(withRecoverableToolErrors);
+}
+
+/** Returns normal-turn tools plus the guard that owns app-layer tool approvals. */
+export function getModelToolSet(deps: ModelToolDeps & ToolAuthorizationDeps): ModelToolSet {
+  return {
+    tools: getModelTools(deps),
+    guardToolCall: createToolCallGuard(deps),
+  };
 }
 
 /** Creates tools from a workspace directory path (canonicalizes root). */

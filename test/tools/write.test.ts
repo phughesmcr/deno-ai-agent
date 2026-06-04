@@ -1,8 +1,6 @@
-import { assertEquals, assertRejects } from "jsr:@std/assert@1";
+import { assertEquals } from "jsr:@std/assert@1";
 
-import { createToolContext } from "../../src/agent/tools/context.ts";
 import { createWriteTool } from "../../src/agent/tools/write.ts";
-import { createDenyApprovalGate } from "../../src/shared/approval.ts";
 import { createTestWorkspace, runToolImplementation } from "./helpers.ts";
 
 Deno.test("write creates nested file", async () => {
@@ -15,35 +13,6 @@ Deno.test("write creates nested file", async () => {
     assertEquals(text, "data");
   } finally {
     await cleanup();
-  }
-});
-
-Deno.test("write requests approval before creating a file", async () => {
-  const dir = await Deno.makeTempDir({ prefix: "silas-tools-" });
-  try {
-    const ctx = await createToolContext(dir, {
-      approvalGate: createDenyApprovalGate("write denied"),
-      sessionId: "session-1",
-      turnId: "turn-1",
-    });
-    const tool = createWriteTool(ctx);
-
-    await assertRejects(
-      () => runToolImplementation(tool, { path: "new.txt", content: "data" }),
-      Error,
-      "write denied",
-    );
-
-    let exists = true;
-    try {
-      await Deno.stat(`${dir}/new.txt`);
-    } catch (error) {
-      if (error instanceof Deno.errors.NotFound) exists = false;
-      else throw error;
-    }
-    assertEquals(exists, false);
-  } finally {
-    await Deno.remove(dir, { recursive: true });
   }
 });
 

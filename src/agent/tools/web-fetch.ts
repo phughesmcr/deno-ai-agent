@@ -3,7 +3,7 @@ import { z } from "zod/v3";
 
 import { grantBrokerNetUrl, shouldRunPermissionControlClient } from "../../permission-broker/mod.ts";
 import { logDebug } from "../../shared/mod.ts";
-import { approveToolOperation, type ToolContext } from "./context.ts";
+import type { ToolContext } from "./context.ts";
 
 const DEFAULT_TIMEOUT_SECONDS = 15;
 const MAX_TIMEOUT_SECONDS = 60;
@@ -66,10 +66,6 @@ function timeoutSeconds(value: number | undefined): number {
   return Math.min(value, MAX_TIMEOUT_SECONDS);
 }
 
-function approvalSummary(url: URL): string {
-  return `GET ${url.pathname || "/"}`;
-}
-
 function isRedirect(status: number): boolean {
   return status >= 300 && status < 400;
 }
@@ -128,26 +124,18 @@ async function readBoundedText(response: Response, maxBytes: number): Promise<Re
 }
 
 async function approveAndGrant(
-  ctx: ToolContext,
   url: URL,
   grantBrokerNet: BrokerNetGrant,
-  approvedOrigins: Set<string>,
+  grantedOrigins: Set<string>,
 ): Promise<void> {
-  if (approvedOrigins.has(url.origin)) return;
-
-  await approveToolOperation(ctx, {
-    operation: "network",
-    target: url.origin,
-    risk: "high",
-    summary: approvalSummary(url),
-  });
+  if (grantedOrigins.has(url.origin)) return;
 
   if (shouldRunPermissionControlClient()) {
     logDebug("broker_grant.start", { permission: "net", value: url.origin });
     await grantBrokerNet(url, "once");
     logDebug("broker_grant.completed", { permission: "net", value: url.origin });
   }
-  approvedOrigins.add(url.origin);
+  grantedOrigins.add(url.origin);
 }
 
 async function fetchWithRedirects(
@@ -160,12 +148,12 @@ async function fetchWithRedirects(
 ): Promise<WebFetchResult> {
   const requestedUrl = startUrl.href;
   const redirectChain: RedirectEntry[] = [];
-  const approvedOrigins = new Set<string>();
+  const grantedOrigins = new Set<string>();
   let currentUrl = startUrl;
 
   for (let redirectCount = 0; redirectCount <= MAX_REDIRECTS; redirectCount++) {
-    // deno-lint-ignore no-await-in-loop -- Redirect approval must precede each fetch.
-    await approveAndGrant(ctx, currentUrl, grantBrokerNet, approvedOrigins);
+    // deno-lint-ignore no-await-in-loop -- Broker grant must precede each fetch.
+    await approveAndGrant(currentUrl, grantBrokerNet, grantedOrigins);
 
     logDebug("web_fetch.request", {
       sessionId: ctx.getSessionId(),
@@ -205,6 +193,17 @@ async function fetchWithRedirects(
 
       const nextUrl = parseHttpUrl(new URL(location, currentUrl).href);
       redirectChain.push({ status: response.status, from: currentUrl.href, to: nextUrl.href });
+      if (nextUrl.origin !== startUrl.origin) {
+        return {
+          status: response.status,
+          requestedUrl,
+          finalUrl: currentUrl.href,
+          contentType: response.headers.get("content-type"),
+          redirectChain,
+          bodyNote:
+            `Cross-origin redirect to ${nextUrl.href} was not followed. Call web-fetch with that URL to approve the new origin separately.`,
+        };
+      }
       currentUrl = nextUrl;
       continue;
     }

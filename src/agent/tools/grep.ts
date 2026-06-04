@@ -3,13 +3,7 @@ import * as path from "@std/path";
 import { z } from "zod/v3";
 
 import { grantBrokerRunForCommands } from "../../permission-broker/mod.ts";
-import {
-  approveHostAwareToolOperation,
-  displayPath,
-  grantBrokerHostRead,
-  resolveHostAwarePath,
-  type ToolContext,
-} from "./context.ts";
+import { displayPath, grantBrokerHostRead, resolveHostAwarePath, type ToolContext } from "./context.ts";
 import {
   appendSearchNotices,
   commandExists,
@@ -182,13 +176,6 @@ export function createGrepTool(ctx: ToolContext): Tool {
       const effectiveLimit = Math.max(1, limit ?? DEFAULT_LIMIT);
       const { absolutePath, outsideWorkspace } = await resolveHostAwarePath(ctx, searchDir ?? ".");
       const display = displayPath(ctx, absolutePath);
-      await approveHostAwareToolOperation(ctx, {
-        operation: "grep",
-        absolutePath,
-        outsideWorkspace,
-        display,
-        summary: `search text, limit=${effectiveLimit}, context=${context ?? 0}`,
-      });
       if (outsideWorkspace) await grantBrokerHostRead(absolutePath, ctx.signal);
       await grantBrokerRunForCommands(["rg"], ctx.signal);
 
@@ -245,7 +232,7 @@ export function createGrepTool(ctx: ToolContext): Tool {
       if (!output) return "No matches found";
 
       const truncation = truncateHead(output, { maxLines: Number.MAX_SAFE_INTEGER });
-      let resultOutput = truncation.content;
+      const resultOutput = truncation.content;
       const notices: string[] = [];
       if (!usedRg) notices.push("search: built-in walker; install ripgrep for faster search");
       if (matchLimitReached) {

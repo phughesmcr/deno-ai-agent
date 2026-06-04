@@ -2,13 +2,7 @@ import { type Tool, tool } from "@lmstudio/sdk";
 import * as path from "@std/path";
 import { z } from "zod/v3";
 
-import {
-  approveHostAwareToolOperation,
-  displayPath,
-  grantBrokerHostWrite,
-  resolveHostAwarePath,
-  type ToolContext,
-} from "./context.ts";
+import { displayPath, grantBrokerHostWrite, resolveHostAwarePath, type ToolContext } from "./context.ts";
 import { withFileMutationQueue } from "./file-mutation-queue.ts";
 
 export function createWriteTool(ctx: ToolContext): Tool {
@@ -26,14 +20,6 @@ export function createWriteTool(ctx: ToolContext): Tool {
       const { absolutePath, outsideWorkspace } = await resolveHostAwarePath(ctx, userPath);
       const dir = path.dirname(absolutePath);
       const display = displayPath(ctx, absolutePath);
-      await approveHostAwareToolOperation(ctx, {
-        operation: "write",
-        absolutePath,
-        outsideWorkspace,
-        display,
-        workspaceRisk: "medium",
-        summary: `write ${content.length} bytes`,
-      });
       if (outsideWorkspace) await grantBrokerHostWrite(absolutePath, ctx.signal);
 
       return await withFileMutationQueue(absolutePath, async () => {

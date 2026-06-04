@@ -13,6 +13,7 @@ import { getActDraftModel } from "../../shared/draft-model.ts";
 import { logDebug } from "../../shared/log.ts";
 import { traceSpan } from "../../shared/otel.ts";
 import { actReasoningParsingOption } from "../../shared/reasoning.ts";
+import type { ToolCallGuard } from "../tools/authorization.ts";
 import { normalizeUserTurnInput, type UserTurnInput } from "../user-turn.ts";
 import type { SummaryCompactor } from "./compactor.ts";
 import { materializeMessageForChat } from "./message-materialize.ts";
@@ -192,6 +193,7 @@ interface SessionManagerOptions {
 interface RunTurnOptions {
   tools: Tool[];
   signal: AbortSignal;
+  guardToolCall?: ToolCallGuard;
   observer?: ModelActObserver;
 }
 
@@ -350,7 +352,7 @@ export class SessionManager {
    * @internal
    */
   async runTurn(userInput: string | UserTurnInput, options: RunTurnOptions): Promise<SessionTurnResult> {
-    const { tools, signal, observer } = options;
+    const { tools, signal, guardToolCall, observer } = options;
     const input = normalizeUserTurnInput(userInput);
 
     await this.#appendUser(input);
@@ -365,6 +367,7 @@ export class SessionManager {
       ...(getActDraftModel() ?? {}),
       ...actReasoningParsingOption(),
       allowParallelToolExecution: true,
+      guardToolCall,
       contextOverflowPolicy: "stopAtLimit",
       maxTokens: 4096,
       maxPredictionRounds: getActMaxPredictionRounds(),

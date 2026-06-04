@@ -1,13 +1,7 @@
 import { type Tool, tool } from "@lmstudio/sdk";
 import { z } from "zod/v3";
 
-import {
-  approveHostAwareToolOperation,
-  displayPath,
-  grantBrokerHostReadWrite,
-  resolveHostAwarePath,
-  type ToolContext,
-} from "./context.ts";
+import { displayPath, grantBrokerHostReadWrite, resolveHostAwarePath, type ToolContext } from "./context.ts";
 import {
   applyEditsToNormalizedContent,
   detectLineEnding,
@@ -56,14 +50,6 @@ export function createEditTool(ctx: ToolContext): Tool {
       const { path: userPath, edits } = prepareEditInput(raw);
       const { absolutePath, outsideWorkspace } = await resolveHostAwarePath(ctx, userPath);
       const display = displayPath(ctx, absolutePath);
-      await approveHostAwareToolOperation(ctx, {
-        operation: "edit",
-        absolutePath,
-        outsideWorkspace,
-        display,
-        workspaceRisk: "medium",
-        summary: `replace ${edits.length} block(s)`,
-      });
       if (outsideWorkspace) await grantBrokerHostReadWrite(absolutePath, ctx.signal);
 
       return await withFileMutationQueue(absolutePath, async () => {

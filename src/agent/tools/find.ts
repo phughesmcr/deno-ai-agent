@@ -3,13 +3,7 @@ import * as path from "@std/path";
 import { z } from "zod/v3";
 
 import { grantBrokerRunForCommands } from "../../permission-broker/mod.ts";
-import {
-  approveHostAwareToolOperation,
-  displayPath,
-  grantBrokerHostRead,
-  resolveHostAwarePath,
-  type ToolContext,
-} from "./context.ts";
+import { displayPath, grantBrokerHostRead, resolveHostAwarePath, type ToolContext } from "./context.ts";
 import {
   appendSearchNotices,
   commandExists,
@@ -124,15 +118,7 @@ export function createFindTool(ctx: ToolContext): Tool {
       const { absolutePath, outsideWorkspace } = await resolveHostAwarePath(ctx, searchDir ?? ".");
       const display = displayPath(ctx, absolutePath);
       const effectiveLimit = limit ?? DEFAULT_LIMIT;
-      await approveHostAwareToolOperation(ctx, {
-        operation: "find",
-        absolutePath,
-        outsideWorkspace,
-        display,
-        summary: `find files, limit=${effectiveLimit}`,
-      });
       ctx.signal?.throwIfAborted();
-      console.log(`find: approved, running in ${display}`);
       if (outsideWorkspace) await grantBrokerHostRead(absolutePath, ctx.signal);
       await grantBrokerRunForCommands(["fd"], ctx.signal);
       ctx.signal?.throwIfAborted();
@@ -156,7 +142,7 @@ export function createFindTool(ctx: ToolContext): Tool {
       const resultLimitReached = relativized.length >= effectiveLimit;
       const rawOutput = relativized.join("\n");
       const truncation = truncateHead(rawOutput, { maxLines: Number.MAX_SAFE_INTEGER });
-      let output = truncation.content;
+      const output = truncation.content;
       const notices: string[] = [];
       if (!usedFd) notices.push("search: built-in walker; install fd for faster search");
       if (resultLimitReached) {

@@ -3,7 +3,7 @@ import { z } from "zod/v3";
 
 import { grantBrokerRunForCommands } from "../../permission-broker/mod.ts";
 import { logDebug } from "../../shared/mod.ts";
-import { approveToolOperation, type ToolContext } from "./context.ts";
+import type { ToolContext } from "./context.ts";
 import { readStreamToString } from "./search-support.ts";
 import { DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES, formatSize, truncateTail } from "./truncate.ts";
 
@@ -72,18 +72,6 @@ export function createTypeScriptReplTool(ctx: ToolContext): Tool {
     },
     implementation: async ({ typescript, timeout }: TypeScriptReplToolParams) => {
       const timeoutSeconds = validateTimeoutSeconds(timeout);
-      await approveToolOperation(ctx, {
-        operation: "shell",
-        target: "typescript-repl",
-        risk: "high",
-        summary: `run typescript, timeout=${timeoutSeconds}s, ${typescript.length} bytes`,
-      });
-      logDebug("typescript_repl.approved", {
-        sessionId: ctx.getSessionId(),
-        turnId: ctx.getTurnId(),
-        bytes: String(typescript.length),
-        timeoutSeconds: String(timeoutSeconds),
-      });
       await grantBrokerRunForCommands([Deno.execPath()], ctx.signal);
       logDebug("typescript_repl.run_granted", {
         sessionId: ctx.getSessionId(),

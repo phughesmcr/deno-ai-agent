@@ -5,15 +5,6 @@ import {
   grantBrokerWritePath,
   shouldRunPermissionControlClient,
 } from "../../permission-broker/mod.ts";
-import {
-  type ApprovalGate,
-  type ApprovalOperation,
-  type ApprovalRequest,
-  type ApprovalRisk,
-  createDenyApprovalGate,
-  DEFAULT_APPROVAL_TIMEOUT_MS,
-  requireApproval,
-} from "../../shared/approval.ts";
 import { logDebug } from "../../shared/log.ts";
 import { expandTilde, WorkspaceSandbox } from "../workspace-sandbox.ts";
 
@@ -23,8 +14,6 @@ export interface ToolContext {
   readonly root: string;
   /** Canonical workspace path resolver. */
   readonly sandbox: WorkspaceSandbox;
-  /** Per-operation approval boundary for privileged tool side effects. */
-  readonly approvalGate: ApprovalGate;
   /** Returns the current session id for approval requests. */
   readonly getSessionId: () => string;
   /** Returns the current turn id for approval requests. */
@@ -35,8 +24,6 @@ export interface ToolContext {
 
 /** Options for creating a tool context. */
 export interface ToolContextOptions {
-  /** Approval gate used by privileged tool adapters. Defaults to deny. */
-  approvalGate?: ApprovalGate;
   /** Session id or getter used in approval requests. */
   sessionId?: string | (() => string);
   /** Turn id or getter used in approval requests. */
@@ -70,7 +57,6 @@ export async function createToolContext(root: string, options: ToolContextOption
   const context: ToolContext = {
     root: sandbox.root,
     sandbox,
-    approvalGate: options.approvalGate ?? createDenyApprovalGate(),
     getSessionId: valueGetter(options.sessionId, "unknown-session"),
     getTurnId: valueGetter(options.turnId, "unknown-turn"),
     get signal() {
@@ -134,28 +120,6 @@ export async function resolveReadPath(ctx: ToolContext, userPath: string): Promi
   return await resolveHostAwarePath(ctx, userPath);
 }
 
-/** Requests Telegram approval for a host-aware tool operation. */
-export async function approveHostAwareToolOperation(
-  ctx: ToolContext,
-  spec: {
-    operation: ApprovalOperation;
-    absolutePath: string;
-    outsideWorkspace: boolean;
-    display: string;
-    workspaceRisk?: ApprovalRisk;
-    summary?: string;
-  },
-): Promise<void> {
-  const workspaceRisk = spec.workspaceRisk ?? "low";
-  await approveToolOperation(ctx, {
-    operation: spec.operation,
-    target: spec.outsideWorkspace ? spec.absolutePath : spec.display,
-    risk: spec.outsideWorkspace ? "high" : workspaceRisk,
-    summary: spec.summary,
-    timeoutMs: spec.outsideWorkspace ? DEFAULT_APPROVAL_TIMEOUT_MS * 2 : undefined,
-  });
-}
-
 /** Pre-grants broker read for a host path when the permission broker is active. */
 export async function grantBrokerHostRead(absolutePath: string, signal?: AbortSignal): Promise<void> {
   if (shouldRunPermissionControlClient()) {
@@ -188,34 +152,4 @@ export async function resolveDirectoryPath(ctx: ToolContext, userPath: string): 
 /** Converts an absolute path to a display path relative to workspace root when possible. */
 export function displayPath(ctx: ToolContext, absolutePath: string): string {
   return ctx.sandbox.displayPath(absolutePath);
-}
-
-/** Requests approval for a tool operation. */
-export async function approveToolOperation(
-  ctx: ToolContext,
-  spec: {
-    operation: ApprovalOperation;
-    target: string;
-    risk: ApprovalRisk;
-    summary?: string;
-    timeoutMs?: number;
-  },
-): Promise<void> {
-  const request: ApprovalRequest = {
-    operation: spec.operation,
-    target: spec.target,
-    risk: spec.risk,
-    sessionId: ctx.getSessionId(),
-    turnId: ctx.getTurnId(),
-    timeoutMs: spec.timeoutMs ?? DEFAULT_APPROVAL_TIMEOUT_MS,
-  };
-  if (spec.summary !== undefined) request.summary = spec.summary;
-  // Do not pass ctx.signal: it must not be the LM Studio act signal (abort cancels pending approvals).
-  await requireApproval(ctx.approvalGate, request);
-  logDebug("tool.approved", {
-    operation: request.operation,
-    risk: request.risk,
-    sessionId: request.sessionId,
-    turnId: request.turnId,
-  });
 }

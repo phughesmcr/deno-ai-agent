@@ -6,7 +6,7 @@ import {
   createSkillManager,
   createToolContext,
   createWorkspace,
-  getModelTools,
+  getModelToolSet,
   normalizeUserTurnInput,
   readBootstrapIfPresent,
   recordActDuration,
@@ -21,7 +21,7 @@ import {
   shouldRunPermissionControlClient,
   waitForPermissionControlClient,
 } from "./src/permission-broker/mod.ts";
-import { ApprovalDeniedError, logDebug, traceSpan } from "./src/shared/mod.ts";
+import { logDebug, traceSpan } from "./src/shared/mod.ts";
 import { SESSION_HELP } from "./src/telegram/commands.ts";
 import {
   ActiveTurnRegistry,
@@ -119,7 +119,6 @@ async function main(): Promise<void> {
   let activeTurnId = "no-active-turn";
   const activeTurns = new ActiveTurnRegistry();
   const toolContext = await createToolContext(workspace.path, {
-    approvalGate: approvals,
     sessionId: () => agent.session.id,
     turnId: () => activeTurnId,
     signal: () => activeTurns.actSignal ?? controller.signal,
@@ -132,10 +131,13 @@ async function main(): Promise<void> {
     skills,
     getSessionId: () => agent.session.id,
   });
-  const createTurnTools = async (): Promise<Tool[]> => {
+  const createTurnToolSet = async (): Promise<
+    { tools: Tool[]; guardToolCall: ReturnType<typeof getModelToolSet>["guardToolCall"] }
+  > => {
     await skills.refresh();
-    return getModelTools({
+    return getModelToolSet({
       workspace: toolContext,
+      approvalGate: approvals,
       userQuestions,
       todos: {
         getSessionId: () => agent.session.id,
@@ -148,7 +150,7 @@ async function main(): Promise<void> {
         getSessionId: () => agent.session.id,
       },
       subagents,
-    }) as Tool[];
+    });
   };
 
   function abortActiveTurn(): boolean {
@@ -193,7 +195,7 @@ async function main(): Promise<void> {
       }
 
       await withTurnMutex(async () => {
-        const toolsList = await createTurnTools();
+        const { tools, guardToolCall } = await createTurnToolSet();
         activeTurnId = String(updateId);
 
         const turnController = new AbortController();
@@ -218,7 +220,8 @@ async function main(): Promise<void> {
         try {
           console.log(`Model turn started${imageCount > 0 ? ` (${imageCount} image(s))` : ""}.`);
           const { replyTexts, compacted } = await runTurn(agent, normalized, {
-            tools: toolsList,
+            tools,
+            guardToolCall,
             signal: turnController.signal,
           });
           console.log(`Model turn finished (${replyTexts.length} reply chunk(s)).`);
@@ -462,21 +465,11 @@ async function main(): Promise<void> {
       );
     } catch (error) {
       outcome = "error";
-      if (
-        isAbortError(error) ||
-        (error instanceof ApprovalDeniedError && error.decision.reason === "cancelled")
-      ) {
+      if (isAbortError(error)) {
         outcome = "ok";
         if (ctx.message) {
           await ctx.reply("Turn aborted.", { message_thread_id: ctx.message.message_thread_id });
         }
-        return;
-      }
-      if (error instanceof ApprovalDeniedError && ctx.message) {
-        await ctx.reply(
-          `Operation not approved (${error.decision.reason}). Target: ${error.request.target}`,
-          { message_thread_id: ctx.message.message_thread_id },
-        );
         return;
       }
       if (isImageInputError(error) && ctx.message) {

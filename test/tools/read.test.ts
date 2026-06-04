@@ -1,7 +1,5 @@
-import { assertEquals, assertRejects, assertStringIncludes } from "jsr:@std/assert@1";
+import { assertEquals, assertStringIncludes } from "jsr:@std/assert@1";
 
-import { createDenyApprovalGate } from "../../src/shared/approval.ts";
-import { createToolContext } from "../../src/agent/tools/context.ts";
 import { createReadTool } from "../../src/agent/tools/read.ts";
 import { createTestWorkspace, runToolImplementation } from "./helpers.ts";
 
@@ -15,27 +13,6 @@ Deno.test("read returns file content", async () => {
     assertStringIncludes(out, "world");
   } finally {
     await cleanup();
-  }
-});
-
-Deno.test("read requests approval before returning file content", async () => {
-  const dir = await Deno.makeTempDir({ prefix: "silas-tools-" });
-  try {
-    await Deno.writeTextFile(`${dir}/secret.txt`, "secret");
-    const ctx = await createToolContext(dir, {
-      approvalGate: createDenyApprovalGate("read denied"),
-      sessionId: "session-1",
-      turnId: "turn-1",
-    });
-    const tool = createReadTool(ctx);
-
-    await assertRejects(
-      () => runToolImplementation(tool, { path: "secret.txt" }),
-      Error,
-      "read denied",
-    );
-  } finally {
-    await Deno.remove(dir, { recursive: true });
   }
 });
 

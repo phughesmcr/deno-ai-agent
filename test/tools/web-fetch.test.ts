@@ -1,12 +1,5 @@
 import { assertEquals, assertRejects, assertStringIncludes } from "jsr:@std/assert@1";
 
-import {
-  type ApprovalDecision,
-  type ApprovalGate,
-  approveDecision,
-  createAutoApprovalGate,
-  createDenyApprovalGate,
-} from "../../src/shared/approval.ts";
 import { createToolContext } from "../../src/agent/tools/context.ts";
 import { createWebFetchTool } from "../../src/agent/tools/web-fetch.ts";
 import { createTestWorkspace, runToolImplementation } from "./helpers.ts";
@@ -45,33 +38,6 @@ Deno.test("web-fetch rejects malformed, non-http, and credentialed URLs", async 
     );
   } finally {
     await cleanup();
-  }
-});
-
-Deno.test("web-fetch does not fetch when approval is denied", async () => {
-  const dir = await Deno.makeTempDir({ prefix: "silas-web-fetch-" });
-  let calls = 0;
-  try {
-    const ctx = await createToolContext(dir, {
-      approvalGate: createDenyApprovalGate("network denied"),
-      sessionId: "session-1",
-      turnId: "turn-1",
-    });
-    const tool = createWebFetchTool(ctx, {
-      fetcher: () => {
-        calls++;
-        return Promise.resolve(new Response("unexpected"));
-      },
-    });
-
-    await assertRejects(
-      () => runToolImplementation(tool, { url: "https://example.com/page?secret=value" }),
-      Error,
-      "network denied",
-    );
-    assertEquals(calls, 0);
-  } finally {
-    await Deno.remove(dir, { recursive: true });
   }
 });
 
@@ -148,19 +114,11 @@ Deno.test("web-fetch omits non-text response bodies", async () => {
   }
 });
 
-Deno.test("web-fetch follows relative and absolute redirects manually", async () => {
+Deno.test("web-fetch follows same-origin redirects manually", async () => {
   const requests: string[] = [];
-  const approvals: string[] = [];
-  const approvalGate: ApprovalGate = {
-    requestApproval(request): Promise<ApprovalDecision> {
-      approvals.push(`${request.target} ${request.summary}`);
-      return Promise.resolve(approveDecision("test"));
-    },
-  };
   const dir = await Deno.makeTempDir({ prefix: "silas-web-fetch-" });
   try {
     const ctx = await createToolContext(dir, {
-      approvalGate,
       sessionId: "session-1",
       turnId: "turn-1",
     });
@@ -174,7 +132,7 @@ Deno.test("web-fetch follows relative and absolute redirects manually", async ()
           return Promise.resolve(
             new Response("", {
               status: 301,
-              headers: { location: "https://docs.example.org/final" },
+              headers: { location: "https://example.com/final" },
             }),
           );
         }
@@ -187,17 +145,46 @@ Deno.test("web-fetch follows relative and absolute redirects manually", async ()
     assertEquals(requests, [
       "https://example.com/start",
       "https://example.com/middle",
-      "https://docs.example.org/final",
+      "https://example.com/final",
     ]);
-    assertEquals(approvals, [
-      "https://example.com GET /start",
-      "https://docs.example.org GET /final",
-    ]);
-    assertEquals(json.finalUrl, "https://docs.example.org/final");
+    assertEquals(json.finalUrl, "https://example.com/final");
     assertEquals(json.redirectChain.length, 2);
     assertEquals(json.text, "done");
   } finally {
     await Deno.remove(dir, { recursive: true });
+  }
+});
+
+Deno.test("web-fetch stops before cross-origin redirects", async () => {
+  const requests: string[] = [];
+  const { ctx, cleanup } = await createTestWorkspace();
+  try {
+    const tool = createWebFetchTool(ctx, {
+      fetcher: (url) => {
+        requests.push(url.href);
+        return Promise.resolve(
+          new Response("", {
+            status: 302,
+            headers: { location: "https://docs.example.org/final" },
+          }),
+        );
+      },
+    });
+
+    const json = parseWebFetchJson(await runToolImplementation(tool, { url: "https://example.com/start" }));
+
+    assertEquals(requests, ["https://example.com/start"]);
+    assertEquals(json.status, 302);
+    assertEquals(json.finalUrl, "https://example.com/start");
+    assertEquals(json.redirectChain, [{
+      status: 302,
+      from: "https://example.com/start",
+      to: "https://docs.example.org/final",
+    }]);
+    assertStringIncludes(json.bodyNote ?? "", "Cross-origin redirect");
+    assertStringIncludes(json.bodyNote ?? "", "https://docs.example.org/final");
+  } finally {
+    await cleanup();
   }
 });
 
@@ -228,7 +215,6 @@ Deno.test("web-fetch aborts on timeout", async () => {
   const dir = await Deno.makeTempDir({ prefix: "silas-web-fetch-" });
   try {
     const ctx = await createToolContext(dir, {
-      approvalGate: createAutoApprovalGate("test"),
       sessionId: "session-1",
       turnId: "turn-1",
     });

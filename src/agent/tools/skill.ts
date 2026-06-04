@@ -3,7 +3,6 @@ import * as path from "@std/path";
 import { z } from "zod/v3";
 
 import type { Skill, SkillDiagnostic, SkillManager, SkillSummary } from "../skills/mod.ts";
-import { approveToolOperation, type ToolContext } from "./context.ts";
 
 const RESOURCE_DIRS = ["assets", "references", "scripts"] as const;
 const SKILL_FILE_NAME = "SKILL.md";
@@ -96,15 +95,7 @@ function formatResourceListing(resources: string[]): string {
   return resources.map((resource) => `- ${resource}`).join("\n");
 }
 
-async function formatSkillActivation(skill: Skill, ctx?: ToolContext): Promise<string> {
-  if (ctx) {
-    await approveToolOperation(ctx, {
-      operation: "skill",
-      target: ctx.sandbox.displayPath(skill.filePath),
-      risk: "low",
-      summary: `activate skill ${skill.name}`,
-    });
-  }
+async function formatSkillActivation(skill: Skill): Promise<string> {
   const resources = await listResources(skill);
   return [
     `<skill_content name="${escapeXml(skill.name)}">`,
@@ -130,7 +121,7 @@ function missingSkillMessage(manager: SkillManager, name: string): string {
 }
 
 /** LM Studio tool that activates a discovered AgentSkill. */
-export function createSkillTool(manager: SkillManager, ctx?: ToolContext): Tool {
+export function createSkillTool(manager: SkillManager): Tool {
   return tool({
     name: "skill",
     description: createDescription(manager),
@@ -140,7 +131,7 @@ export function createSkillTool(manager: SkillManager, ctx?: ToolContext): Tool 
     implementation: ({ skill: name }) => {
       const skill = manager.get(name);
       if (!skill) throw new Error(missingSkillMessage(manager, name));
-      return formatSkillActivation(skill, ctx);
+      return formatSkillActivation(skill);
     },
   });
 }

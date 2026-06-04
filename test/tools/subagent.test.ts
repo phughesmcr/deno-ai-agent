@@ -5,7 +5,6 @@ import { createSkillManager } from "../../src/agent/skills/mod.ts";
 import { createReadOnlySubagentTools, SubagentManager, type SubagentRecord } from "../../src/agent/subagents.ts";
 import { createToolContext, type ToolContext } from "../../src/agent/tools/context.ts";
 import { createSubagentTool, type SubagentAction } from "../../src/agent/tools/subagent.ts";
-import { createAutoApprovalGate } from "../../src/shared/approval.ts";
 import { withEnv } from "../_env.ts";
 import { runTool } from "./helpers.ts";
 
@@ -140,7 +139,6 @@ async function withSubagents(
   const model = new FakeModel();
   try {
     const ctx = await createToolContext(dir, {
-      approvalGate: createAutoApprovalGate("test"),
       sessionId: () => sessionId,
       turnId: "subagent-test",
     });

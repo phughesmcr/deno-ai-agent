@@ -166,7 +166,7 @@ export function createReadOnlySubagentTools(workspace: ToolContext, skills: Skil
     createGrepTool(workspace),
     createFindTool(workspace),
     createLsTool(workspace),
-    createSkillTool(skills, workspace),
+    createSkillTool(skills),
   ].map(withRecoverableToolErrors);
 }
 

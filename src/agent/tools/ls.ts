@@ -2,13 +2,7 @@ import { type Tool, tool } from "@lmstudio/sdk";
 import * as path from "@std/path";
 import { z } from "zod/v3";
 
-import {
-  approveHostAwareToolOperation,
-  displayPath,
-  grantBrokerHostRead,
-  resolveHostAwarePath,
-  type ToolContext,
-} from "./context.ts";
+import { displayPath, grantBrokerHostRead, resolveHostAwarePath, type ToolContext } from "./context.ts";
 import { DEFAULT_MAX_BYTES, formatSize, truncateHead } from "./truncate.ts";
 
 const DEFAULT_LIMIT = 500;
@@ -30,15 +24,7 @@ export function createLsTool(ctx: ToolContext): Tool {
       const { absolutePath, outsideWorkspace } = await resolveHostAwarePath(ctx, userPath ?? ".");
       const display = displayPath(ctx, absolutePath);
       const effectiveLimit = limit ?? DEFAULT_LIMIT;
-      await approveHostAwareToolOperation(ctx, {
-        operation: "list",
-        absolutePath,
-        outsideWorkspace,
-        display,
-        summary: `list directory, limit=${effectiveLimit}`,
-      });
       ctx.signal?.throwIfAborted();
-      console.log(`list: approved, running in ${display}`);
       if (outsideWorkspace) await grantBrokerHostRead(absolutePath, ctx.signal);
       ctx.signal?.throwIfAborted();
 

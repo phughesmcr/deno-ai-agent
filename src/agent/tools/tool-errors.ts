@@ -1,6 +1,5 @@
 import type { Tool } from "@lmstudio/sdk";
 
-import { ApprovalDeniedError } from "../../shared/approval.ts";
 import { UserQuestionAbortedError, UserQuestionDeclinedError } from "./ask-user-question.ts";
 
 type ToolWithImplementation = Tool & {
@@ -8,14 +7,13 @@ type ToolWithImplementation = Tool & {
 };
 
 function isNonRecoverableToolError(error: unknown): boolean {
-  return error instanceof ApprovalDeniedError ||
-    error instanceof UserQuestionAbortedError ||
+  return error instanceof UserQuestionAbortedError ||
     error instanceof UserQuestionDeclinedError;
 }
 
 /**
  * Returns tool errors as result text so the model can recover instead of aborting the turn.
- * Approval and user-question aborts still propagate.
+ * User-question aborts still propagate.
  */
 export function withRecoverableToolErrors(tool: Tool): Tool {
   const wrapped = tool as ToolWithImplementation;

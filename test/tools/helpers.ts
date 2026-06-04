@@ -1,13 +1,11 @@
 import type { Tool } from "@lmstudio/sdk";
 
-import { createAutoApprovalGate } from "../../src/shared/approval.ts";
 import { createToolContext, type ToolContext } from "../../src/agent/tools/context.ts";
 import type { AskUserQuestionPort } from "../../src/agent/tools/user-question-port.ts";
 
 export async function createTestWorkspace(): Promise<{ dir: string; ctx: ToolContext; cleanup: () => Promise<void> }> {
   const dir = await Deno.makeTempDir({ prefix: "silas-tools-" });
   const ctx = await createToolContext(dir, {
-    approvalGate: createAutoApprovalGate("test"),
     sessionId: "test-session",
     turnId: "test-turn",
   });

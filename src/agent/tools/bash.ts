@@ -3,7 +3,7 @@ import { z } from "zod/v3";
 
 import { grantBrokerRunForCommands } from "../../permission-broker/mod.ts";
 import { logDebug } from "../../shared/mod.ts";
-import { approveToolOperation, type ToolContext } from "./context.ts";
+import type { ToolContext } from "./context.ts";
 import { getShellCommand } from "./shell-command.ts";
 import { DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES, formatSize, truncateTail } from "./truncate.ts";
 
@@ -24,20 +24,7 @@ export function createBashTool(ctx: ToolContext): Tool {
       timeout: z.number().optional().describe("Timeout in seconds (optional)"),
     },
     implementation: async ({ command, timeout }) => {
-      await approveToolOperation(ctx, {
-        operation: "shell",
-        target: command,
-        risk: "high",
-        summary: `cwd=${ctx.root}`,
-      });
-
       const { cmd, args } = getShellCommand();
-      logDebug("shell.approved", {
-        sessionId: ctx.getSessionId(),
-        turnId: ctx.getTurnId(),
-        shell: cmd,
-        cwd: ctx.root,
-      });
       await grantBrokerRunForCommands([cmd], ctx.signal);
       logDebug("shell.run_granted", {
         sessionId: ctx.getSessionId(),

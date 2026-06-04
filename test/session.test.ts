@@ -12,6 +12,7 @@ type ChatMessageWithRaw = ChatMessage & {
 };
 
 interface FakeActOptions {
+  guardToolCall?: unknown;
   onMessage?: (message: ChatMessage) => void;
   onFirstToken?: (roundIndex: number) => void;
   onRoundStart?: (roundIndex: number) => void;
@@ -35,6 +36,7 @@ interface FakeActOptions {
 interface FakeActCall {
   chat: Chat;
   tools: Tool[];
+  options: FakeActOptions;
 }
 
 class FakeModel {
@@ -45,7 +47,7 @@ class FakeModel {
   readonly countTokenInputs: string[] = [];
 
   act(chat: Chat, tools: Tool[], options: FakeActOptions): Promise<void> {
-    this.actCalls.push({ chat, tools });
+    this.actCalls.push({ chat, tools, options });
     options.onRoundStart?.(0);
     options.onFirstToken?.(0);
 
@@ -93,7 +95,7 @@ function snapshot(chat: Chat): [string, string][] {
 function fakeLmClient(): LMStudioClient {
   return {
     files: {
-      createFileHandleFromChatMessagePartFileData() {
+      createFileHandleFromChatMessagePartFileData(): never {
         throw new Error("file unavailable in test");
       },
     },
@@ -216,6 +218,21 @@ Deno.test("SessionManager sends prompt, user text, tools, replies, tokens, and o
       "message",
       "round-end:0",
     ]);
+  });
+});
+
+Deno.test("SessionManager forwards guardToolCall to model.act", async () => {
+  await withSession(async ({ session, model }) => {
+    const tools = [{ name: "fake-tool" }] as unknown as Tool[];
+    const guardToolCall = () => {};
+
+    await session.runTurn("hello", {
+      tools,
+      guardToolCall,
+      signal: new AbortController().signal,
+    });
+
+    assertEquals(model.actCalls[0]?.options.guardToolCall, guardToolCall);
   });
 });
 
