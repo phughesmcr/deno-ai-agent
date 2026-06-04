@@ -2,6 +2,7 @@ import { type Tool, tool } from "@lmstudio/sdk";
 import { z } from "zod/v3";
 
 import { grantBrokerRunForCommands } from "../../permission-broker/mod.ts";
+import { logDebug } from "../../shared/mod.ts";
 import { approveToolOperation, type ToolContext } from "./context.ts";
 import { readStreamToString } from "./search-support.ts";
 import { DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES, formatSize, truncateTail } from "./truncate.ts";
@@ -77,7 +78,18 @@ export function createTypeScriptReplTool(ctx: ToolContext): Tool {
         risk: "high",
         summary: `run typescript, timeout=${timeoutSeconds}s, ${typescript.length} bytes`,
       });
+      logDebug("typescript_repl.approved", {
+        sessionId: ctx.getSessionId(),
+        turnId: ctx.getTurnId(),
+        bytes: String(typescript.length),
+        timeoutSeconds: String(timeoutSeconds),
+      });
       await grantBrokerRunForCommands([Deno.execPath()], ctx.signal);
+      logDebug("typescript_repl.run_granted", {
+        sessionId: ctx.getSessionId(),
+        turnId: ctx.getTurnId(),
+        executable: Deno.execPath(),
+      });
 
       let scriptPath: string | undefined;
       const timeoutController = new AbortController();
@@ -92,6 +104,12 @@ export function createTypeScriptReplTool(ctx: ToolContext): Tool {
         });
         await Deno.writeTextFile(scriptPath, typescript);
 
+        const started = performance.now();
+        logDebug("typescript_repl.spawn", {
+          sessionId: ctx.getSessionId(),
+          turnId: ctx.getTurnId(),
+          executable: Deno.execPath(),
+        });
         const child = new Deno.Command(Deno.execPath(), {
           args: [
             "run",
@@ -120,6 +138,15 @@ export function createTypeScriptReplTool(ctx: ToolContext): Tool {
           child.status,
         ]);
         if (signal.aborted) throw new Error(abortErrorMessage(timeoutController.signal));
+        logDebug("typescript_repl.completed", {
+          sessionId: ctx.getSessionId(),
+          turnId: ctx.getTurnId(),
+          code: String(status.code),
+          success: String(status.success),
+          durationMs: String(Math.round(performance.now() - started)),
+          stdoutBytes: String(stdout.length),
+          stderrBytes: String(stderr.length),
+        });
 
         const output = formatOutput(stdout, stderr);
         const text = formatTruncatedOutput(output);

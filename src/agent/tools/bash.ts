@@ -2,6 +2,7 @@ import { type Tool, tool } from "@lmstudio/sdk";
 import { z } from "zod/v3";
 
 import { grantBrokerRunForCommands } from "../../permission-broker/mod.ts";
+import { logDebug } from "../../shared/mod.ts";
 import { approveToolOperation, type ToolContext } from "./context.ts";
 import { getShellCommand } from "./shell-command.ts";
 import { DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES, formatSize, truncateTail } from "./truncate.ts";
@@ -31,7 +32,18 @@ export function createBashTool(ctx: ToolContext): Tool {
       });
 
       const { cmd, args } = getShellCommand();
+      logDebug("shell.approved", {
+        sessionId: ctx.getSessionId(),
+        turnId: ctx.getTurnId(),
+        shell: cmd,
+        cwd: ctx.root,
+      });
       await grantBrokerRunForCommands([cmd], ctx.signal);
+      logDebug("shell.run_granted", {
+        sessionId: ctx.getSessionId(),
+        turnId: ctx.getTurnId(),
+        shell: cmd,
+      });
       const timeoutController = new AbortController();
       const timeoutMs = timeout !== undefined && timeout > 0 ? timeout * 1000 : undefined;
       let timeoutId: ReturnType<typeof setTimeout> | undefined;
@@ -41,6 +53,13 @@ export function createBashTool(ctx: ToolContext): Tool {
       const signal = ctx.signal ? AbortSignal.any([ctx.signal, timeoutController.signal]) : timeoutController.signal;
 
       try {
+        const started = performance.now();
+        logDebug("shell.spawn", {
+          sessionId: ctx.getSessionId(),
+          turnId: ctx.getTurnId(),
+          shell: cmd,
+          cwd: ctx.root,
+        });
         const child = new Deno.Command(cmd, {
           args: [...args, command],
           cwd: ctx.root,
@@ -56,6 +75,16 @@ export function createBashTool(ctx: ToolContext): Tool {
           child.status,
         ]);
         if (signal.aborted) throw new Error("Command aborted");
+        logDebug("shell.completed", {
+          sessionId: ctx.getSessionId(),
+          turnId: ctx.getTurnId(),
+          shell: cmd,
+          code: String(status.code),
+          success: String(status.success),
+          durationMs: String(Math.round(performance.now() - started)),
+          stdoutBytes: String(stdout.length),
+          stderrBytes: String(stderr.length),
+        });
 
         let output = [stdout, stderr].filter((s) => s.length > 0).join(
           stdout.length > 0 && stderr.length > 0 ? "\n" : "",

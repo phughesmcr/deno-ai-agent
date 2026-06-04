@@ -42,7 +42,7 @@ function reasoningEnabled(): boolean {
 
 /** LM Studio `reasoningParsing` on `model.act()` — default off (Gemma and similar templates break when on). */
 function reasoningActParsingEnabled(): boolean {
-  return envFlag("REASONING_ACT_PARSING", false);
+  return envFlag("REASONING_ACT_PARSING", true);
 }
 
 function keepThinkingInSession(): boolean {

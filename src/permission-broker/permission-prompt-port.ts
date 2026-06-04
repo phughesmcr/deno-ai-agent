@@ -20,6 +20,8 @@ export interface PermissionCallbackDispatch {
   handled: boolean;
   /** Optional Telegram answerCallbackQuery payload. */
   answer?: { text?: string; show_alert?: boolean };
+  /** True when the prompt's inline buttons should be removed from the callback message. */
+  clearReplyMarkup?: boolean;
 }
 
 /** Minimal Telegram context for permission prompts. */

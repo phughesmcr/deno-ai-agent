@@ -14,6 +14,7 @@ import {
   DEFAULT_APPROVAL_TIMEOUT_MS,
   requireApproval,
 } from "../../shared/approval.ts";
+import { logDebug } from "../../shared/log.ts";
 import { expandTilde, WorkspaceSandbox } from "../workspace-sandbox.ts";
 
 /** Workspace-scoped root for all tool I/O. */
@@ -158,14 +159,18 @@ export async function approveHostAwareToolOperation(
 /** Pre-grants broker read for a host path when the permission broker is active. */
 export async function grantBrokerHostRead(absolutePath: string, signal?: AbortSignal): Promise<void> {
   if (shouldRunPermissionControlClient()) {
+    logDebug("broker_grant.start", { permission: "read", value: absolutePath });
     await grantBrokerReadPath(absolutePath, signal);
+    logDebug("broker_grant.completed", { permission: "read", value: absolutePath });
   }
 }
 
 /** Pre-grants broker write for a host path when the permission broker is active. */
 export async function grantBrokerHostWrite(absolutePath: string, signal?: AbortSignal): Promise<void> {
   if (shouldRunPermissionControlClient()) {
+    logDebug("broker_grant.start", { permission: "write", value: absolutePath });
     await grantBrokerWritePath(absolutePath, signal);
+    logDebug("broker_grant.completed", { permission: "write", value: absolutePath });
   }
 }
 
@@ -207,4 +212,10 @@ export async function approveToolOperation(
   if (spec.summary !== undefined) request.summary = spec.summary;
   // Do not pass ctx.signal: it must not be the LM Studio act signal (abort cancels pending approvals).
   await requireApproval(ctx.approvalGate, request);
+  logDebug("tool.approved", {
+    operation: request.operation,
+    risk: request.risk,
+    sessionId: request.sessionId,
+    turnId: request.turnId,
+  });
 }

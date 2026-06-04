@@ -43,6 +43,11 @@ function keyboard(shortId: string): { inline_keyboard: { text: string; callback_
 export function createTelegramPermissionPromptPort(timeoutMs = 120_000): PermissionPromptPort {
   let turn: PermissionPromptTurnTarget | undefined;
   const shortIds = new Map<string, string>();
+  const queue: {
+    request: PermissionPromptRequest;
+    signal: AbortSignal;
+    resolve: (result: PermissionPromptResult) => void;
+  }[] = [];
   const pending = createPendingInteractionStore<PermissionPromptRequest, PermissionPromptResult>((request, result) => {
     shortIds.delete(request.requestId);
     logDebug("permission_prompt.decision", {
@@ -50,10 +55,65 @@ export function createTelegramPermissionPromptPort(timeoutMs = 120_000): Permiss
       result: result.result,
       grant: result.grant ?? "",
     });
+    queueMicrotask(startNext);
   });
 
+  function denyQueued(): void {
+    for (const queued of queue.splice(0)) {
+      queued.resolve({ result: "deny" });
+    }
+  }
+
+  function startNext(): void {
+    if (pending.isPending()) return;
+    const next = queue.shift();
+    if (!next) return;
+
+    const activeTurn = turn;
+    if (!activeTurn || next.signal.aborted || activeTurn.signal.aborted) {
+      next.resolve({ result: "deny" });
+      queueMicrotask(startNext);
+      return;
+    }
+
+    const shortId = toShortRequestId(next.request.requestId);
+    shortIds.set(next.request.requestId, shortId);
+
+    if (
+      !pending.begin({
+        request: next.request,
+        resolve: next.resolve,
+        signal: next.signal,
+        timeoutMs,
+        abortResult: () => ({ result: "deny" }),
+        timeoutResult: () => ({ result: "deny" }),
+      })
+    ) {
+      shortIds.delete(next.request.requestId);
+      queue.unshift(next);
+      return;
+    }
+
+    logDebug("permission_prompt.requested", {
+      permission: next.request.permission,
+      brokerId: String(next.request.brokerId),
+      chatId: String(activeTurn.ctx.message?.chat?.id ?? activeTurn.ctx.config.adminId),
+      valuePreview: next.request.value?.slice(0, 80) ?? "(none)",
+    });
+    activeTurn.ctx.reply(promptText(next.request), {
+      reply_markup: keyboard(shortId),
+      message_thread_id: activeTurn.ctx.message?.message_thread_id,
+    }).catch((error: unknown) => {
+      logDebug("permission_prompt.send_error", {
+        message: error instanceof Error ? error.message : String(error),
+        chatId: String(activeTurn.ctx.message?.chat?.id ?? activeTurn.ctx.config.adminId),
+      });
+      pending.settle({ result: "deny" });
+    });
+  }
+
   return {
-    isPending: () => pending.isPending(),
+    isPending: () => pending.isPending() || queue.length > 0,
     setTurnContext(target: PermissionPromptTurnTarget): void {
       turn = target;
     },
@@ -62,55 +122,17 @@ export function createTelegramPermissionPromptPort(timeoutMs = 120_000): Permiss
     },
     abortPending(): void {
       pending.settle({ result: "deny" });
+      denyQueued();
     },
     async prompt(request: PermissionPromptRequest, signal?: AbortSignal): Promise<PermissionPromptResult> {
       const effectiveSignal = turn?.signal ?? signal;
-      const chatId = turn?.ctx.message?.chat?.id ?? turn?.ctx.config.adminId;
       if (!turn || !effectiveSignal || effectiveSignal.aborted) {
         return { result: "deny" };
       }
-      if (pending.isPending()) return { result: "deny" };
-
-      const shortId = toShortRequestId(request.requestId);
-      shortIds.set(request.requestId, shortId);
 
       return await new Promise<PermissionPromptResult>((resolve) => {
-        if (
-          !pending.begin({
-            request,
-            resolve,
-            signal: effectiveSignal,
-            timeoutMs,
-            abortResult: () => ({ result: "deny" }),
-            timeoutResult: () => ({ result: "deny" }),
-          })
-        ) {
-          shortIds.delete(request.requestId);
-          resolve({ result: "deny" });
-          return;
-        }
-
-        logDebug("permission_prompt.requested", {
-          permission: request.permission,
-          brokerId: String(request.brokerId),
-          chatId: String(chatId),
-        });
-        const valuePreview = request.value ?? "(none)";
-        console.log(
-          `Broker permission prompt (${request.permission}): respond in Telegram — ${
-            valuePreview.length > 80 ? `${valuePreview.slice(0, 80)}...` : valuePreview
-          }`,
-        );
-        turn!.ctx.reply(promptText(request), {
-          reply_markup: keyboard(shortId),
-          message_thread_id: turn!.ctx.message?.message_thread_id,
-        }).catch((error: unknown) => {
-          logDebug("permission_prompt.send_error", {
-            message: error instanceof Error ? error.message : String(error),
-            chatId: String(chatId),
-          });
-          pending.settle({ result: "deny" });
-        });
+        queue.push({ request, signal: effectiveSignal, resolve });
+        startNext();
       });
     },
     handleCallback(data: string, actorId: number | undefined, adminId: number): Promise<PermissionCallbackDispatch> {
@@ -147,13 +169,13 @@ export function createTelegramPermissionPromptPort(timeoutMs = 120_000): Permiss
 
       if (parsed.action === "deny") {
         pending.settle({ result: "deny" });
-        return Promise.resolve({ handled: true });
+        return Promise.resolve({ handled: true, clearReplyMarkup: true });
       }
       pending.settle({
         result: "allow",
         grant: parsed.action === "session" ? "session" : "once",
       });
-      return Promise.resolve({ handled: true });
+      return Promise.resolve({ handled: true, clearReplyMarkup: true });
     },
   };
 }

@@ -162,7 +162,7 @@ export function createTelegramManager({
       const dispatch = await permissionPrompts?.handleCallback(data, ctx.from?.id, adminId);
       if (dispatch?.handled) {
         await ctx.answerCallbackQuery(dispatch.answer);
-        if (!permissionPrompts?.isPending()) {
+        if (dispatch.clearReplyMarkup || !permissionPrompts?.isPending()) {
           try {
             await ctx.editMessageReplyMarkup({ reply_markup: undefined });
           } catch {

@@ -116,6 +116,34 @@ Deno.test("Telegram permission prompt handles two sequential prompts", async () 
   assertEquals(port.isPending(), false);
 });
 
+Deno.test("Telegram permission prompt queues overlapping prompts", async () => {
+  const port = createTelegramPermissionPromptPort(1_000);
+  const ctx = fakeTurnContext();
+  port.setTurnContext({ ctx, signal: new AbortController().signal });
+
+  const first = request({ requestId: "aaaaaaaa-1111-1111-1111-111111111111" });
+  const second = request({ requestId: "bbbbbbbb-2222-2222-2222-222222222222", value: "/bin/ls" });
+
+  const pendingFirst = port.prompt(first);
+  const pendingSecond = port.prompt(second);
+  await Promise.resolve();
+
+  assertEquals(ctx.replies.length, 1);
+  assertEquals(port.isPending(), true);
+
+  const firstDispatch = await port.handleCallback(callbackData(first.requestId, "once"), 42, 42);
+  assertEquals(firstDispatch.clearReplyMarkup, true);
+  assertEquals(await pendingFirst, { result: "allow", grant: "once" });
+  await Promise.resolve();
+
+  assertEquals(ctx.replies.length, 2);
+
+  const secondDispatch = await port.handleCallback(callbackData(second.requestId, "session"), 42, 42);
+  assertEquals(secondDispatch.clearReplyMarkup, true);
+  assertEquals(await pendingSecond, { result: "allow", grant: "session" });
+  assertEquals(port.isPending(), false);
+});
+
 Deno.test("Telegram permission prompt denies on abort", async () => {
   const port = createTelegramPermissionPromptPort(1_000);
   const controller = new AbortController();

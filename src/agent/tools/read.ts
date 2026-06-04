@@ -1,6 +1,7 @@
 import { type Tool, tool } from "@lmstudio/sdk";
 import { z } from "zod/v3";
 
+import { logDebug } from "../../shared/mod.ts";
 import {
   approveHostAwareToolOperation,
   displayPath,
@@ -25,7 +26,7 @@ export function createReadTool(ctx: ToolContext): Tool {
     name: "read",
     description: `Read the contents of a file. Output is truncated to ${DEFAULT_MAX_LINES} lines or ${
       DEFAULT_MAX_BYTES / 1024
-    }KB (whichever is hit first). Use offset/limit for large files. When you need the full file, continue with offset until complete. Images are not supported in phase 1. Use a relative path for workspace files. For host files outside the workspace, use this tool with an absolute path or \`~/...\` (requires Telegram approval)—do not use bash for host file reads.`,
+    }KB (whichever is hit first). Use offset/limit for large files. When you need the full file, continue with offset until complete. Images are not supported in phase 1. Use a relative path for workspace files. For host files outside the workspace, use this tool with an absolute path or \`~/...\` (requires Telegram approval) - do not use bash for host file reads.`,
     parameters: {
       path: z.string().describe(
         "Path to read: relative (workspace), or absolute / ~/... for host files outside the workspace",
@@ -43,7 +44,7 @@ export function createReadTool(ctx: ToolContext): Tool {
         `read text with offset=${offset ?? 1}, limit=${limit ?? "default"}` :
         "read text";
       if (outsideWorkspace) {
-        console.log(`read (host): ${absolutePath} — waiting for Telegram approval`);
+        logDebug("read.host_approval_required", { path: absolutePath });
       }
       await approveHostAwareToolOperation(ctx, {
         operation: "read",
@@ -52,7 +53,7 @@ export function createReadTool(ctx: ToolContext): Tool {
         display,
         summary: outsideWorkspace ? `host ${rangeSummary}` : rangeSummary,
       });
-      if (outsideWorkspace) await grantBrokerHostRead(absolutePath);
+      if (outsideWorkspace) await grantBrokerHostRead(absolutePath, ctx.signal);
 
       let text: string;
       try {

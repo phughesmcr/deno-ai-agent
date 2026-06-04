@@ -2,6 +2,7 @@ import { type Tool, tool } from "@lmstudio/sdk";
 import { z } from "zod/v3";
 
 import { grantBrokerNetUrl, shouldRunPermissionControlClient } from "../../permission-broker/mod.ts";
+import { logDebug } from "../../shared/mod.ts";
 import { approveToolOperation, type ToolContext } from "./context.ts";
 
 const DEFAULT_TIMEOUT_SECONDS = 15;
@@ -142,7 +143,9 @@ async function approveAndGrant(
   });
 
   if (shouldRunPermissionControlClient()) {
+    logDebug("broker_grant.start", { permission: "net", value: url.origin });
     await grantBrokerNet(url, "once");
+    logDebug("broker_grant.completed", { permission: "net", value: url.origin });
   }
   approvedOrigins.add(url.origin);
 }
@@ -164,11 +167,23 @@ async function fetchWithRedirects(
     // deno-lint-ignore no-await-in-loop -- Redirect approval must precede each fetch.
     await approveAndGrant(ctx, currentUrl, grantBrokerNet, approvedOrigins);
 
+    logDebug("web_fetch.request", {
+      sessionId: ctx.getSessionId(),
+      turnId: ctx.getTurnId(),
+      origin: currentUrl.origin,
+      redirectCount: String(redirectCount),
+    });
     // deno-lint-ignore no-await-in-loop -- Redirects are intentionally followed manually.
     const response = await fetcher(currentUrl, {
       method: "GET",
       redirect: "manual",
       signal,
+    });
+    logDebug("web_fetch.response", {
+      sessionId: ctx.getSessionId(),
+      turnId: ctx.getTurnId(),
+      origin: currentUrl.origin,
+      status: String(response.status),
     });
 
     if (isRedirect(response.status)) {

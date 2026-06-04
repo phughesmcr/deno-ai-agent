@@ -152,13 +152,14 @@ async function main(): Promise<void> {
   };
 
   function abortActiveTurn(): boolean {
+    const hadPendingInteraction = permissionPrompts.isPending() || approvals.isPending();
     permissionPrompts.abortPending();
     approvals.abortPending();
     const aborted = activeTurns.abortActiveTurn();
-    if (aborted) {
+    if (aborted || hadPendingInteraction) {
       console.log("Turn aborted (act, approvals, and broker prompts cancelled).");
     }
-    return aborted;
+    return aborted || hadPendingInteraction;
   }
 
   const turnAbort = { abortActiveTurn };
@@ -211,8 +212,9 @@ async function main(): Promise<void> {
         userQuestions.setTurnContext({ ctx, signal: turnController.signal });
         permissionPrompts.setTurnContext({ ctx, signal: approvalController.signal });
         todoDisplay.setTurnContext({ ctx, signal: turnController.signal });
-        approvals.setTurnContext({ ctx, signal: turnController.signal });
+        approvals.setTurnContext({ ctx, signal: approvalController.signal });
         const actStarted = performance.now();
+        let completed = false;
         try {
           console.log(`Model turn started${imageCount > 0 ? ` (${imageCount} image(s))` : ""}.`);
           const { replyTexts, compacted } = await runTurn(agent, normalized, {
@@ -232,13 +234,16 @@ async function main(): Promise<void> {
           if (compacted) {
             logDebug("session.compacted", { sessionId: agent.session.id });
           }
+          completed = true;
         } finally {
           actMs = performance.now() - actStarted;
           clearActiveTurn();
           controller.signal.removeEventListener("abort", onShutdown);
-          approvalController.abort();
-          permissionPrompts.abortPending();
-          approvals.abortPending();
+          if (!completed) {
+            approvalController.abort();
+            permissionPrompts.abortPending();
+            approvals.abortPending();
+          }
           userQuestions.clearTurnContext();
           permissionPrompts.clearTurnContext();
           todoDisplay.clearTurnContext();

@@ -64,7 +64,7 @@ export function createEditTool(ctx: ToolContext): Tool {
         workspaceRisk: "medium",
         summary: `replace ${edits.length} block(s)`,
       });
-      if (outsideWorkspace) await grantBrokerHostReadWrite(absolutePath);
+      if (outsideWorkspace) await grantBrokerHostReadWrite(absolutePath, ctx.signal);
 
       return await withFileMutationQueue(absolutePath, async () => {
         let rawContent: string;

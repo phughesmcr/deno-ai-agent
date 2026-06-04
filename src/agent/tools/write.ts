@@ -34,7 +34,7 @@ export function createWriteTool(ctx: ToolContext): Tool {
         workspaceRisk: "medium",
         summary: `write ${content.length} bytes`,
       });
-      if (outsideWorkspace) await grantBrokerHostWrite(absolutePath);
+      if (outsideWorkspace) await grantBrokerHostWrite(absolutePath, ctx.signal);
 
       return await withFileMutationQueue(absolutePath, async () => {
         await Deno.mkdir(dir, { recursive: true });

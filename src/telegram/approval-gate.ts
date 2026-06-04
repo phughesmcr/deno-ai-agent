@@ -107,6 +107,11 @@ function approvalText(request: ApprovalRequest): string {
 /** Telegram inline-keyboard implementation of the app-layer approval gate. */
 export function createTelegramApprovalGate(): TelegramApprovalGate {
   let turn: TelegramTurnTarget | undefined;
+  const queue: {
+    request: ApprovalRequest;
+    signal: AbortSignal;
+    resolve: (result: ApprovalDecision) => void;
+  }[] = [];
   const pending = createPendingInteractionStore<ApprovalRequest, ApprovalDecision>((request, decision) => {
     logDebug("approval.decision", {
       operation: request.operation,
@@ -116,6 +121,7 @@ export function createTelegramApprovalGate(): TelegramApprovalGate {
       approved: String(decision.approved),
       reason: decision.reason,
     });
+    queueMicrotask(startNext);
   });
 
   function settle(reason: string, approved: boolean, decidedBy?: string): void {
@@ -123,8 +129,60 @@ export function createTelegramApprovalGate(): TelegramApprovalGate {
     pending.settle(decision);
   }
 
+  function denyQueued(reason: string): void {
+    for (const queued of queue.splice(0)) {
+      queued.resolve(denyDecision(reason));
+    }
+  }
+
+  function startNext(): void {
+    if (pending.isPending()) return;
+    const next = queue.shift();
+    if (!next) return;
+
+    const activeTurn = turn;
+    if (!activeTurn || activeTurn.signal.aborted) {
+      next.resolve(denyDecision("missing_telegram_turn"));
+      queueMicrotask(startNext);
+      return;
+    }
+    if (next.signal.aborted) {
+      next.resolve(denyDecision("cancelled"));
+      queueMicrotask(startNext);
+      return;
+    }
+
+    if (
+      !pending.begin({
+        request: next.request,
+        signal: next.signal,
+        timeoutMs: next.request.timeoutMs,
+        resolve: next.resolve,
+        abortResult: () => denyDecision("cancelled"),
+        timeoutResult: () => denyDecision("timeout"),
+      })
+    ) {
+      queue.unshift(next);
+      return;
+    }
+
+    logDebug("approval.requested", {
+      operation: next.request.operation,
+      risk: next.request.risk,
+      sessionId: next.request.sessionId,
+      turnId: next.request.turnId,
+    });
+    activeTurn.ctx.reply(approvalText(next.request), {
+      reply_markup: keyboard(next.request.id!),
+      message_thread_id: activeTurn.ctx.message?.["message_thread_id"],
+    }).catch((error: unknown) => {
+      logDebug("approval.send_error", { message: error instanceof Error ? error.message : String(error) });
+      settle("send_failed", false);
+    });
+  }
+
   return {
-    isPending: () => pending.isPending(),
+    isPending: () => pending.isPending() || queue.length > 0,
     setTurnContext(target: TelegramTurnTarget): void {
       turn = target;
     },
@@ -133,43 +191,18 @@ export function createTelegramApprovalGate(): TelegramApprovalGate {
     },
     abortPending(): void {
       pending.settle(denyDecision("cancelled"));
+      denyQueued("cancelled");
     },
     async requestApproval(rawRequest: ApprovalRequest, signal?: AbortSignal): Promise<ApprovalDecision> {
       if (!turn || turn.signal.aborted) return denyDecision("missing_telegram_turn");
-      if (pending.isPending()) return denyDecision("approval_already_pending");
 
       const request = { ...rawRequest, id: requestId(rawRequest) };
       const effectiveSignal = signal ?? turn.signal;
       if (effectiveSignal.aborted) return denyDecision("cancelled");
 
       return await new Promise<ApprovalDecision>((resolve) => {
-        if (
-          !pending.begin({
-            request,
-            signal: effectiveSignal,
-            timeoutMs: request.timeoutMs,
-            resolve,
-            abortResult: () => denyDecision("cancelled"),
-            timeoutResult: () => denyDecision("timeout"),
-          })
-        ) {
-          resolve(denyDecision("approval_already_pending"));
-          return;
-        }
-
-        logDebug("approval.requested", {
-          operation: request.operation,
-          risk: request.risk,
-          sessionId: request.sessionId,
-          turnId: request.turnId,
-        });
-        turn?.ctx.reply(approvalText(request), {
-          reply_markup: keyboard(request.id),
-          message_thread_id: turn.ctx.message?.["message_thread_id"],
-        }).catch((error: unknown) => {
-          logDebug("approval.send_error", { message: error instanceof Error ? error.message : String(error) });
-          settle("send_failed", false);
-        });
+        queue.push({ request, signal: effectiveSignal, resolve });
+        startNext();
       });
     },
     async handleCallback(ctx: TelegramApprovalCallbackContext): Promise<boolean> {

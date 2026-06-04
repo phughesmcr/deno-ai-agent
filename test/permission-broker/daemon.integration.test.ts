@@ -226,6 +226,76 @@ Deno.test({
 });
 
 Deno.test({
+  name: "broker daemon queues concurrent control prompts",
+  ignore: !integrationEnabled(),
+}, async () => {
+  const { env, controller, done } = await makeEnv(true);
+
+  const controlConn = await Deno.connect({ transport: "unix", path: env.controlPath });
+  const firstBrokerConn = await Deno.connect({ transport: "unix", path: env.brokerPath });
+  const secondBrokerConn = await Deno.connect({ transport: "unix", path: env.brokerPath });
+  const control = new ControlSocketSession();
+  control.attach(controlConn);
+  const firstBroker = new JsonlConnection(firstBrokerConn);
+  const secondBroker = new JsonlConnection(secondBrokerConn);
+
+  try {
+    await control.writeLine(formatControlMessage({ type: "register", pid: 42 }));
+    await new Promise((r) => setTimeout(r, 20));
+
+    await firstBroker.writeLine(JSON.stringify({
+      v: 1,
+      pid: 1,
+      id: 20,
+      datetime: "2025-01-01T00:00:00.000Z",
+      permission: "run",
+      value: "/bin/sh",
+    }));
+    await secondBroker.writeLine(JSON.stringify({
+      v: 1,
+      pid: 2,
+      id: 21,
+      datetime: "2025-01-01T00:00:00.000Z",
+      permission: "run",
+      value: "/bin/ls",
+    }));
+
+    const firstPrompt = parseControlMessage((await control.readLine())!);
+    if (firstPrompt.type !== "prompt") throw new Error("expected first prompt");
+    await control.writeLine(formatControlMessage({
+      type: "decision",
+      requestId: firstPrompt.requestId,
+      result: "allow",
+      grant: "once",
+    }));
+
+    const firstResponse = await firstBroker.readLine();
+    assertEquals(JSON.parse(firstResponse!).id, 20);
+    assertEquals(JSON.parse(firstResponse!).result, "allow");
+
+    const secondPrompt = parseControlMessage((await control.readLine())!);
+    if (secondPrompt.type !== "prompt") throw new Error("expected second prompt");
+    await control.writeLine(formatControlMessage({
+      type: "decision",
+      requestId: secondPrompt.requestId,
+      result: "allow",
+      grant: "once",
+    }));
+
+    const secondResponse = await secondBroker.readLine();
+    assertEquals(JSON.parse(secondResponse!).id, 21);
+    assertEquals(JSON.parse(secondResponse!).result, "allow");
+  } finally {
+    controlConn.close();
+    firstBrokerConn.close();
+    secondBrokerConn.close();
+    controller.abort();
+    await done;
+    await cleanupEnv(env);
+  }
+});
+
+Deno.test({
   name: "broker daemon returns one matching response per request line",
   ignore: !integrationEnabled(),
 }, async () => {

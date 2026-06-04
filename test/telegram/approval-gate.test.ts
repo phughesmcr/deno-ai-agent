@@ -189,6 +189,37 @@ Deno.test("Telegram approval gate handles two sequential approvals", async () =>
   assertEquals(gate.isPending(), false);
 });
 
+Deno.test("Telegram approval gate queues overlapping approvals", async () => {
+  const gate = createTelegramApprovalGate();
+  const ctx = fakeContext();
+  gate.setTurnContext({ ctx, signal: new AbortController().signal });
+
+  const first = gate.requestApproval(request({ id: "approval-a", operation: "list" }));
+  const second = gate.requestApproval(request({ id: "approval-b", operation: "find" }));
+  await Promise.resolve();
+
+  assertEquals(ctx.replies.length, 1);
+  assertEquals(gate.isPending(), true);
+
+  await gate.handleCallback({
+    ...fakeContext(),
+    callbackQuery: { data: encodeApprovalCallback("approval-a", "approve") },
+  });
+  assertEquals((await first).approved, true);
+  await Promise.resolve();
+
+  assertEquals(ctx.replies.length, 2);
+
+  await gate.handleCallback({
+    ...fakeContext(),
+    callbackQuery: { data: encodeApprovalCallback("approval-b", "approve") },
+  });
+  const decision = await second;
+  assertEquals(decision.approved, true);
+  assertEquals(decision.reason, "approved");
+  assertEquals(gate.isPending(), false);
+});
+
 Deno.test("Telegram approval gate abortPending settles in-flight approval", async () => {
   const gate = createTelegramApprovalGate();
   const ctx = fakeContext();

@@ -77,6 +77,7 @@ export class PermissionBrokerDaemon {
   #controlRegistered = false;
   readonly #brokerConns = new Set<Deno.Conn>();
   #pending: PendingPrompt | undefined;
+  private _promptQueueTail: Promise<void> = Promise.resolve();
 
   constructor(env: BrokerDaemonEnv) {
     this.#env = env;
@@ -302,11 +303,26 @@ export class PermissionBrokerDaemon {
   }
 
   async #promptUser(brokerId: number, permission: string, value: string | null): Promise<BrokerResponse> {
+    return await this._enqueuePrompt(() => this._promptUserNow(brokerId, permission, value));
+  }
+
+  async _enqueuePrompt(task: () => Promise<BrokerResponse>): Promise<BrokerResponse> {
+    let release!: () => void;
+    const previous = this._promptQueueTail;
+    this._promptQueueTail = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    await previous;
+    try {
+      return await task();
+    } finally {
+      release();
+    }
+  }
+
+  async _promptUserNow(brokerId: number, permission: string, value: string | null): Promise<BrokerResponse> {
     if (!this.#controlConn || !this.#controlRegistered) {
       return { id: brokerId, result: "deny", reason: "Control client not registered." };
-    }
-    if (this.#pending) {
-      return { id: brokerId, result: "deny", reason: "Another permission prompt is pending." };
     }
 
     const requestId = crypto.randomUUID();
