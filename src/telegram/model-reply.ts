@@ -1,4 +1,5 @@
 // deno-lint-ignore-file camelcase -- Telegram API uses snake_case keys
+import { splitForTelegram, TELEGRAM_MAX_LENGTH } from "./limits.ts";
 import { plainReply, stripThinking } from "./markdown.ts";
 
 /** Telegram reply target parameters. */
@@ -44,8 +45,53 @@ function formatPlainReply(raw: ModelReplyText): string {
   return replyChunks(raw).map(plainReply).filter(Boolean).join("\n\n");
 }
 
+/** Aligns plain-text segments to the same chunk count as formatted MarkdownV2. */
+function plainChunksForMarkdown(markdown: string, plain: string): string[] {
+  const mdChunks = splitForTelegram(markdown);
+  if (mdChunks.length <= 1) return [plain];
+
+  const chunks: string[] = [];
+  let rest = plain;
+  for (let i = 0; i < mdChunks.length - 1; i++) {
+    const remainingParts = mdChunks.length - i;
+    const target = Math.ceil(rest.length / remainingParts);
+    const slice = rest.slice(0, Math.min(target, rest.length));
+    const splitAt = findPlainSplitIndex(slice, target);
+    const piece = rest.slice(0, splitAt).trimEnd();
+    chunks.push(piece);
+    rest = rest.slice(splitAt).trimStart();
+  }
+  if (rest.length > 0) chunks.push(rest);
+  return chunks;
+}
+
+function findPlainSplitIndex(slice: string, target: number): number {
+  const paragraph = slice.lastIndexOf("\n\n");
+  if (paragraph > 0) return paragraph + 2;
+  const line = slice.lastIndexOf("\n");
+  if (line > 0) return line + 1;
+  return Math.min(target, slice.length);
+}
+
+async function sendOneChunk(
+  sender: TelegramReplySender,
+  markdown: string,
+  plain: string,
+  baseParams: Omit<TelegramReplyOptions, "parse_mode">,
+): Promise<void> {
+  if (markdown.length <= TELEGRAM_MAX_LENGTH) {
+    try {
+      await sender.reply(markdown, { ...baseParams, parse_mode: "MarkdownV2" as const });
+      return;
+    } catch (error) {
+      if (!isTelegramBadRequest(error)) throw error;
+    }
+  }
+  await sender.reply(plain, baseParams);
+}
+
 /**
- * Sends the model reply through a generic sender; falls back to plain text if MarkdownV2 is rejected.
+ * Sends the model reply through a generic sender; splits long text; falls back to plain text per chunk.
  * @internal
  */
 export async function sendModelTextReply(
@@ -54,16 +100,16 @@ export async function sendModelTextReply(
   replyToMessageId: number,
   messageThreadId?: number,
 ): Promise<void> {
-  const formatted = formatMarkdownReply(raw);
-  const params = {
-    reply_parameters: { message_id: replyToMessageId },
-    message_thread_id: messageThreadId,
-  };
+  const markdown = formatMarkdownReply(raw);
+  const plain = formatPlainReply(raw);
+  const mdChunks = splitForTelegram(markdown);
+  const plainChunks = plainChunksForMarkdown(markdown, plain);
 
-  try {
-    await sender.reply(formatted, { ...params, parse_mode: "MarkdownV2" as const });
-  } catch (error) {
-    if (!isTelegramBadRequest(error)) throw error;
-    await sender.reply(formatPlainReply(raw), params);
+  for (let i = 0; i < mdChunks.length; i++) {
+    const baseParams: Omit<TelegramReplyOptions, "parse_mode"> = {
+      message_thread_id: messageThreadId,
+      ...(i === 0 ? { reply_parameters: { message_id: replyToMessageId } } : {}),
+    };
+    await sendOneChunk(sender, mdChunks[i]!, plainChunks[i] ?? plain, baseParams);
   }
 }

@@ -17,9 +17,13 @@ interface ReplyCall {
 class FakeSender implements TelegramReplySender {
   readonly calls: ReplyCall[] = [];
   failures: unknown[] = [];
+  rejectMarkdownV2 = false;
 
   reply(text: string, options?: TelegramReplyOptions): Promise<void> {
     this.calls.push({ text, options });
+    if (options?.parse_mode === "MarkdownV2" && this.rejectMarkdownV2) {
+      return Promise.reject(telegramError("bad markdown", 400));
+    }
     const failure = this.failures.shift();
     return failure ? Promise.reject(failure) : Promise.resolve();
   }
@@ -134,4 +138,34 @@ Deno.test("sendModelTextReply rethrows non-400 reply failures", async () => {
     "telegram unavailable",
   );
   assertEquals(sender.calls.length, 1);
+});
+
+Deno.test("sendModelTextReply splits long replies across multiple messages", async () => {
+  const sender = new FakeSender();
+  const long = "word ".repeat(900).trim();
+
+  await sendModelTextReply(sender, long, 42, 99);
+
+  assertEquals(sender.calls.length > 1, true);
+  assertEquals(sender.calls[0]?.options?.reply_parameters, { message_id: 42 });
+  assertEquals(sender.calls[0]?.options?.message_thread_id, 99);
+  assertEquals(sender.calls[1]?.options?.reply_parameters, undefined);
+  assertEquals(sender.calls[1]?.options?.message_thread_id, 99);
+  for (const call of sender.calls) {
+    assertEquals(call.text.length <= 4096, true);
+  }
+});
+
+Deno.test("sendModelTextReply splits plain fallback when MarkdownV2 fails on long reply", async () => {
+  const sender = new FakeSender();
+  sender.rejectMarkdownV2 = true;
+  const long = "Hello *world* ".repeat(500).trim();
+
+  await sendModelTextReply(sender, long, 7, 11);
+
+  const plainCalls = sender.calls.filter((call) => call.options?.parse_mode === undefined);
+  assertEquals(plainCalls.length > 1, true);
+  assertEquals(sender.calls[0]?.options?.parse_mode, "MarkdownV2");
+  assertEquals(plainCalls[0]?.options?.reply_parameters, { message_id: 7 });
+  assertEquals(plainCalls[1]?.options?.reply_parameters, undefined);
 });

@@ -9,6 +9,8 @@ Deno.test("preprocessSystemPrompt substitutes tool names and injects workspace p
   assertStringIncludes(out, "bash");
   assertStringIncludes(out, "web-fetch");
   assertStringIncludes(out, "/workspace/.silas");
+  assertStringIncludes(out, "your home");
+  assertStringIncludes(out, "Be ambitious");
   assertStringIncludes(out, "Tool notes");
   assertStringIncludes(out, "ask_user_question");
   assertStringIncludes(out, "read-only subagent");
@@ -16,7 +18,7 @@ Deno.test("preprocessSystemPrompt substitutes tool names and injects workspace p
   assertStringIncludes(out, "`web-fetch`");
   assertEquals(out.includes("not implemented"), false);
   assertStringIncludes(out, "`skill`");
-  assertEquals(out.includes("`todo_write`"), false);
+  assertStringIncludes(out, "`todo_write`");
 });
 
 Deno.test("preprocessSystemPrompt prepends PREPEND_SYSTEM_PROMPT when set", () => {

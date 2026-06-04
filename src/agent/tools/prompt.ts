@@ -19,10 +19,12 @@ const TOOL_NAME_MAP: Record<string, string> = {
 const TOOL_NOTES = `
 ## Tool notes
 
+Replies are delivered to Telegram after the full turn completes; use \`todo_write\` for live progress.
+Be ambitious: use tools to finish work, not just to explain it.
 Use \`ask_user_question\` for structured multiple-choice clarification.
 Use \`web-fetch\` for approved HTTP/HTTPS website pages instead of \`bash\`/curl.
 Use \`subagent\` to spawn asynchronous read-only subagent jobs for research. Subagents can inspect with \`read\`, \`grep\`, \`find\`, \`ls\`, and \`skill\`; they cannot mutate files, run shell commands, ask the user, manage todos, or spawn subagents.
-File and shell tools have **no** runtime confirmation gate.
+File and shell tools have **no** runtime confirmation gate within the workspace.
 `;
 
 /**
@@ -35,7 +37,8 @@ export function preprocessSystemPrompt(raw: string, workspacePath: string): stri
   }
 
   const workspaceNote =
-    `\nTool workspace root: \`${workspacePath}\`. Relative paths (and absolutes under this directory) are sandboxed. ` +
+    `\nTool workspace root: \`${workspacePath}\`. This is your home — read, write, and create freely here. ` +
+    `Relative paths (and absolutes under this directory) are workspace-scoped. ` +
     `For host paths outside it (e.g. \`~/.codex/config.toml\`), use \`read\`, \`write\`, \`edit\`, \`ls\`, \`grep\`, or \`find\` with an absolute or \`~/\` path (Telegram approval required). ` +
     "`bash` runs with this directory as cwd.\n";
 

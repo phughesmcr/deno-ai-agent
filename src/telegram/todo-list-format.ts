@@ -1,6 +1,5 @@
+import { splitForTelegram, TELEGRAM_MAX_LENGTH } from "./limits.ts";
 import { escapeMarkdownV2 } from "./markdown.ts";
-
-const TELEGRAM_MAX_LENGTH = 4096;
 
 /** Todo row for Telegram list formatting. */
 export type TodoListEntry = {
@@ -46,5 +45,5 @@ export function formatTodoListMarkdown(todos: TodoListEntry[]): string {
 
 function truncateTodoText(text: string): string {
   if (text.length <= TELEGRAM_MAX_LENGTH) return text;
-  return `${text.slice(0, TELEGRAM_MAX_LENGTH - 3)}...`;
+  return splitForTelegram(text)[0] ?? text.slice(0, TELEGRAM_MAX_LENGTH - 3) + "...";
 }
