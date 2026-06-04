@@ -5,7 +5,7 @@ import type { AskUserQuestionPort, SessionManager, TodoTelegramMeta } from "../a
 import type { PermissionCallbackDispatch } from "../permission-broker/mod.ts";
 import { logDebug } from "../shared/mod.ts";
 import { installConcurrentUpdates } from "./bot-runner.ts";
-import { SESSION_HELP, TelegramCommandHandler } from "./commands.ts";
+import { TelegramCommandHandler } from "./commands.ts";
 import { showTodosForSession } from "./grammy-todo-display-adapter.ts";
 import { isPermissionCallback } from "./permission-callback.ts";
 import { replyError } from "./telegram-reply.ts";
@@ -83,6 +83,7 @@ const PENDING_INTERACTION_HINT = "Please resolve the pending question or approva
  */
 export function createTelegramManager({
   session,
+  onAdminStart,
   userQuestions,
   permissionPrompts,
   approvals,
@@ -91,6 +92,7 @@ export function createTelegramManager({
   updateTelegramMeta,
 }: {
   session: SessionManager;
+  onAdminStart: (ctx: TelegramContext) => Promise<void>;
   userQuestions?: AskUserQuestionPort;
   permissionPrompts?: TelegramPermissionPromptPort;
   approvals?: TelegramApprovalPort;
@@ -186,7 +188,7 @@ export function createTelegramManager({
     if (ctx.config.isAdmin) {
       if (blockIfInteractionPending(ctx)) return;
       await ctx.reply(commands.newSession());
-      await ctx.reply(`Hello, admin!\n\n${SESSION_HELP}`);
+      await onAdminStart(ctx);
     } else {
       await ctx.reply("Sorry, you are not authorized to use this bot.");
     }

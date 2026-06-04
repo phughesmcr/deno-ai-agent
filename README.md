@@ -152,6 +152,7 @@ The `subagent` tool tracks subagents per current session with in-memory Deno KV.
 
 | Command           | Action                                                                                    |
 | ----------------- | ----------------------------------------------------------------------------------------- |
+| `/start`          | Reset session; if `BOOTSTRAP.md` exists in the workspace, run an initial onboarding turn (no session help on that path) |
 | `/new`            | Fresh in-memory session (new id; does not save the previous one)                          |
 | `/save`           | Write current chat to `{WORKSPACE_PATH}/sessions/{id}.jsonl`                              |
 | `/load <id\|name>` | Restore a saved session (`/resume` is an alias; use `/rename` to set a name)              |

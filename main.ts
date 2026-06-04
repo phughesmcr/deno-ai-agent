@@ -8,6 +8,7 @@ import {
   createWorkspace,
   getModelTools,
   normalizeUserTurnInput,
+  readBootstrapIfPresent,
   recordActDuration,
   runTurn,
   SubagentManager,
@@ -21,6 +22,7 @@ import {
   waitForPermissionControlClient,
 } from "./src/permission-broker/mod.ts";
 import { ApprovalDeniedError, logDebug, traceSpan } from "./src/shared/mod.ts";
+import { SESSION_HELP } from "./src/telegram/commands.ts";
 import {
   ActiveTurnRegistry,
   botCommandName,
@@ -161,18 +163,6 @@ async function main(): Promise<void> {
 
   const turnAbort = { abortActiveTurn };
 
-  const telegram = createTelegramManager({
-    session: agent.session,
-    userQuestions,
-    permissionPrompts,
-    approvals,
-    turnAbort,
-    todosDir: workspace.todosDir,
-    updateTelegramMeta: bindUpdateTelegramMeta,
-  });
-
-  let telegramRunner: ReturnType<typeof startTelegramBot> | undefined;
-
   async function executeTelegramTurn(
     ctx: TelegramContext,
     input: UserTurnInput,
@@ -261,6 +251,32 @@ async function main(): Promise<void> {
     }
     return actMs;
   }
+
+  const telegram = createTelegramManager({
+    session: agent.session,
+    onAdminStart: async (ctx) => {
+      const bootstrap = await readBootstrapIfPresent(workspace.path);
+      if (bootstrap && ctx.message) {
+        logDebug("bootstrap.start", { sessionId: agent.session.id, length: bootstrap.length });
+        await executeTelegramTurn(
+          ctx,
+          { text: bootstrap },
+          ctx.message.message_id,
+          ctx.update.update_id,
+        );
+        return;
+      }
+      await ctx.reply(`Hello, admin!\n\n${SESSION_HELP}`);
+    },
+    userQuestions,
+    permissionPrompts,
+    approvals,
+    turnAbort,
+    todosDir: workspace.todosDir,
+    updateTelegramMeta: bindUpdateTelegramMeta,
+  });
+
+  let telegramRunner: ReturnType<typeof startTelegramBot> | undefined;
 
   const mediaGroupBuffer = createMediaGroupBuffer(async (payload) => {
     let outcome: "error" | "ok" = "ok";

@@ -108,3 +108,15 @@ export async function createWorkspace(rootDir: URL): Promise<Workspace> {
 async function readSystemPrompt(path: string): Promise<string> {
   return await Deno.readTextFile(path);
 }
+
+/** Reads `BOOTSTRAP.md` when present; returns null if missing or whitespace-only. */
+export async function readBootstrapIfPresent(workspacePath: string): Promise<string | null> {
+  try {
+    const text = await Deno.readTextFile(`${workspacePath}/BOOTSTRAP.md`);
+    const trimmed = text.trim();
+    return trimmed.length > 0 ? text : null;
+  } catch (error) {
+    if (error instanceof Deno.errors.NotFound) return null;
+    throw error;
+  }
+}
