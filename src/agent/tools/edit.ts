@@ -2,8 +2,7 @@ import type { Tool } from "@lmstudio/sdk";
 import { z } from "zod/v3";
 
 import type { ApprovalRequest } from "../../shared/approval.ts";
-import { requestForHostAwareOperation } from "./approval-support.ts";
-import { displayPath, grantBrokerHostReadWrite, resolveHostAwarePath, type ToolContext } from "./context.ts";
+import type { ToolContext } from "./context.ts";
 import { type AgentToolDefinition, type AgentToolDeps, toolFromDefinition } from "./definitions.ts";
 import {
   applyEditsToNormalizedContent,
@@ -13,7 +12,6 @@ import {
   restoreLineEndings,
   stripBom,
 } from "./edit-diff.ts";
-import { withFileMutationQueue } from "./file-mutation-queue.ts";
 
 const editEntrySchema = z.object({
   oldText: z.string().describe("Exact text to replace (unique in file, non-overlapping with other edits)"),
@@ -40,30 +38,37 @@ export const editToolDefinition: AgentToolDefinition<typeof editParameters> = {
   parameters: editParameters,
   authorize: async ({ path: userPath, edits }, deps): Promise<ApprovalRequest> => {
     assertEdits(edits);
-    const { absolutePath, outsideWorkspace } = await resolveHostAwarePath(deps.workspace, userPath);
-    return requestForHostAwareOperation(deps.workspace, {
+    const op = await deps.workspace.fs.operation({
       operation: "edit",
-      absolutePath,
-      outsideWorkspace,
-      display: displayPath(deps.workspace, absolutePath),
+      path: userPath,
+      access: "readWrite",
+      require: "existingFile",
       workspaceRisk: "medium",
       summary: `replace ${edits.length} block(s)`,
+      mutationQueue: true,
     });
+    return op.approvalRequest();
   },
   run: async ({ path: userPath, edits }, deps): Promise<string> => {
     const ctx = deps.workspace;
     assertEdits(edits);
-    const { absolutePath, outsideWorkspace } = await resolveHostAwarePath(ctx, userPath);
-    const display = displayPath(ctx, absolutePath);
-    if (outsideWorkspace) await grantBrokerHostReadWrite(absolutePath, ctx.signal);
+    const op = await ctx.fs.operation({
+      operation: "edit",
+      path: userPath,
+      access: "readWrite",
+      require: "existingFile",
+      workspaceRisk: "medium",
+      summary: `replace ${edits.length} block(s)`,
+      mutationQueue: true,
+    });
 
-    return await withFileMutationQueue(absolutePath, async () => {
+    return await op.withAccess(async ({ absolutePath, displayPath }) => {
       let rawContent: string;
       try {
         rawContent = await Deno.readTextFile(absolutePath);
       } catch (error) {
         if (error instanceof Deno.errors.NotFound) {
-          throw new Error(`Could not edit file: ${display}. Path not found.`);
+          throw new Error(`Could not edit file: ${displayPath}. Path not found.`);
         }
         throw error;
       }
@@ -71,10 +76,10 @@ export const editToolDefinition: AgentToolDefinition<typeof editParameters> = {
       const { bom, text: content } = stripBom(rawContent);
       const originalEnding = detectLineEnding(content);
       const normalizedContent = normalizeToLF(content);
-      const { newContent } = applyEditsToNormalizedContent(normalizedContent, edits, display);
+      const { newContent } = applyEditsToNormalizedContent(normalizedContent, edits, displayPath);
       const finalContent = bom + restoreLineEndings(newContent, originalEnding);
       await Deno.writeTextFile(absolutePath, finalContent);
-      return `Successfully replaced ${edits.length} block(s) in ${display}.`;
+      return `Successfully replaced ${edits.length} block(s) in ${displayPath}.`;
     });
   },
 };

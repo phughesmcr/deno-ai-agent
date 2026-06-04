@@ -57,10 +57,10 @@ async function nearestExistingPath(value: string): Promise<string> {
 
 /** Canonical workspace path resolver that rejects traversal and symlink escapes. */
 export class WorkspaceSandbox {
-  readonly #root: string;
+  private readonly _root: string;
 
   private constructor(root: string) {
-    this.#root = root;
+    this._root = root;
   }
 
   /** Creates a sandbox with a canonical root. */
@@ -70,12 +70,12 @@ export class WorkspaceSandbox {
 
   /** Canonical workspace root. */
   get root(): string {
-    return this.#root;
+    return this._root;
   }
 
   /** True when `absolutePath` is the workspace root or under it. */
   containsPath(absolutePath: string): boolean {
-    return isPathInsideRoot(absolutePath, this.#root);
+    return isPathInsideRoot(absolutePath, this._root);
   }
 
   /**
@@ -99,23 +99,23 @@ export class WorkspaceSandbox {
    * inside the workspace. This prevents writes through symlinks.
    */
   async resolvePath(userPath: string): Promise<string> {
-    const base = path.isAbsolute(userPath) ? userPath : path.join(this.#root, userPath || ".");
+    const base = path.isAbsolute(userPath) ? userPath : path.join(this._root, userPath || ".");
     const resolved = path.resolve(base);
 
-    if (!isPathInsideRoot(resolved, this.#root)) {
-      throw new Error(workspaceEscapeMessage(userPath, this.#root));
+    if (!isPathInsideRoot(resolved, this._root)) {
+      throw new Error(workspaceEscapeMessage(userPath, this._root));
     }
 
     const existingPath = await nearestExistingPath(resolved);
     const canonicalExistingPath = await Deno.realPath(existingPath);
-    if (!isPathInsideRoot(canonicalExistingPath, this.#root)) {
-      throw new Error(workspaceEscapeMessage(userPath, this.#root));
+    if (!isPathInsideRoot(canonicalExistingPath, this._root)) {
+      throw new Error(workspaceEscapeMessage(userPath, this._root));
     }
 
     try {
       const canonicalTarget = await Deno.realPath(resolved);
-      if (!isPathInsideRoot(canonicalTarget, this.#root)) {
-        throw new Error(workspaceEscapeMessage(userPath, this.#root));
+      if (!isPathInsideRoot(canonicalTarget, this._root)) {
+        throw new Error(workspaceEscapeMessage(userPath, this._root));
       }
       return canonicalTarget;
     } catch (error) {
@@ -134,7 +134,7 @@ export class WorkspaceSandbox {
 
   /** Converts an absolute path to a workspace-relative display path when possible. */
   displayPath(absolutePath: string): string {
-    const rel = path.relative(this.#root, absolutePath);
+    const rel = path.relative(this._root, absolutePath);
     if (rel === "" || rel === ".") return ".";
     if (rel.startsWith("..") || path.isAbsolute(rel)) return absolutePath;
     return rel.split(path.SEPARATOR).join("/");

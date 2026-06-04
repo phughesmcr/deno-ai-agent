@@ -3,10 +3,8 @@ import * as path from "@std/path";
 import { z } from "zod/v3";
 
 import type { ApprovalRequest } from "../../shared/approval.ts";
-import { requestForHostAwareOperation } from "./approval-support.ts";
-import { displayPath, grantBrokerHostWrite, resolveHostAwarePath, type ToolContext } from "./context.ts";
+import type { ToolContext } from "./context.ts";
 import { type AgentToolDefinition, type AgentToolDeps, toolFromDefinition } from "./definitions.ts";
-import { withFileMutationQueue } from "./file-mutation-queue.ts";
 
 const writeParameters = {
   path: z.string().describe(
@@ -21,27 +19,32 @@ export const writeToolDefinition: AgentToolDefinition<typeof writeParameters> = 
     "Write content to a file. Creates the file if it doesn't exist, overwrites if it does. Automatically creates parent directories.",
   parameters: writeParameters,
   authorize: async ({ path: userPath, content }, deps): Promise<ApprovalRequest> => {
-    const { absolutePath, outsideWorkspace } = await resolveHostAwarePath(deps.workspace, userPath);
-    return requestForHostAwareOperation(deps.workspace, {
+    const op = await deps.workspace.fs.operation({
       operation: "write",
-      absolutePath,
-      outsideWorkspace,
-      display: displayPath(deps.workspace, absolutePath),
+      path: userPath,
+      access: "write",
       workspaceRisk: "medium",
       summary: `write ${content.length} bytes`,
+      mutationQueue: true,
     });
+    return op.approvalRequest();
   },
   run: async ({ path: userPath, content }, deps): Promise<string> => {
     const ctx = deps.workspace;
-    const { absolutePath, outsideWorkspace } = await resolveHostAwarePath(ctx, userPath);
-    const dir = path.dirname(absolutePath);
-    const display = displayPath(ctx, absolutePath);
-    if (outsideWorkspace) await grantBrokerHostWrite(absolutePath, ctx.signal);
+    const op = await ctx.fs.operation({
+      operation: "write",
+      path: userPath,
+      access: "write",
+      workspaceRisk: "medium",
+      summary: `write ${content.length} bytes`,
+      mutationQueue: true,
+    });
 
-    return await withFileMutationQueue(absolutePath, async () => {
+    return await op.withAccess(async ({ absolutePath, displayPath }) => {
+      const dir = path.dirname(absolutePath);
       await Deno.mkdir(dir, { recursive: true });
       await Deno.writeTextFile(absolutePath, content);
-      return `Successfully wrote ${content.length} bytes to ${display}`;
+      return `Successfully wrote ${content.length} bytes to ${displayPath}`;
     });
   },
 };

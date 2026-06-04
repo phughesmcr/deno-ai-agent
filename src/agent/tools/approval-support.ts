@@ -4,7 +4,7 @@ import {
   type ApprovalRisk,
   DEFAULT_APPROVAL_TIMEOUT_MS,
 } from "../../shared/approval.ts";
-import { displayPath, type ToolContext } from "./context.ts";
+import type { ToolContext } from "./context.ts";
 
 export function requestForOperation(
   ctx: ToolContext,
@@ -26,26 +26,6 @@ export function requestForOperation(
   };
   if (spec.summary !== undefined) request.summary = spec.summary;
   return request;
-}
-
-export function requestForHostAwareOperation(
-  ctx: ToolContext,
-  spec: {
-    operation: ApprovalOperation;
-    absolutePath: string;
-    outsideWorkspace: boolean;
-    display: string;
-    workspaceRisk?: ApprovalRisk;
-    summary?: string;
-  },
-): ApprovalRequest {
-  return requestForOperation(ctx, {
-    operation: spec.operation,
-    target: spec.outsideWorkspace ? spec.absolutePath : spec.display,
-    risk: spec.outsideWorkspace ? "high" : spec.workspaceRisk ?? "low",
-    summary: spec.summary,
-    timeoutMs: spec.outsideWorkspace ? DEFAULT_APPROVAL_TIMEOUT_MS * 2 : undefined,
-  });
 }
 
 export function parseHttpUrl(value: string): URL {
@@ -71,10 +51,10 @@ export function webFetchApprovalSummary(url: URL): string {
 export async function todoFileDisplayPath(ctx: ToolContext, todosDir: string, sessionId: string): Promise<string> {
   try {
     const canonicalTodosDir = await Deno.realPath(todosDir);
-    return ctx.sandbox.displayPath(`${canonicalTodosDir}/${sessionId}.json`);
+    return ctx.fs.displayPath(`${canonicalTodosDir}/${sessionId}.json`);
   } catch (error) {
     if (error instanceof Deno.errors.NotFound) {
-      return ctx.sandbox.displayPath(`${todosDir}/${sessionId}.json`);
+      return ctx.fs.displayPath(`${todosDir}/${sessionId}.json`);
     }
     throw error;
   }
@@ -82,13 +62,13 @@ export async function todoFileDisplayPath(ctx: ToolContext, todosDir: string, se
 
 export async function canonicalDisplayPath(ctx: ToolContext, absolutePath: string): Promise<string> {
   try {
-    return ctx.sandbox.displayPath(await Deno.realPath(absolutePath));
+    return ctx.fs.displayPath(await Deno.realPath(absolutePath));
   } catch (error) {
-    if (error instanceof Deno.errors.NotFound) return ctx.sandbox.displayPath(absolutePath);
+    if (error instanceof Deno.errors.NotFound) return ctx.fs.displayPath(absolutePath);
     throw error;
   }
 }
 
 export function displayResolvedPath(ctx: ToolContext, absolutePath: string): string {
-  return displayPath(ctx, absolutePath);
+  return ctx.fs.displayPath(absolutePath);
 }

@@ -217,7 +217,7 @@ Agent tools call `grantBroker*` before Deno checks, sending `grant` on the contr
 | [`grantBrokerRunForCommands`](grant-run.ts) | `run` | Command name + PATH-resolved executable; no-op if control client off |
 | [`grantBrokerNetUrl`](grant-net.ts) | `net` | `host:port` via [`brokerNetValueForUrl`](grant-net.ts) |
 
-Wrappers in [`src/agent/tools/context.ts`](../agent/tools/context.ts): `grantBrokerHostRead`, `grantBrokerHostWrite`, etc., for paths outside `WORKSPACE_PATH`.
+Agent file tools route host path pre-grants through [`ToolFilesystem`](../agent/tools/tool-filesystem.ts), which grants only for targets outside `WORKSPACE_PATH`.
 
 ## Telegram integration
 

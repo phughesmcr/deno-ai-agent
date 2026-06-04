@@ -24,7 +24,7 @@ import { webFetchToolDefinition } from "./web-fetch.ts";
 import { writeToolDefinition } from "./write.ts";
 import { requestForOperation } from "./approval-support.ts";
 import { createSkillManager } from "../skills/mod.ts";
-import { createToolContext, type ToolContext, workspaceOnlyToolContext } from "./context.ts";
+import { createToolContext, type ToolContext } from "./context.ts";
 
 export interface ModelToolSet {
   tools: Tool[];
@@ -191,7 +191,15 @@ export function createReadOnlySubagentToolsFromDefinitions(
   skills: AgentToolDeps["skills"]["manager"],
 ): Tool[] {
   const deps = {
-    workspace: workspaceOnlyToolContext(workspace),
+    workspace: {
+      root: workspace.root,
+      fs: workspace.fs.scoped({ allowHostPaths: false }),
+      getSessionId: workspace.getSessionId,
+      getTurnId: workspace.getTurnId,
+      get signal() {
+        return workspace.signal;
+      },
+    },
     approvalGate: createDenyApprovalGate("subagent_tools_are_not_interactive"),
     userQuestions: createUnavailableAskUserQuestionPort(),
     todos: {

@@ -77,6 +77,7 @@ Deno.test("registry authorization maps workspace and host file risks", async () 
   await withAuthDeps(async (deps) => {
     const outside = await Deno.makeTempDir({ prefix: "silas-tool-auth-host-" });
     try {
+      await Deno.writeTextFile(`${deps.workspace.root}/README.md`, "one\ntwo\nthree\nfour\nfive");
       const workspaceRead = await authorizeToolCall(deps, {
         name: "read",
         arguments: { path: "README.md", offset: 2, limit: 4 },

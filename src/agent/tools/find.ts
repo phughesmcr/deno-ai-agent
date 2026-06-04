@@ -3,10 +3,8 @@ import { walk } from "@std/fs";
 import * as path from "@std/path";
 import { z } from "zod/v3";
 
-import { grantBrokerRunForCommands } from "../../permission-broker/mod.ts";
 import type { ApprovalRequest } from "../../shared/approval.ts";
-import { requestForHostAwareOperation } from "./approval-support.ts";
-import { displayPath, grantBrokerHostRead, resolveHostAwarePath, type ToolContext } from "./context.ts";
+import type { ToolContext } from "./context.ts";
 import { type AgentToolDefinition, type AgentToolDeps, toolFromDefinition } from "./definitions.ts";
 import {
   appendSearchNotices,
@@ -113,52 +111,55 @@ export const findToolDefinition: AgentToolDefinition<typeof findParameters> = {
   parameters: findParameters,
   authorize: async ({ path: searchDir, limit }, deps): Promise<ApprovalRequest> => {
     const effectiveLimit = limit ?? DEFAULT_LIMIT;
-    const { absolutePath, outsideWorkspace } = await resolveHostAwarePath(deps.workspace, searchDir ?? ".");
-    return requestForHostAwareOperation(deps.workspace, {
+    const op = await deps.workspace.fs.operation({
       operation: "find",
-      absolutePath,
-      outsideWorkspace,
-      display: displayPath(deps.workspace, absolutePath),
+      path: searchDir ?? ".",
+      access: "read",
+      require: "existingDirectory",
+      externalCommands: ["fd"],
       summary: `find files, limit=${effectiveLimit}`,
     });
+    return op.approvalRequest();
   },
   run: async ({ pattern, path: searchDir, limit }, deps): Promise<string> => {
     const ctx = deps.workspace;
-    const { absolutePath, outsideWorkspace } = await resolveHostAwarePath(ctx, searchDir ?? ".");
-    const display = displayPath(ctx, absolutePath);
     const effectiveLimit = limit ?? DEFAULT_LIMIT;
-    ctx.signal?.throwIfAborted();
-    if (outsideWorkspace) await grantBrokerHostRead(absolutePath, ctx.signal);
-    await grantBrokerRunForCommands(["fd"], ctx.signal);
-    ctx.signal?.throwIfAborted();
+    const op = await ctx.fs.operation({
+      operation: "find",
+      path: searchDir ?? ".",
+      access: "read",
+      require: "existingDirectory",
+      externalCommands: ["fd"],
+      summary: `find files, limit=${effectiveLimit}`,
+    });
 
-    const dirStat = await Deno.stat(absolutePath);
-    if (!dirStat.isDirectory) throw new Error(`Not a directory: ${display}`);
-    const searchPath = absolutePath;
+    return await op.withAccess(async ({ absolutePath, signal }) => {
+      const searchPath = absolutePath;
 
-    let relativized: string[];
-    let usedFd = false;
+      let relativized: string[];
+      let usedFd = false;
 
-    if (await commandExists("fd", ctx.signal)) {
-      relativized = await findWithFd(searchPath, pattern, effectiveLimit, ctx.signal);
-      usedFd = true;
-    } else {
-      relativized = await walkFind(searchPath, pattern, effectiveLimit, ctx.signal);
-    }
+      if (await commandExists("fd", signal)) {
+        relativized = await findWithFd(searchPath, pattern, effectiveLimit, signal);
+        usedFd = true;
+      } else {
+        relativized = await walkFind(searchPath, pattern, effectiveLimit, signal);
+      }
 
-    if (relativized.length === 0) return "No files found matching pattern";
+      if (relativized.length === 0) return "No files found matching pattern";
 
-    const resultLimitReached = relativized.length >= effectiveLimit;
-    const rawOutput = relativized.join("\n");
-    const truncation = truncateHead(rawOutput, { maxLines: Number.MAX_SAFE_INTEGER });
-    const output = truncation.content;
-    const notices: string[] = [];
-    if (!usedFd) notices.push("search: built-in walker; install fd for faster search");
-    if (resultLimitReached) {
-      notices.push(`${effectiveLimit} results limit reached. Use limit=${effectiveLimit * 2} for more`);
-    }
-    if (truncation.truncated) notices.push(`${formatSize(DEFAULT_MAX_BYTES)} limit reached`);
-    return appendSearchNotices(output, notices);
+      const resultLimitReached = relativized.length >= effectiveLimit;
+      const rawOutput = relativized.join("\n");
+      const truncation = truncateHead(rawOutput, { maxLines: Number.MAX_SAFE_INTEGER });
+      const output = truncation.content;
+      const notices: string[] = [];
+      if (!usedFd) notices.push("search: built-in walker; install fd for faster search");
+      if (resultLimitReached) {
+        notices.push(`${effectiveLimit} results limit reached. Use limit=${effectiveLimit * 2} for more`);
+      }
+      if (truncation.truncated) notices.push(`${formatSize(DEFAULT_MAX_BYTES)} limit reached`);
+      return appendSearchNotices(output, notices);
+    });
   },
 };
 

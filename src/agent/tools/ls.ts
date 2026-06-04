@@ -3,8 +3,7 @@ import * as path from "@std/path";
 import { z } from "zod/v3";
 
 import type { ApprovalRequest } from "../../shared/approval.ts";
-import { requestForHostAwareOperation } from "./approval-support.ts";
-import { displayPath, grantBrokerHostRead, resolveHostAwarePath, type ToolContext } from "./context.ts";
+import type { ToolContext } from "./context.ts";
 import { type AgentToolDefinition, type AgentToolDeps, toolFromDefinition } from "./definitions.ts";
 import { DEFAULT_MAX_BYTES, formatSize, truncateHead } from "./truncate.ts";
 
@@ -26,59 +25,61 @@ export const lsToolDefinition: AgentToolDefinition<typeof lsParameters> = {
   parameters: lsParameters,
   authorize: async ({ path: userPath, limit }, deps): Promise<ApprovalRequest> => {
     const effectiveLimit = limit ?? DEFAULT_LIMIT;
-    const { absolutePath, outsideWorkspace } = await resolveHostAwarePath(deps.workspace, userPath ?? ".");
-    return requestForHostAwareOperation(deps.workspace, {
+    const op = await deps.workspace.fs.operation({
       operation: "list",
-      absolutePath,
-      outsideWorkspace,
-      display: displayPath(deps.workspace, absolutePath),
+      path: userPath ?? ".",
+      access: "read",
+      require: "existingDirectory",
       summary: `list directory, limit=${effectiveLimit}`,
     });
+    return op.approvalRequest();
   },
   run: async ({ path: userPath, limit }, deps): Promise<string> => {
     const ctx = deps.workspace;
-    const { absolutePath, outsideWorkspace } = await resolveHostAwarePath(ctx, userPath ?? ".");
-    const display = displayPath(ctx, absolutePath);
     const effectiveLimit = limit ?? DEFAULT_LIMIT;
-    ctx.signal?.throwIfAborted();
-    if (outsideWorkspace) await grantBrokerHostRead(absolutePath, ctx.signal);
-    ctx.signal?.throwIfAborted();
+    const op = await ctx.fs.operation({
+      operation: "list",
+      path: userPath ?? ".",
+      access: "read",
+      require: "existingDirectory",
+      summary: `list directory, limit=${effectiveLimit}`,
+    });
 
-    const dirStat = await Deno.stat(absolutePath);
-    if (!dirStat.isDirectory) throw new Error(`Not a directory: ${display}`);
-    const dirPath = absolutePath;
+    return await op.withAccess(async ({ absolutePath }) => {
+      const dirPath = absolutePath;
 
-    const entries: string[] = [];
-    for await (const entry of Deno.readDir(dirPath)) {
-      const fullPath = path.join(dirPath, entry.name);
-      let suffix = "";
-      try {
-        const stat = await Deno.stat(fullPath);
-        if (stat.isDirectory) suffix = "/";
-      } catch {
-        continue;
+      const entries: string[] = [];
+      for await (const entry of Deno.readDir(dirPath)) {
+        const fullPath = path.join(dirPath, entry.name);
+        let suffix = "";
+        try {
+          const stat = await Deno.stat(fullPath);
+          if (stat.isDirectory) suffix = "/";
+        } catch {
+          continue;
+        }
+        entries.push(entry.name + suffix);
       }
-      entries.push(entry.name + suffix);
-    }
 
-    entries.sort((a, b) => a.toLowerCase().localeCompare(b.toLowerCase()));
-    const limitedEntries = entries.slice(0, effectiveLimit);
+      entries.sort((a, b) => a.toLowerCase().localeCompare(b.toLowerCase()));
+      const limitedEntries = entries.slice(0, effectiveLimit);
 
-    if (limitedEntries.length === 0) return "(empty directory)";
+      if (limitedEntries.length === 0) return "(empty directory)";
 
-    const entryLimitReached = entries.length > effectiveLimit;
-    const rawOutput = limitedEntries.join("\n");
-    const truncation = truncateHead(rawOutput, { maxLines: Number.MAX_SAFE_INTEGER });
-    let output = truncation.content;
-    const notices: string[] = [];
-    if (entryLimitReached) {
-      notices.push(`${effectiveLimit} entries limit reached. Use limit=${effectiveLimit * 2} for more`);
-    }
-    if (truncation.truncated) {
-      notices.push(`${formatSize(DEFAULT_MAX_BYTES)} limit reached`);
-    }
-    if (notices.length > 0) output += `\n\n[${notices.join(". ")}]`;
-    return output;
+      const entryLimitReached = entries.length > effectiveLimit;
+      const rawOutput = limitedEntries.join("\n");
+      const truncation = truncateHead(rawOutput, { maxLines: Number.MAX_SAFE_INTEGER });
+      let output = truncation.content;
+      const notices: string[] = [];
+      if (entryLimitReached) {
+        notices.push(`${effectiveLimit} entries limit reached. Use limit=${effectiveLimit * 2} for more`);
+      }
+      if (truncation.truncated) {
+        notices.push(`${formatSize(DEFAULT_MAX_BYTES)} limit reached`);
+      }
+      if (notices.length > 0) output += `\n\n[${notices.join(". ")}]`;
+      return output;
+    });
   },
 };
 

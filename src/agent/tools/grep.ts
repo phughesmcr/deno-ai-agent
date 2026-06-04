@@ -3,10 +3,8 @@ import { walk } from "@std/fs";
 import * as path from "@std/path";
 import { z } from "zod/v3";
 
-import { grantBrokerRunForCommands } from "../../permission-broker/mod.ts";
 import type { ApprovalRequest } from "../../shared/approval.ts";
-import { requestForHostAwareOperation } from "./approval-support.ts";
-import { displayPath, grantBrokerHostRead, resolveHostAwarePath, type ToolContext } from "./context.ts";
+import type { ToolContext } from "./context.ts";
 import { type AgentToolDefinition, type AgentToolDeps, toolFromDefinition } from "./definitions.ts";
 import {
   appendSearchNotices,
@@ -175,85 +173,82 @@ export const grepToolDefinition: AgentToolDefinition<typeof grepParameters> = {
   authorize: async ({ path: searchDir, limit, context }, deps): Promise<ApprovalRequest> => {
     const effectiveLimit = Math.max(1, limit ?? DEFAULT_LIMIT);
     const effectiveContext = context ?? 0;
-    const { absolutePath, outsideWorkspace } = await resolveHostAwarePath(deps.workspace, searchDir ?? ".");
-    return requestForHostAwareOperation(deps.workspace, {
+    const op = await deps.workspace.fs.operation({
       operation: "grep",
-      absolutePath,
-      outsideWorkspace,
-      display: displayPath(deps.workspace, absolutePath),
+      path: searchDir ?? ".",
+      access: "read",
+      require: "existingFileOrDirectory",
+      externalCommands: ["rg"],
       summary: `search text, limit=${effectiveLimit}, context=${effectiveContext}`,
     });
+    return op.approvalRequest();
   },
   run: async ({ pattern, path: searchDir, glob, ignoreCase, literal, context, limit }, deps): Promise<string> => {
     const ctx = deps.workspace;
     const effectiveLimit = Math.max(1, limit ?? DEFAULT_LIMIT);
-    const { absolutePath, outsideWorkspace } = await resolveHostAwarePath(ctx, searchDir ?? ".");
-    const display = displayPath(ctx, absolutePath);
-    if (outsideWorkspace) await grantBrokerHostRead(absolutePath, ctx.signal);
-    await grantBrokerRunForCommands(["rg"], ctx.signal);
+    const effectiveContext = context ?? 0;
+    const op = await ctx.fs.operation({
+      operation: "grep",
+      path: searchDir ?? ".",
+      access: "read",
+      require: "existingFileOrDirectory",
+      externalCommands: ["rg"],
+      summary: `search text, limit=${effectiveLimit}, context=${effectiveContext}`,
+    });
 
-    let searchPath: string;
-    let targetIsFile = false;
-    try {
-      const stat = await Deno.stat(absolutePath);
-      if (!stat.isDirectory && !stat.isFile) {
-        throw new Error(`Not a file or directory: ${display}`);
+    return await op.withAccess(async ({ absolutePath, kind, signal }) => {
+      const searchPath = absolutePath;
+      const targetIsFile = kind === "file";
+
+      let output: string;
+      let usedRg = false;
+      let linesTruncated = false;
+      let matchLimitReached = false;
+
+      if (await commandExists("rg", signal)) {
+        const result = await grepWithRg(searchPath, pattern, {
+          glob,
+          ignoreCase,
+          literal,
+          context,
+          limit: effectiveLimit,
+          targetIsFile,
+          signal,
+        });
+        output = result.output;
+        usedRg = true;
+        linesTruncated = result.linesTruncated;
+        matchLimitReached = result.matchLimitReached;
+      } else {
+        const flags = ignoreCase ? "i" : "";
+        const regex = literal ?
+          new RegExp(pattern.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), flags) :
+          new RegExp(pattern, flags);
+        const result = await walkGrep(searchPath, regex, {
+          glob,
+          limit: effectiveLimit,
+          context,
+          targetIsFile,
+          signal,
+        });
+        output = result.output;
+        linesTruncated = result.linesTruncated;
+        matchLimitReached = result.matchLimitReached;
       }
-      searchPath = absolutePath;
-      targetIsFile = stat.isFile;
-    } catch (error) {
-      if (error instanceof Deno.errors.NotFound) throw new Error(`Path not found: ${searchDir ?? "."}`);
-      throw error;
-    }
 
-    let output: string;
-    let usedRg = false;
-    let linesTruncated = false;
-    let matchLimitReached = false;
+      if (!output) return "No matches found";
 
-    if (await commandExists("rg", ctx.signal)) {
-      const result = await grepWithRg(searchPath, pattern, {
-        glob,
-        ignoreCase,
-        literal,
-        context,
-        limit: effectiveLimit,
-        targetIsFile,
-        signal: ctx.signal,
-      });
-      output = result.output;
-      usedRg = true;
-      linesTruncated = result.linesTruncated;
-      matchLimitReached = result.matchLimitReached;
-    } else {
-      const flags = ignoreCase ? "i" : "";
-      const regex = literal ?
-        new RegExp(pattern.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), flags) :
-        new RegExp(pattern, flags);
-      const result = await walkGrep(searchPath, regex, {
-        glob,
-        limit: effectiveLimit,
-        context,
-        targetIsFile,
-        signal: ctx.signal,
-      });
-      output = result.output;
-      linesTruncated = result.linesTruncated;
-      matchLimitReached = result.matchLimitReached;
-    }
-
-    if (!output) return "No matches found";
-
-    const truncation = truncateHead(output, { maxLines: Number.MAX_SAFE_INTEGER });
-    const resultOutput = truncation.content;
-    const notices: string[] = [];
-    if (!usedRg) notices.push("search: built-in walker; install ripgrep for faster search");
-    if (matchLimitReached) {
-      notices.push(`${effectiveLimit} matches limit reached. Use limit=${effectiveLimit * 2} for more`);
-    }
-    if (truncation.truncated) notices.push(`${formatSize(DEFAULT_MAX_BYTES)} limit reached`);
-    if (linesTruncated) notices.push("some lines truncated");
-    return appendSearchNotices(resultOutput, notices);
+      const truncation = truncateHead(output, { maxLines: Number.MAX_SAFE_INTEGER });
+      const resultOutput = truncation.content;
+      const notices: string[] = [];
+      if (!usedRg) notices.push("search: built-in walker; install ripgrep for faster search");
+      if (matchLimitReached) {
+        notices.push(`${effectiveLimit} matches limit reached. Use limit=${effectiveLimit * 2} for more`);
+      }
+      if (truncation.truncated) notices.push(`${formatSize(DEFAULT_MAX_BYTES)} limit reached`);
+      if (linesTruncated) notices.push("some lines truncated");
+      return appendSearchNotices(resultOutput, notices);
+    });
   },
 };
 

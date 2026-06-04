@@ -14,8 +14,14 @@ export {
   type ToolCallGuard,
   type ToolCallGuardController,
 } from "./authorization.ts";
-export { createToolContext, isHostPath, normalizeRoot, workspaceOnlyToolContext } from "./context.ts";
+export { createToolContext, normalizeRoot } from "./context.ts";
 export type { ToolContext, ToolContextOptions } from "./context.ts";
+export type {
+  ToolFilesystem,
+  ToolFilesystemOperation,
+  ToolFilesystemOperationSpec,
+  ToolFilesystemTarget,
+} from "./tool-filesystem.ts";
 export {
   type AgentToolDefinition,
   type AgentToolDeps,
