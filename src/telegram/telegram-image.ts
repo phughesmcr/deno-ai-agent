@@ -8,6 +8,8 @@ import type { Message } from "grammy/types";
 export const DEFAULT_IMAGE_PROMPT = "Describe this image.";
 
 const MAX_IMAGE_BYTES = 10 * 1024 * 1024;
+const BASE64_CHUNK_BYTES = 48 * 1024;
+const BASE64_YIELD_EVERY_CHUNKS = 16;
 
 const SUPPORTED_IMAGE_MIMES = new Set(["image/jpeg", "image/png", "image/webp"]);
 
@@ -66,10 +68,24 @@ export function inferImageFileName(
   return "telegram.jpg";
 }
 
-function bytesToBase64(bytes: Uint8Array): string {
-  let binary = "";
-  for (const byte of bytes) binary += String.fromCharCode(byte);
-  return btoa(binary);
+function yieldToEventLoop(): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, 0));
+}
+
+async function bytesToBase64(bytes: Uint8Array): Promise<string> {
+  const chunks: string[] = [];
+  let chunkCount = 0;
+  for (let offset = 0; offset < bytes.byteLength; offset += BASE64_CHUNK_BYTES) {
+    const chunk = bytes.subarray(offset, offset + BASE64_CHUNK_BYTES);
+    chunks.push(btoa(String.fromCharCode(...chunk)));
+    chunkCount += 1;
+    if (
+      chunkCount % BASE64_YIELD_EVERY_CHUNKS === 0 && offset + BASE64_CHUNK_BYTES < bytes.byteLength
+    ) {
+      await yieldToEventLoop();
+    }
+  }
+  return chunks.join("");
 }
 
 /** Downloads a file from Telegram Bot API storage. */
@@ -101,7 +117,7 @@ export async function prepareTelegramImages(
   const handles: FileHandle[] = [];
   for (const item of items) {
     assertImageSize(item.bytes);
-    const handle = await client.files.prepareImageBase64(item.fileName, bytesToBase64(item.bytes));
+    const handle = await client.files.prepareImageBase64(item.fileName, await bytesToBase64(item.bytes));
     handles.push(handle);
   }
   return handles;
