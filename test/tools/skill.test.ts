@@ -2,7 +2,7 @@ import { assertEquals, assertStringIncludes } from "jsr:@std/assert@1";
 
 import { createSkillManager } from "../../src/agent/skills/mod.ts";
 import { createSkillTool } from "../../src/agent/tools/skill.ts";
-import { runTool, runToolImplementationThrows } from "./helpers.ts";
+import { runTool } from "./helpers.ts";
 
 async function withWorkspace(fn: (dir: string) => Promise<void>): Promise<void> {
   const dir = await Deno.makeTempDir({ prefix: "deno-ai-agent-skill-tool-" });
@@ -88,10 +88,10 @@ Deno.test("skill tool reports available names for unknown skills", async () => {
   await withWorkspace(async (root) => {
     await writeSkill(root, "docs", "---\nname: docs\ndescription: Build docs\n---\nBody");
     const manager = await createSkillManager({ root });
-    const error = await runToolImplementationThrows(createSkillTool(manager), { skill: "missing" });
+    const result = await runTool(createSkillTool(manager), { skill: "missing" });
 
-    assertStringIncludes(error.message, "Unknown skill: missing");
-    assertStringIncludes(error.message, "Available skills: docs");
+    assertStringIncludes(result, "Unknown skill: missing");
+    assertStringIncludes(result, "Available skills: docs");
   });
 });
 
@@ -99,9 +99,9 @@ Deno.test("skill tool has stable empty-catalog behavior", async () => {
   await withWorkspace(async (root) => {
     const manager = await createSkillManager({ root });
     const skillTool = createSkillTool(manager) as { description: string };
-    const error = await runToolImplementationThrows(skillTool, { skill: "anything" });
+    const result = await runTool(skillTool, { skill: "anything" });
 
     assertStringIncludes(skillTool.description, "(none)");
-    assertStringIncludes(error.message, "No skills are available.");
+    assertStringIncludes(result, "No skills are available.");
   });
 });

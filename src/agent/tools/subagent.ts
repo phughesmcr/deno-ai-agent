@@ -1,7 +1,8 @@
-import { type Tool, tool } from "@lmstudio/sdk";
+import type { Tool } from "@lmstudio/sdk";
 import { z } from "zod/v3";
 
 import type { SubagentPort, SubagentRecord } from "../subagents.ts";
+import { type AgentToolDefinition, type AgentToolDeps, toolFromDefinition } from "./definitions.ts";
 
 /** Supported model-facing actions for the `subagent` tool. */
 export type SubagentAction = "spawn" | "status" | "list" | "result" | "cancel";
@@ -27,13 +28,6 @@ export type SubagentToolResponse =
   | { ok: true; action: "list"; subagents: SubagentRecord[] }
   | { ok: false; action: SubagentAction | string; error: string };
 
-type SubagentToolInput = {
-  action?: string;
-  task?: string;
-  title?: string;
-  ["subagent_id"]?: string;
-};
-
 function isSubagentAction(value: string): value is SubagentAction {
   return SUBAGENT_ACTIONS.includes(value as SubagentAction);
 }
@@ -56,6 +50,15 @@ function normalizeString(value: unknown): string | undefined {
   return trimmed ? trimmed : undefined;
 }
 
+const subagentParameters = {
+  action: z
+    .string()
+    .describe("Action to perform: spawn, status, list, result, or cancel."),
+  task: z.string().optional().describe("Task for action=spawn."),
+  title: z.string().optional().describe("Optional short display title for action=spawn."),
+  subagent_id: z.string().optional().describe("Subagent id for status, result, or cancel."),
+} as const;
+
 async function getRecord(
   action: "status" | "result" | "cancel",
   subagentId: string,
@@ -68,46 +71,44 @@ async function getRecord(
   return subagent(action, record);
 }
 
+export const subagentToolDefinition: AgentToolDefinition<typeof subagentParameters> = {
+  name: "subagent",
+  description:
+    "Spawn and track asynchronous read-only subagent jobs. Subagents can inspect files with read, grep, find, ls, and skill, but cannot mutate files, run shell commands, ask the user, manage todos, or spawn subagents.",
+  parameters: subagentParameters,
+  authorize: (): null => {
+    return null;
+  },
+  run: async (params, deps): Promise<string> => {
+    const rawAction = typeof params.action === "string" ? params.action : "";
+    const action = isSubagentAction(rawAction) ? rawAction : undefined;
+    if (!action) {
+      return error(rawAction || "unknown", `Parameter "action" must be one of: ${SUBAGENT_ACTIONS.join(", ")}.`);
+    }
+
+    try {
+      if (action === "spawn") {
+        const task = normalizeString(params.task);
+        if (!task) return error(action, 'Parameter "task" is required for spawn.');
+        const record = await deps.subagents.spawn({ task, title: normalizeString(params.title) });
+        return subagent(action, record);
+      }
+
+      if (action === "list") {
+        return json({ ok: true, action, subagents: await deps.subagents.list() });
+      }
+
+      const subagentId = normalizeString(params["subagent_id"]);
+      if (!subagentId) return error(action, 'Parameter "subagent_id" is required for this action.');
+      return await getRecord(action, subagentId, deps.subagents);
+    } catch (caught) {
+      const message = caught instanceof Error ? caught.message : String(caught);
+      return error(action, message);
+    }
+  },
+};
+
 /** LM Studio tool that spawns and tracks read-only subagent jobs. */
 export function createSubagentTool(port: SubagentPort): Tool {
-  return tool({
-    name: "subagent",
-    description:
-      "Spawn and track asynchronous read-only subagent jobs. Subagents can inspect files with read, grep, find, ls, and skill, but cannot mutate files, run shell commands, ask the user, manage todos, or spawn subagents.",
-    parameters: {
-      action: z
-        .string()
-        .describe("Action to perform: spawn, status, list, result, or cancel."),
-      task: z.string().optional().describe("Task for action=spawn."),
-      title: z.string().optional().describe("Optional short display title for action=spawn."),
-      subagent_id: z.string().optional().describe("Subagent id for status, result, or cancel."),
-    },
-    implementation: async (params: SubagentToolInput) => {
-      const rawAction = typeof params.action === "string" ? params.action : "";
-      const action = isSubagentAction(rawAction) ? rawAction : undefined;
-      if (!action) {
-        return error(rawAction || "unknown", `Parameter "action" must be one of: ${SUBAGENT_ACTIONS.join(", ")}.`);
-      }
-
-      try {
-        if (action === "spawn") {
-          const task = normalizeString(params.task);
-          if (!task) return error(action, 'Parameter "task" is required for spawn.');
-          const record = await port.spawn({ task, title: normalizeString(params.title) });
-          return subagent(action, record);
-        }
-
-        if (action === "list") {
-          return json({ ok: true, action, subagents: await port.list() });
-        }
-
-        const subagentId = normalizeString(params["subagent_id"]);
-        if (!subagentId) return error(action, 'Parameter "subagent_id" is required for this action.');
-        return await getRecord(action, subagentId, port);
-      } catch (caught) {
-        const message = caught instanceof Error ? caught.message : String(caught);
-        return error(action, message);
-      }
-    },
-  });
+  return toolFromDefinition(subagentToolDefinition, { subagents: port } as AgentToolDeps);
 }

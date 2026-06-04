@@ -6,7 +6,7 @@ import {
   validateAskUserQuestionParams,
 } from "../../src/agent/tools/ask-user-question.ts";
 import type { UserInteractionPort } from "../../src/agent/tools/user-question-port.ts";
-import { runTool, runToolImplementationThrows } from "./helpers.ts";
+import { runTool } from "./helpers.ts";
 
 function mockPort(answers: Record<string, string>): UserInteractionPort {
   return {
@@ -115,9 +115,9 @@ Deno.test("ask_user_question tool returns decline message", async () => {
   assertEquals(result, "User declined to answer the questions.");
 });
 
-Deno.test("ask_user_question tool throws on invalid params", async () => {
+Deno.test("ask_user_question tool returns recoverable error text on invalid params", async () => {
   const tool = createAskUserQuestionTool(mockPort({}));
-  const error = await runToolImplementationThrows(tool, {
+  const result = await runTool(tool, {
     questions: [{
       question: "",
       header: "H",
@@ -127,5 +127,5 @@ Deno.test("ask_user_question tool throws on invalid params", async () => {
       ],
     }],
   });
-  assertEquals(error.message, 'Question 1: "question" must be a non-empty string.');
+  assertEquals(result, 'Error: Question 1: "question" must be a non-empty string.');
 });

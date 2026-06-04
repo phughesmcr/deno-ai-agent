@@ -13,6 +13,7 @@ type ChatMessageWithRaw = ChatMessage & {
 
 interface FakeActOptions {
   guardToolCall?: unknown;
+  contextOverflowPolicy?: "truncateMiddle" | "stopAtLimit" | "rollingWindow";
   onMessage?: (message: ChatMessage) => void;
   onFirstToken?: (roundIndex: number) => void;
   onRoundStart?: (roundIndex: number) => void;
@@ -84,6 +85,26 @@ function toolMessage(text: string): ChatMessage {
     {
       role: "tool",
       content: [{ type: "toolCallResult", content: text, toolCallId: "tool-call-1" }],
+    } satisfies ChatMessageData,
+  );
+}
+
+function assistantToolRequestMessage(text: string): ChatMessage {
+  return ChatMessage.from(
+    {
+      role: "assistant",
+      content: [
+        { type: "text", text },
+        {
+          type: "toolCallRequest",
+          toolCallRequest: {
+            id: "tool-call-1",
+            type: "function",
+            name: "read",
+            arguments: { path: "README.md" },
+          },
+        },
+      ],
     } satisfies ChatMessageData,
   );
 }
@@ -235,6 +256,14 @@ Deno.test("SessionManager forwards guardToolCall to model.act", async () => {
   });
 });
 
+Deno.test("SessionManager uses rolling overflow policy for tool-heavy turns", async () => {
+  await withSession(async ({ session, model }) => {
+    await session.runTurn("hello", { tools: [], signal: new AbortController().signal });
+
+    assertEquals(model.actCalls[0]?.options.contextOverflowPolicy, "rollingWindow");
+  });
+});
+
 Deno.test("SessionManager keeps tool results in context without returning them as Telegram replies", async () => {
   await withSession(async ({ session, model }) => {
     model.messages = [
@@ -262,6 +291,36 @@ Deno.test("SessionManager keeps tool results in context without returning them a
       ["user", "after tool"],
     ]);
     assertStringIncludes(call.chat.getMessagesArray()[2]?.toString() ?? "", '<skill_content name="docs">');
+  });
+});
+
+Deno.test("SessionManager does not return assistant tool request text as a Telegram reply", async () => {
+  await withSession(async ({ session, model }) => {
+    model.messages = [
+      assistantToolRequestMessage("I will call a tool first."),
+      toolMessage("tool result"),
+      ChatMessage.create("assistant", "final answer"),
+    ];
+
+    const result = await session.runTurn("use a tool", {
+      tools: [],
+      signal: new AbortController().signal,
+    });
+
+    assertEquals(result.replyTexts, ["final answer"]);
+
+    await session.runTurn("follow up", { tools: [], signal: new AbortController().signal });
+    const call = model.actCalls[1];
+    assert(call);
+    assertEquals(snapshot(call.chat), [
+      ["system", "current system prompt"],
+      ["user", "use a tool"],
+      ["assistant", "I will call a tool first."],
+      ["tool", ""],
+      ["assistant", "final answer"],
+      ["user", "follow up"],
+    ]);
+    assertStringIncludes(call.chat.getMessagesArray()[2]?.toString() ?? "", 'read({"path":"README.md"})');
   });
 });
 
@@ -491,6 +550,30 @@ Deno.test("SessionManager appends compaction checkpoints and preserves the curre
       reserveTokens: 2,
       keepRecentTokens: 5,
       compactor: () => Promise.resolve("summary"),
+    },
+  );
+});
+
+Deno.test("SessionManager derives compaction budgets from context length by default", async () => {
+  const summarized: ChatMessageData[][] = [];
+  await withSession(
+    async ({ session }) => {
+      const first = await session.runTurn("one", { tools: [], signal: new AbortController().signal });
+      const second = await session.runTurn("two", { tools: [], signal: new AbortController().signal });
+      const third = await session.runTurn("three", { tools: [], signal: new AbortController().signal });
+
+      assertEquals(first.compacted, false);
+      assertEquals(second.compacted, false);
+      assertEquals(third.compacted, true);
+      assertEquals(third.totalTokens, 16);
+      assertEquals(summarized[0]?.map((message) => message.role), ["user", "assistant", "user"]);
+    },
+    {
+      maxContextLength: 24,
+      compactor: (input) => {
+        summarized.push(input.messages);
+        return Promise.resolve("summary");
+      },
     },
   );
 });

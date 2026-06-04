@@ -5,12 +5,7 @@ import { getActDraftModel } from "../shared/draft-model.ts";
 import { type ActReasoningParsing, actReasoningParsingOption, persistedModelText } from "../shared/reasoning.ts";
 import type { SkillManager } from "./skills/mod.ts";
 import type { ToolContext } from "./tools/context.ts";
-import { createFindTool } from "./tools/find.ts";
-import { createGrepTool } from "./tools/grep.ts";
-import { createLsTool } from "./tools/ls.ts";
-import { createReadTool } from "./tools/read.ts";
-import { createSkillTool } from "./tools/skill.ts";
-import { withRecoverableToolErrors } from "./tools/tool-errors.ts";
+import { createReadOnlySubagentToolsFromDefinitions } from "./tools/registry.ts";
 
 /** Subagent lifecycle state stored in KV. */
 export type SubagentStatus = "queued" | "running" | "completed" | "failed" | "cancelled";
@@ -161,13 +156,7 @@ export function createUnavailableSubagentPort(): SubagentPort {
 
 /** Builds the read-only tool set available inside subagent jobs. */
 export function createReadOnlySubagentTools(workspace: ToolContext, skills: SkillManager): Tool[] {
-  return [
-    createReadTool(workspace),
-    createGrepTool(workspace),
-    createFindTool(workspace),
-    createLsTool(workspace),
-    createSkillTool(skills),
-  ].map(withRecoverableToolErrors);
+  return createReadOnlySubagentToolsFromDefinitions(workspace, skills);
 }
 
 /**

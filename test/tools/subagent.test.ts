@@ -332,5 +332,15 @@ Deno.test("createReadOnlySubagentTools exposes only read-only child tools", asyn
     assertEquals(names.includes("todo_write"), false);
     assertEquals(names.includes("ask_user_question"), false);
     assertEquals(names.includes("subagent"), false);
+
+    const outside = await Deno.makeTempDir({ prefix: "silas-subagent-host-" });
+    try {
+      await Deno.writeTextFile(`${outside}/secret.txt`, "secret");
+      const read = tools.find((item) => item.name === "read");
+      const result = await runTool(read, { path: `${outside}/secret.txt` });
+      assertStringIncludes(result, "Error: Host paths are not available in this tool context.");
+    } finally {
+      await Deno.remove(outside, { recursive: true });
+    }
   });
 });

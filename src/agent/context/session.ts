@@ -68,6 +68,10 @@ function toolRequests(message: ChatMessageData): ToolCallRequest[] {
   return message.content.flatMap((part) => part.type === "toolCallRequest" ? [part.toolCallRequest] : []);
 }
 
+function isUserVisibleAssistantReply(message: ChatMessage): boolean {
+  return message.getRole() === "assistant" && toolRequests(messageToData(message)).length === 0;
+}
+
 function collectFileDetails(entries: SessionEntry[]): SessionFileDetails {
   const details = emptyDetails();
   for (const entry of entries) {
@@ -197,6 +201,14 @@ interface RunTurnOptions {
   observer?: ModelActObserver;
 }
 
+const DEFAULT_RESERVE_TOKEN_RATIO = 0.25;
+const DEFAULT_KEEP_RECENT_TOKEN_RATIO = 0.5;
+
+function percentageTokens(maxContextLength: number, ratio: number): number {
+  if (!Number.isFinite(maxContextLength) || maxContextLength <= 0) return 1;
+  return Math.max(1, Math.floor(maxContextLength * ratio));
+}
+
 /**
  * User-facing session: chat state, persistence, compaction, and model turns.
  * @internal
@@ -226,8 +238,9 @@ export class SessionManager {
     this.#model = spec.model;
     this.#systemPrompt = spec.systemPrompt;
     this.#maxContextLength = spec.maxContextLength;
-    this.#reserveTokens = spec.reserveTokens ?? 16_384;
-    this.#keepRecentTokens = spec.keepRecentTokens ?? 20_000;
+    this.#reserveTokens = spec.reserveTokens ?? percentageTokens(spec.maxContextLength, DEFAULT_RESERVE_TOKEN_RATIO);
+    this.#keepRecentTokens = spec.keepRecentTokens ??
+      percentageTokens(spec.maxContextLength, DEFAULT_KEEP_RECENT_TOKEN_RATIO);
     this.#compactor = spec.compactor;
     this.#chat = this.#freshChat();
     this.#id = crypto.randomUUID();
@@ -368,7 +381,7 @@ export class SessionManager {
       ...actReasoningParsingOption(),
       allowParallelToolExecution: true,
       guardToolCall,
-      contextOverflowPolicy: "stopAtLimit",
+      contextOverflowPolicy: "rollingWindow",
       maxTokens: 4096,
       maxPredictionRounds: getActMaxPredictionRounds(),
       onMessage: (msg) => {
@@ -377,7 +390,7 @@ export class SessionManager {
         const { message, persisted } = this.#appendAssistant(toPersist);
         persistWrites.push(persisted);
         turnTokenCounts.push(this.#model.countTokens(message.toString()));
-        if (msg.getRole() === "assistant") {
+        if (isUserVisibleAssistantReply(msg)) {
           const text = msg.getText();
           if (text) replyTexts.push(text);
         }

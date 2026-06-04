@@ -1,8 +1,11 @@
-import { type Tool, tool } from "@lmstudio/sdk";
+import type { Tool } from "@lmstudio/sdk";
 import * as path from "@std/path";
 import { z } from "zod/v3";
 
+import type { ApprovalRequest } from "../../shared/approval.ts";
 import type { Skill, SkillDiagnostic, SkillManager, SkillSummary } from "../skills/mod.ts";
+import { canonicalDisplayPath, requestForOperation } from "./approval-support.ts";
+import { type AgentToolDefinition, type AgentToolDeps, toolFromDefinition } from "./definitions.ts";
 
 const RESOURCE_DIRS = ["assets", "references", "scripts"] as const;
 const SKILL_FILE_NAME = "SKILL.md";
@@ -120,18 +123,37 @@ function missingSkillMessage(manager: SkillManager, name: string): string {
   return `Unknown skill: ${name}\nAvailable skills: ${names.join(", ")}${diagnosticText}`;
 }
 
+const skillParameters = {
+  skill: z.string().describe("Name of the AgentSkill to activate"),
+} as const;
+
+export const skillToolDefinition: AgentToolDefinition<typeof skillParameters> = {
+  name: "skill",
+  description: (deps): string => createDescription(deps.skills.manager),
+  parameters: skillParameters,
+  authorize: async ({ skill: name }, deps): Promise<ApprovalRequest> => {
+    const skill = deps.skills.manager.get(name);
+    if (!skill) throw new Error(`Unknown skill: ${name}`);
+    return requestForOperation(deps.workspace, {
+      operation: "skill",
+      target: await canonicalDisplayPath(deps.workspace, skill.filePath),
+      risk: "low",
+      summary: `activate skill ${skill.name}`,
+    });
+  },
+  run: ({ skill: name }, deps): Promise<string> => {
+    const skill = deps.skills.manager.get(name);
+    if (!skill) throw new Error(missingSkillMessage(deps.skills.manager, name));
+    return formatSkillActivation(skill);
+  },
+};
+
 /** LM Studio tool that activates a discovered AgentSkill. */
 export function createSkillTool(manager: SkillManager): Tool {
-  return tool({
-    name: "skill",
-    description: createDescription(manager),
-    parameters: {
-      skill: z.string().describe("Name of the AgentSkill to activate"),
+  return toolFromDefinition(skillToolDefinition, {
+    skills: {
+      manager,
+      getSessionId: () => "unknown-session",
     },
-    implementation: ({ skill: name }) => {
-      const skill = manager.get(name);
-      if (!skill) throw new Error(missingSkillMessage(manager, name));
-      return formatSkillActivation(skill);
-    },
-  });
+  } as AgentToolDeps);
 }

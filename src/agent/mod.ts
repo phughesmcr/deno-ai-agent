@@ -43,6 +43,7 @@ export {
   type SubagentStatus,
 } from "./subagents.ts";
 export {
+  type AgentToolDeps,
   allToolNames,
   type AskUserQuestionParams,
   type AskUserQuestionPort,
@@ -82,7 +83,6 @@ export {
   type TodoUpdatePayload,
   type TodoWriteDeps,
   type TodoWriteParams,
-  type ToolAuthorizationDeps,
   type ToolCallGuard,
   type ToolCallGuardController,
   type ToolContext,

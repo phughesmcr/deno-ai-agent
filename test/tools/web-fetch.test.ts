@@ -1,4 +1,4 @@
-import { assertEquals, assertRejects, assertStringIncludes } from "jsr:@std/assert@1";
+import { assertEquals, assertStringIncludes } from "jsr:@std/assert@1";
 
 import { createToolContext } from "../../src/agent/tools/context.ts";
 import { createWebFetchTool } from "../../src/agent/tools/web-fetch.ts";
@@ -25,17 +25,9 @@ Deno.test("web-fetch rejects malformed, non-http, and credentialed URLs", async 
       fetcher: () => Promise.resolve(new Response("unexpected")),
     });
 
-    await assertRejects(() => runToolImplementation(tool, { url: "not a url" }), Error, "Invalid URL");
-    await assertRejects(
-      () => runToolImplementation(tool, { url: "file:///tmp/a.txt" }),
-      Error,
-      "http: and https:",
-    );
-    await assertRejects(
-      () => runToolImplementation(tool, { url: "https://user:pass@example.com/" }),
-      Error,
-      "credentials",
-    );
+    assertStringIncludes(await runToolImplementation(tool, { url: "not a url" }), "Invalid URL");
+    assertStringIncludes(await runToolImplementation(tool, { url: "file:///tmp/a.txt" }), "http: and https:");
+    assertStringIncludes(await runToolImplementation(tool, { url: "https://user:pass@example.com/" }), "credentials");
   } finally {
     await cleanup();
   }
@@ -201,11 +193,8 @@ Deno.test("web-fetch reports redirect limit failures clearly", async () => {
         ),
     });
 
-    await assertRejects(
-      () => runToolImplementation(tool, { url: "https://example.com/start" }),
-      Error,
-      "Redirect limit exceeded after 5 redirects",
-    );
+    const result = await runToolImplementation(tool, { url: "https://example.com/start" });
+    assertStringIncludes(result, "Redirect limit exceeded after 5 redirects");
   } finally {
     await cleanup();
   }
@@ -227,11 +216,8 @@ Deno.test("web-fetch aborts on timeout", async () => {
         }),
     });
 
-    await assertRejects(
-      () => runToolImplementation(tool, { url: "https://example.com/slow", timeout: 0.01 }),
-      Error,
-      "timed out after 0.01 seconds",
-    );
+    const result = await runToolImplementation(tool, { url: "https://example.com/slow", timeout: 0.01 });
+    assertStringIncludes(result, "timed out after 0.01 seconds");
   } finally {
     await Deno.remove(dir, { recursive: true });
   }

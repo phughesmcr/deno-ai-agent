@@ -2,7 +2,7 @@ import { assertStringIncludes } from "jsr:@std/assert@1";
 
 import { createToolContext } from "../../src/agent/tools/context.ts";
 import { createBashTool } from "../../src/agent/tools/bash.ts";
-import { createTestWorkspace, runToolImplementation, runToolImplementationThrows } from "./helpers.ts";
+import { createTestWorkspace, runToolImplementation } from "./helpers.ts";
 
 Deno.test("bash runs echo in workspace", async () => {
   const { ctx, cleanup } = await createTestWorkspace();
@@ -15,12 +15,12 @@ Deno.test("bash runs echo in workspace", async () => {
   }
 });
 
-Deno.test("bash throws on non-zero exit", async () => {
+Deno.test("bash returns recoverable error text on non-zero exit", async () => {
   const { ctx, cleanup } = await createTestWorkspace();
   try {
     const tool = createBashTool(ctx);
-    const err = await runToolImplementationThrows(tool, { command: "exit 1" });
-    assertStringIncludes(err.message, "exited with code 1");
+    const result = await runToolImplementation(tool, { command: "exit 1" });
+    assertStringIncludes(result, "exited with code 1");
   } finally {
     await cleanup();
   }
@@ -37,11 +37,11 @@ Deno.test("bash aborts when the turn signal aborts", async () => {
     });
     const tool = createBashTool(ctx);
 
-    const pending = runToolImplementationThrows(tool, { command: "sleep 10" });
+    const pending = runToolImplementation(tool, { command: "sleep 10" });
     setTimeout(() => controller.abort(), 25);
 
-    const error = await pending;
-    assertStringIncludes(error.message, "Command aborted");
+    const result = await pending;
+    assertStringIncludes(result, "Command aborted");
   } finally {
     controller.abort();
     await Deno.remove(dir, { recursive: true });

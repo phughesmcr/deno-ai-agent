@@ -1,9 +1,12 @@
-import { type Tool, tool } from "@lmstudio/sdk";
+import type { Tool } from "@lmstudio/sdk";
 import { z } from "zod/v3";
 
 import { grantBrokerNetUrl, shouldRunPermissionControlClient } from "../../permission-broker/mod.ts";
+import type { ApprovalRequest } from "../../shared/approval.ts";
 import { logDebug } from "../../shared/mod.ts";
+import { parseHttpUrl, requestForOperation, webFetchApprovalSummary } from "./approval-support.ts";
 import type { ToolContext } from "./context.ts";
+import { type AgentToolDefinition, type AgentToolDeps, toolFromDefinition } from "./definitions.ts";
 
 const DEFAULT_TIMEOUT_SECONDS = 15;
 const MAX_TIMEOUT_SECONDS = 60;
@@ -41,23 +44,6 @@ interface WebFetchResult {
 interface ReadTextResult {
   text: string;
   truncated: boolean;
-}
-
-function parseHttpUrl(value: string): URL {
-  let url: URL;
-  try {
-    url = new URL(value);
-  } catch {
-    throw new Error("Invalid URL.");
-  }
-
-  if (url.protocol !== "http:" && url.protocol !== "https:") {
-    throw new Error("web-fetch only accepts http: and https: URLs.");
-  }
-  if (url.username || url.password) {
-    throw new Error("web-fetch does not accept URLs with credentials.");
-  }
-  return url;
 }
 
 function timeoutSeconds(value: number | undefined): number {
@@ -234,23 +220,36 @@ async function fetchWithRedirects(
   throw new Error(`Redirect limit exceeded after ${MAX_REDIRECTS} redirects.`);
 }
 
-/** LM Studio tool for approved HTTP(S) GET requests that returns bounded text snapshots. */
-export function createWebFetchTool(ctx: ToolContext, options: WebFetchToolOptions = {}): Tool {
+const webFetchParameters = {
+  url: z.string().describe("HTTP or HTTPS URL to fetch. Credentials are rejected."),
+  timeout: z.number().optional().describe(
+    `Timeout in seconds. Defaults to ${DEFAULT_TIMEOUT_SECONDS}; maximum ${MAX_TIMEOUT_SECONDS}.`,
+  ),
+} as const;
+
+export function createWebFetchToolDefinition(options: WebFetchToolOptions = {}): AgentToolDefinition<
+  typeof webFetchParameters
+> {
   const fetcher = options.fetcher ?? fetch;
   const grantBrokerNet = options.grantBrokerNet ?? grantBrokerNetUrl;
   const maxBodyBytes = options.maxBodyBytes ?? MAX_BODY_BYTES;
 
-  return tool({
+  return {
     name: "web-fetch",
     description:
       "Fetch an approved HTTP/HTTPS website document with GET only. Follows up to 5 redirects manually. Returns status, URLs, content type, redirect chain, and a bounded text body for textual responses. Does not send custom headers, cookies, request bodies, or non-GET methods.",
-    parameters: {
-      url: z.string().describe("HTTP or HTTPS URL to fetch. Credentials are rejected."),
-      timeout: z.number().optional().describe(
-        `Timeout in seconds. Defaults to ${DEFAULT_TIMEOUT_SECONDS}; maximum ${MAX_TIMEOUT_SECONDS}.`,
-      ),
+    parameters: webFetchParameters,
+    authorize: ({ url: rawUrl }, deps): ApprovalRequest => {
+      const url = parseHttpUrl(rawUrl);
+      return requestForOperation(deps.workspace, {
+        operation: "network",
+        target: url.origin,
+        risk: "high",
+        summary: webFetchApprovalSummary(url),
+      });
     },
-    implementation: async ({ url: rawUrl, timeout }) => {
+    run: async ({ url: rawUrl, timeout }, deps): Promise<string> => {
+      const ctx = deps.workspace;
       const startUrl = parseHttpUrl(rawUrl);
       const seconds = timeoutSeconds(timeout);
       const timeoutController = new AbortController();
@@ -269,5 +268,12 @@ export function createWebFetchTool(ctx: ToolContext, options: WebFetchToolOption
         clearTimeout(timeoutId);
       }
     },
-  });
+  };
+}
+
+export const webFetchToolDefinition = createWebFetchToolDefinition();
+
+/** LM Studio tool for approved HTTP(S) GET requests that returns bounded text snapshots. */
+export function createWebFetchTool(ctx: ToolContext, options: WebFetchToolOptions = {}): Tool {
+  return toolFromDefinition(createWebFetchToolDefinition(options), { workspace: ctx } as AgentToolDeps);
 }

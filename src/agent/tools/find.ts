@@ -1,10 +1,13 @@
-import { type Tool, tool } from "@lmstudio/sdk";
+import type { Tool } from "@lmstudio/sdk";
 import { walk } from "@std/fs";
 import * as path from "@std/path";
 import { z } from "zod/v3";
 
 import { grantBrokerRunForCommands } from "../../permission-broker/mod.ts";
+import type { ApprovalRequest } from "../../shared/approval.ts";
+import { requestForHostAwareOperation } from "./approval-support.ts";
 import { displayPath, grantBrokerHostRead, resolveHostAwarePath, type ToolContext } from "./context.ts";
+import { type AgentToolDefinition, type AgentToolDeps, toolFromDefinition } from "./definitions.ts";
 import {
   appendSearchNotices,
   commandExists,
@@ -15,6 +18,14 @@ import {
 import { DEFAULT_MAX_BYTES, formatSize, truncateHead } from "./truncate.ts";
 
 const DEFAULT_LIMIT = 1000;
+
+const findParameters = {
+  pattern: z.string().describe("Glob pattern, e.g. '*.ts' or '**/*.json'"),
+  path: z.string().optional().describe(
+    "Directory to search: relative (workspace), or absolute / ~/... for host directories outside the workspace",
+  ),
+  limit: z.number().optional().describe(`Maximum results (default: ${DEFAULT_LIMIT})`),
+} as const;
 
 function prepareGlobPattern(pattern: string): { pattern: string; fullPath: boolean } {
   if (pattern.includes("/")) {
@@ -93,56 +104,64 @@ async function walkFind(
   return results;
 }
 
+export const findToolDefinition: AgentToolDefinition<typeof findParameters> = {
+  name: "find",
+  description:
+    `Search for files by glob pattern. Returns matching file paths relative to the search directory. Output is truncated to ${DEFAULT_LIMIT} results or ${
+      DEFAULT_MAX_BYTES / 1024
+    }KB (whichever is hit first).`,
+  parameters: findParameters,
+  authorize: async ({ path: searchDir, limit }, deps): Promise<ApprovalRequest> => {
+    const effectiveLimit = limit ?? DEFAULT_LIMIT;
+    const { absolutePath, outsideWorkspace } = await resolveHostAwarePath(deps.workspace, searchDir ?? ".");
+    return requestForHostAwareOperation(deps.workspace, {
+      operation: "find",
+      absolutePath,
+      outsideWorkspace,
+      display: displayPath(deps.workspace, absolutePath),
+      summary: `find files, limit=${effectiveLimit}`,
+    });
+  },
+  run: async ({ pattern, path: searchDir, limit }, deps): Promise<string> => {
+    const ctx = deps.workspace;
+    const { absolutePath, outsideWorkspace } = await resolveHostAwarePath(ctx, searchDir ?? ".");
+    const display = displayPath(ctx, absolutePath);
+    const effectiveLimit = limit ?? DEFAULT_LIMIT;
+    ctx.signal?.throwIfAborted();
+    if (outsideWorkspace) await grantBrokerHostRead(absolutePath, ctx.signal);
+    await grantBrokerRunForCommands(["fd"], ctx.signal);
+    ctx.signal?.throwIfAborted();
+
+    const dirStat = await Deno.stat(absolutePath);
+    if (!dirStat.isDirectory) throw new Error(`Not a directory: ${display}`);
+    const searchPath = absolutePath;
+
+    let relativized: string[];
+    let usedFd = false;
+
+    if (await commandExists("fd", ctx.signal)) {
+      relativized = await findWithFd(searchPath, pattern, effectiveLimit, ctx.signal);
+      usedFd = true;
+    } else {
+      relativized = await walkFind(searchPath, pattern, effectiveLimit, ctx.signal);
+    }
+
+    if (relativized.length === 0) return "No files found matching pattern";
+
+    const resultLimitReached = relativized.length >= effectiveLimit;
+    const rawOutput = relativized.join("\n");
+    const truncation = truncateHead(rawOutput, { maxLines: Number.MAX_SAFE_INTEGER });
+    const output = truncation.content;
+    const notices: string[] = [];
+    if (!usedFd) notices.push("search: built-in walker; install fd for faster search");
+    if (resultLimitReached) {
+      notices.push(`${effectiveLimit} results limit reached. Use limit=${effectiveLimit * 2} for more`);
+    }
+    if (truncation.truncated) notices.push(`${formatSize(DEFAULT_MAX_BYTES)} limit reached`);
+    return appendSearchNotices(output, notices);
+  },
+};
+
 export function createFindTool(ctx: ToolContext): Tool {
-  return tool({
-    name: "find",
-    description:
-      `Search for files by glob pattern. Returns matching file paths relative to the search directory. Output is truncated to ${DEFAULT_LIMIT} results or ${
-        DEFAULT_MAX_BYTES / 1024
-      }KB (whichever is hit first).`,
-    parameters: {
-      pattern: z.string().describe("Glob pattern, e.g. '*.ts' or '**/*.json'"),
-      path: z.string().optional().describe(
-        "Directory to search: relative (workspace), or absolute / ~/... for host directories outside the workspace",
-      ),
-      limit: z.number().optional().describe(`Maximum results (default: ${DEFAULT_LIMIT})`),
-    },
-    implementation: async ({ pattern, path: searchDir, limit }) => {
-      const { absolutePath, outsideWorkspace } = await resolveHostAwarePath(ctx, searchDir ?? ".");
-      const display = displayPath(ctx, absolutePath);
-      const effectiveLimit = limit ?? DEFAULT_LIMIT;
-      ctx.signal?.throwIfAborted();
-      if (outsideWorkspace) await grantBrokerHostRead(absolutePath, ctx.signal);
-      await grantBrokerRunForCommands(["fd"], ctx.signal);
-      ctx.signal?.throwIfAborted();
-
-      const dirStat = await Deno.stat(absolutePath);
-      if (!dirStat.isDirectory) throw new Error(`Not a directory: ${display}`);
-      const searchPath = absolutePath;
-
-      let relativized: string[];
-      let usedFd = false;
-
-      if (await commandExists("fd", ctx.signal)) {
-        relativized = await findWithFd(searchPath, pattern, effectiveLimit, ctx.signal);
-        usedFd = true;
-      } else {
-        relativized = await walkFind(searchPath, pattern, effectiveLimit, ctx.signal);
-      }
-
-      if (relativized.length === 0) return "No files found matching pattern";
-
-      const resultLimitReached = relativized.length >= effectiveLimit;
-      const rawOutput = relativized.join("\n");
-      const truncation = truncateHead(rawOutput, { maxLines: Number.MAX_SAFE_INTEGER });
-      const output = truncation.content;
-      const notices: string[] = [];
-      if (!usedFd) notices.push("search: built-in walker; install fd for faster search");
-      if (resultLimitReached) {
-        notices.push(`${effectiveLimit} results limit reached. Use limit=${effectiveLimit * 2} for more`);
-      }
-      if (truncation.truncated) notices.push(`${formatSize(DEFAULT_MAX_BYTES)} limit reached`);
-      return appendSearchNotices(output, notices);
-    },
-  });
+  return toolFromDefinition(findToolDefinition, { workspace: ctx } as AgentToolDeps);
 }

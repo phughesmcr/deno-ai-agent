@@ -1,7 +1,7 @@
 import { assertEquals } from "jsr:@std/assert@1";
 
 import { createEditTool } from "../../src/agent/tools/edit.ts";
-import { createTestWorkspace, runToolImplementation, runToolImplementationThrows } from "./helpers.ts";
+import { createTestWorkspace, runToolImplementation } from "./helpers.ts";
 
 Deno.test("edit replaces unique text", async () => {
   const { dir, ctx, cleanup } = await createTestWorkspace();
@@ -23,14 +23,14 @@ Deno.test("edit rejects overlapping edits", async () => {
   try {
     const tool = createEditTool(ctx);
     await Deno.writeTextFile(`${ctx.root}/o.txt`, "abcdef");
-    const err = await runToolImplementationThrows(tool, {
+    const result = await runToolImplementation(tool, {
       path: "o.txt",
       edits: [
         { oldText: "abc", newText: "x" },
         { oldText: "bcd", newText: "y" },
       ],
     });
-    assertEquals(err.message.includes("overlap"), true);
+    assertEquals(result.includes("overlap"), true);
   } finally {
     await cleanup();
   }

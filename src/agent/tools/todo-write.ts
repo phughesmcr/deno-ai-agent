@@ -1,8 +1,11 @@
-import { type Tool, tool } from "@lmstudio/sdk";
+import type { Tool } from "@lmstudio/sdk";
 import { z } from "zod/v3";
 
+import type { ApprovalRequest } from "../../shared/approval.ts";
 import { logDebug } from "../../shared/log.ts";
+import { requestForOperation, todoFileDisplayPath } from "./approval-support.ts";
 import type { ToolContext } from "./context.ts";
+import { type AgentToolDefinition, type AgentToolDeps, toolFromDefinition } from "./definitions.ts";
 import { withFileMutationQueue } from "./file-mutation-queue.ts";
 import type { TodoDisplayPort } from "./todo-display-port.ts";
 
@@ -335,63 +338,80 @@ const todoItemSchema = z.object({
   status: z.enum(["pending", "in_progress", "completed"]).describe("Task status."),
 });
 
-/** LM Studio tool that persists session-scoped todos and optionally updates Telegram display. */
-export function createTodoWriteTool(deps: TodoWriteDeps): Tool {
-  return tool({
-    name: "todo_write",
-    description: TODO_WRITE_DESCRIPTION,
-    parameters: {
-      todos: z.array(todoItemSchema).describe("The updated todo list."),
-    },
-    implementation: async (params) => {
-      const validationError = validateTodoWriteParams(params);
-      if (validationError) {
-        return validationError;
-      }
+const todoWriteParameters = {
+  todos: z.array(todoItemSchema).describe("The updated todo list."),
+} as const;
 
-      const sessionId = deps.getSessionId();
-      let updateResult: { changes: TodoChanges; telegram?: TodoTelegramMeta };
+export const todoWriteToolDefinition: AgentToolDefinition<typeof todoWriteParameters> = {
+  name: "todo_write",
+  description: TODO_WRITE_DESCRIPTION,
+  parameters: todoWriteParameters,
+  authorize: async ({ todos }, deps): Promise<ApprovalRequest> => {
+    const sessionId = deps.todos.getSessionId();
+    return requestForOperation(deps.workspace, {
+      operation: "todo",
+      target: await todoFileDisplayPath(deps.workspace, deps.todos.todosDir, sessionId),
+      risk: "medium",
+      summary: `write ${todos.length} todo item(s)`,
+    });
+  },
+  run: (params, deps): Promise<string> => {
+    return runTodoWrite(params, deps.todos);
+  },
+};
 
-      try {
-        updateResult = await updateTodoFileRaw(deps.todosDir, sessionId, (existingFile) => {
-          const changes = detectTodoChanges(existingFile.todos, params.todos);
-          return {
-            file: {
-              sessionId,
-              todos: params.todos,
-              telegram: existingFile.telegram,
-            },
-            result: {
-              changes,
-              telegram: existingFile.telegram,
-            },
-          };
-        });
-      } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
-        logDebug("todo_write.persist_error", { sessionId, message });
-        return `Failed to modify todos. An error occurred during the operation.
+async function runTodoWrite(params: TodoWriteParams, deps: TodoWriteDeps): Promise<string> {
+  const validationError = validateTodoWriteParams(params);
+  if (validationError) {
+    return validationError;
+  }
+
+  const sessionId = deps.getSessionId();
+  let updateResult: { changes: TodoChanges; telegram?: TodoTelegramMeta };
+
+  try {
+    updateResult = await updateTodoFileRaw(deps.todosDir, sessionId, (existingFile) => {
+      const changes = detectTodoChanges(existingFile.todos, params.todos);
+      return {
+        file: {
+          sessionId,
+          todos: params.todos,
+          telegram: existingFile.telegram,
+        },
+        result: {
+          changes,
+          telegram: existingFile.telegram,
+        },
+      };
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    logDebug("todo_write.persist_error", { sessionId, message });
+    return `Failed to modify todos. An error occurred during the operation.
 
 <system-reminder>
 Todo list modification failed with error: ${message}. You may need to retry or handle this error appropriately.
 </system-reminder>`;
-      }
+  }
 
-      if (deps.display?.isAvailable()) {
-        try {
-          await deps.display.onTodosUpdated({
-            sessionId,
-            todos: params.todos,
-            changes: updateResult.changes,
-            telegram: updateResult.telegram,
-          });
-        } catch (error) {
-          const message = error instanceof Error ? error.message : String(error);
-          logDebug("todo_write.display_error", { sessionId, message });
-        }
-      }
+  if (deps.display?.isAvailable()) {
+    try {
+      await deps.display.onTodosUpdated({
+        sessionId,
+        todos: params.todos,
+        changes: updateResult.changes,
+        telegram: updateResult.telegram,
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      logDebug("todo_write.display_error", { sessionId, message });
+    }
+  }
 
-      return formatTodoWriteResult(params.todos);
-    },
-  });
+  return formatTodoWriteResult(params.todos);
+}
+
+/** LM Studio tool that persists session-scoped todos and optionally updates Telegram display. */
+export function createTodoWriteTool(deps: TodoWriteDeps): Tool {
+  return toolFromDefinition(todoWriteToolDefinition, { todos: deps } as AgentToolDeps);
 }

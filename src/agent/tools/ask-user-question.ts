@@ -1,6 +1,7 @@
-import { type Tool, tool } from "@lmstudio/sdk";
+import type { Tool } from "@lmstudio/sdk";
 import { z } from "zod/v3";
 
+import { type AgentToolDefinition, type AgentToolDeps, toolFromDefinition } from "./definitions.ts";
 import { UserQuestionDeclinedError } from "./user-interaction.ts";
 import { cursorQuestionsToAnswers, type UserInteractionPort } from "./user-question-port.ts";
 
@@ -59,6 +60,19 @@ const questionSchema = z.object({
     .optional()
     .describe("Allow multiple selections; user toggles options then taps Done."),
 });
+
+const askUserQuestionParameters = {
+  questions: z
+    .array(questionSchema)
+    .min(1)
+    .max(4)
+    .describe("Questions to ask the user (1-4)."),
+  metadata: z
+    .object({
+      source: z.string().optional().describe("Optional analytics source identifier."),
+    })
+    .optional(),
+} as const;
 
 /**
  * Validates ask_user_question params (Qwen-aligned rules).
@@ -129,49 +143,43 @@ export function formatAnswers(questions: Question[], answers: Record<string, str
   return `User has provided the following answers:\n\n${lines.join("\n")}`;
 }
 
+export const askUserQuestionToolDefinition: AgentToolDefinition<typeof askUserQuestionParameters> = {
+  name: "ask_user_question",
+  description: TOOL_DESCRIPTION,
+  parameters: askUserQuestionParameters,
+  authorize: (): null => {
+    return null;
+  },
+  run: async (params, deps): Promise<string> => {
+    const validationError = validateAskUserQuestionParams(params);
+    if (validationError) {
+      throw new Error(validationError);
+    }
+    if (!deps.userQuestions.isAvailable()) {
+      return "Cannot ask user questions: no interactive channel configured.";
+    }
+    try {
+      const result = await deps.userQuestions.interact({
+        mode: "cursor_questions",
+        questions: params.questions,
+        metadata: params.metadata,
+      });
+      const answers = cursorQuestionsToAnswers(result, params.questions.length);
+      return formatAnswers(params.questions, answers);
+    } catch (error) {
+      if (error instanceof UserQuestionDeclinedError) {
+        return error.message;
+      }
+      const message = error instanceof Error ? error.message : String(error);
+      return `Failed to process user answers: ${message}`;
+    }
+  },
+};
+
 /**
  * LM Studio tool that asks the user structured questions via the configured port.
  * @internal
  */
 export function createAskUserQuestionTool(port: UserInteractionPort): Tool {
-  return tool({
-    name: "ask_user_question",
-    description: TOOL_DESCRIPTION,
-    parameters: {
-      questions: z
-        .array(questionSchema)
-        .min(1)
-        .max(4)
-        .describe("Questions to ask the user (1-4)."),
-      metadata: z
-        .object({
-          source: z.string().optional().describe("Optional analytics source identifier."),
-        })
-        .optional(),
-    },
-    implementation: async (params) => {
-      const validationError = validateAskUserQuestionParams(params);
-      if (validationError) {
-        throw new Error(validationError);
-      }
-      if (!port.isAvailable()) {
-        return "Cannot ask user questions: no interactive channel configured.";
-      }
-      try {
-        const result = await port.interact({
-          mode: "cursor_questions",
-          questions: params.questions,
-          metadata: params.metadata,
-        });
-        const answers = cursorQuestionsToAnswers(result, params.questions.length);
-        return formatAnswers(params.questions, answers);
-      } catch (error) {
-        if (error instanceof UserQuestionDeclinedError) {
-          return error.message;
-        }
-        const message = error instanceof Error ? error.message : String(error);
-        return `Failed to process user answers: ${message}`;
-      }
-    },
-  });
+  return toolFromDefinition(askUserQuestionToolDefinition, { userQuestions: port } as AgentToolDeps);
 }

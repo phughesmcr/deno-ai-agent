@@ -5,7 +5,7 @@ import { expandTilde } from "../../src/agent/workspace-sandbox.ts";
 
 import {
   createToolContext,
-  isHostReadPath,
+  isHostPath,
   normalizeRoot,
   normalizeUserPath,
   resolvePath,
@@ -47,8 +47,8 @@ Deno.test("resolveReadPath marks host absolute paths as outside workspace", asyn
     const { absolutePath, outsideWorkspace } = await resolveReadPath(ctx, file);
     assertEquals(outsideWorkspace, true);
     assertEquals(absolutePath, path.resolve(file));
-    assertEquals(isHostReadPath(file), true);
-    assertEquals(isHostReadPath("notes.txt"), false);
+    assertEquals(isHostPath(file), true);
+    assertEquals(isHostPath("notes.txt"), false);
   } finally {
     await cleanup();
     await Deno.remove(outside, { recursive: true });
@@ -75,7 +75,7 @@ Deno.test("resolveReadPath rejects absolute in-workspace symlink escapes", async
 
 Deno.test("normalizeUserPath strips quotes so tilde host reads resolve", () => {
   assertEquals(normalizeUserPath("'~/.codex/config.toml'"), "~/.codex/config.toml");
-  assertEquals(isHostReadPath("'~/.codex/config.toml'"), true);
+  assertEquals(isHostPath("'~/.codex/config.toml'"), true);
 });
 
 Deno.test("resolveReadPath expands host tilde paths without filesystem canonicalization", async () => {

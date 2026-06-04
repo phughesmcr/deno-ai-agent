@@ -20,6 +20,8 @@ export interface ToolContext {
   readonly getTurnId: () => string;
   /** Abort signal for the active turn, when available. */
   readonly signal?: AbortSignal;
+  /** Whether tools may resolve absolute or ~/ host paths outside the workspace. */
+  readonly allowHostPaths: boolean;
 }
 
 /** Options for creating a tool context. */
@@ -59,6 +61,7 @@ export async function createToolContext(root: string, options: ToolContextOption
     sandbox,
     getSessionId: valueGetter(options.sessionId, "unknown-session"),
     getTurnId: valueGetter(options.turnId, "unknown-turn"),
+    allowHostPaths: true,
     get signal() {
       return getSignal();
     },
@@ -92,9 +95,6 @@ export function isHostPath(userPath: string): boolean {
   return normalized.startsWith("~") || path.isAbsolute(expandTilde(normalized));
 }
 
-/** @deprecated Use {@link isHostPath}. */
-export const isHostReadPath = isHostPath;
-
 /** Resolved tool path, workspace-sandboxed or host-absolute. */
 export interface HostAwarePath {
   absolutePath: string;
@@ -111,8 +111,25 @@ export async function resolveHostAwarePath(ctx: ToolContext, userPath: string): 
   if (path.isAbsolute(expanded) && ctx.sandbox.containsPath(path.resolve(expanded))) {
     return { absolutePath: await ctx.sandbox.resolvePath(expanded), outsideWorkspace: false };
   }
+  if (isHostPath(normalized) && !ctx.allowHostPaths) {
+    throw new Error("Host paths are not available in this tool context. Use workspace-relative paths.");
+  }
   const absolutePath = isHostPath(normalized) ? path.resolve(expanded) : await ctx.sandbox.resolvePath(normalized);
   return { absolutePath, outsideWorkspace: !ctx.sandbox.containsPath(absolutePath) };
+}
+
+/** Returns a view of a tool context that rejects host paths outside the workspace. */
+export function workspaceOnlyToolContext(ctx: ToolContext): ToolContext {
+  return {
+    root: ctx.root,
+    sandbox: ctx.sandbox,
+    getSessionId: ctx.getSessionId,
+    getTurnId: ctx.getTurnId,
+    allowHostPaths: false,
+    get signal() {
+      return ctx.signal;
+    },
+  };
 }
 
 /** Resolves a path for `read`: workspace-relative paths stay sandboxed; host paths do not. */

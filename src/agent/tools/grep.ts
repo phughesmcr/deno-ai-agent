@@ -1,10 +1,13 @@
-import { type Tool, tool } from "@lmstudio/sdk";
+import type { Tool } from "@lmstudio/sdk";
 import { walk } from "@std/fs";
 import * as path from "@std/path";
 import { z } from "zod/v3";
 
 import { grantBrokerRunForCommands } from "../../permission-broker/mod.ts";
+import type { ApprovalRequest } from "../../shared/approval.ts";
+import { requestForHostAwareOperation } from "./approval-support.ts";
 import { displayPath, grantBrokerHostRead, resolveHostAwarePath, type ToolContext } from "./context.ts";
+import { type AgentToolDefinition, type AgentToolDeps, toolFromDefinition } from "./definitions.ts";
 import {
   appendSearchNotices,
   commandExists,
@@ -15,6 +18,18 @@ import {
 import { DEFAULT_MAX_BYTES, formatSize, truncateHead, truncateLine } from "./truncate.ts";
 
 const DEFAULT_LIMIT = 100;
+
+const grepParameters = {
+  pattern: z.string().describe("Search pattern (regex or literal string)"),
+  path: z.string().optional().describe(
+    "Directory or file to search: relative (workspace), or absolute / ~/... for host paths outside the workspace",
+  ),
+  glob: z.string().optional().describe("Filter files by glob pattern"),
+  ignoreCase: z.boolean().optional().describe("Case-insensitive search"),
+  literal: z.boolean().optional().describe("Treat pattern as literal string"),
+  context: z.number().optional().describe("Lines of context before and after each match"),
+  limit: z.number().optional().describe(`Maximum matches (default: ${DEFAULT_LIMIT})`),
+} as const;
 
 async function grepWithRg(
   searchPath: string,
@@ -150,93 +165,98 @@ async function walkGrep(
   return { output: outputLines.join("\n"), linesTruncated, matchLimitReached: matchCount >= options.limit };
 }
 
+export const grepToolDefinition: AgentToolDefinition<typeof grepParameters> = {
+  name: "grep",
+  description:
+    `Search file contents for a pattern. Returns matching lines with file paths and line numbers. Output is truncated to ${DEFAULT_LIMIT} matches or ${
+      DEFAULT_MAX_BYTES / 1024
+    }KB (whichever is hit first).`,
+  parameters: grepParameters,
+  authorize: async ({ path: searchDir, limit, context }, deps): Promise<ApprovalRequest> => {
+    const effectiveLimit = Math.max(1, limit ?? DEFAULT_LIMIT);
+    const effectiveContext = context ?? 0;
+    const { absolutePath, outsideWorkspace } = await resolveHostAwarePath(deps.workspace, searchDir ?? ".");
+    return requestForHostAwareOperation(deps.workspace, {
+      operation: "grep",
+      absolutePath,
+      outsideWorkspace,
+      display: displayPath(deps.workspace, absolutePath),
+      summary: `search text, limit=${effectiveLimit}, context=${effectiveContext}`,
+    });
+  },
+  run: async ({ pattern, path: searchDir, glob, ignoreCase, literal, context, limit }, deps): Promise<string> => {
+    const ctx = deps.workspace;
+    const effectiveLimit = Math.max(1, limit ?? DEFAULT_LIMIT);
+    const { absolutePath, outsideWorkspace } = await resolveHostAwarePath(ctx, searchDir ?? ".");
+    const display = displayPath(ctx, absolutePath);
+    if (outsideWorkspace) await grantBrokerHostRead(absolutePath, ctx.signal);
+    await grantBrokerRunForCommands(["rg"], ctx.signal);
+
+    let searchPath: string;
+    let targetIsFile = false;
+    try {
+      const stat = await Deno.stat(absolutePath);
+      if (!stat.isDirectory && !stat.isFile) {
+        throw new Error(`Not a file or directory: ${display}`);
+      }
+      searchPath = absolutePath;
+      targetIsFile = stat.isFile;
+    } catch (error) {
+      if (error instanceof Deno.errors.NotFound) throw new Error(`Path not found: ${searchDir ?? "."}`);
+      throw error;
+    }
+
+    let output: string;
+    let usedRg = false;
+    let linesTruncated = false;
+    let matchLimitReached = false;
+
+    if (await commandExists("rg", ctx.signal)) {
+      const result = await grepWithRg(searchPath, pattern, {
+        glob,
+        ignoreCase,
+        literal,
+        context,
+        limit: effectiveLimit,
+        targetIsFile,
+        signal: ctx.signal,
+      });
+      output = result.output;
+      usedRg = true;
+      linesTruncated = result.linesTruncated;
+      matchLimitReached = result.matchLimitReached;
+    } else {
+      const flags = ignoreCase ? "i" : "";
+      const regex = literal ?
+        new RegExp(pattern.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), flags) :
+        new RegExp(pattern, flags);
+      const result = await walkGrep(searchPath, regex, {
+        glob,
+        limit: effectiveLimit,
+        context,
+        targetIsFile,
+        signal: ctx.signal,
+      });
+      output = result.output;
+      linesTruncated = result.linesTruncated;
+      matchLimitReached = result.matchLimitReached;
+    }
+
+    if (!output) return "No matches found";
+
+    const truncation = truncateHead(output, { maxLines: Number.MAX_SAFE_INTEGER });
+    const resultOutput = truncation.content;
+    const notices: string[] = [];
+    if (!usedRg) notices.push("search: built-in walker; install ripgrep for faster search");
+    if (matchLimitReached) {
+      notices.push(`${effectiveLimit} matches limit reached. Use limit=${effectiveLimit * 2} for more`);
+    }
+    if (truncation.truncated) notices.push(`${formatSize(DEFAULT_MAX_BYTES)} limit reached`);
+    if (linesTruncated) notices.push("some lines truncated");
+    return appendSearchNotices(resultOutput, notices);
+  },
+};
+
 export function createGrepTool(ctx: ToolContext): Tool {
-  return tool({
-    name: "grep",
-    description:
-      `Search file contents for a pattern. Returns matching lines with file paths and line numbers. Output is truncated to ${DEFAULT_LIMIT} matches or ${
-        DEFAULT_MAX_BYTES / 1024
-      }KB (whichever is hit first).`,
-    parameters: {
-      pattern: z.string().describe("Search pattern (regex or literal string)"),
-      path: z.string().optional().describe(
-        "Directory or file to search: relative (workspace), or absolute / ~/... for host paths outside the workspace",
-      ),
-      glob: z.string().optional().describe("Filter files by glob pattern"),
-      ignoreCase: z.boolean().optional().describe("Case-insensitive search"),
-      literal: z.boolean().optional().describe("Treat pattern as literal string"),
-      context: z.number().optional().describe("Lines of context before and after each match"),
-      limit: z.number().optional().describe(`Maximum matches (default: ${DEFAULT_LIMIT})`),
-    },
-    implementation: async ({ pattern, path: searchDir, glob, ignoreCase, literal, context, limit }) => {
-      const effectiveLimit = Math.max(1, limit ?? DEFAULT_LIMIT);
-      const { absolutePath, outsideWorkspace } = await resolveHostAwarePath(ctx, searchDir ?? ".");
-      const display = displayPath(ctx, absolutePath);
-      if (outsideWorkspace) await grantBrokerHostRead(absolutePath, ctx.signal);
-      await grantBrokerRunForCommands(["rg"], ctx.signal);
-
-      let searchPath: string;
-      let targetIsFile = false;
-      try {
-        const stat = await Deno.stat(absolutePath);
-        if (!stat.isDirectory && !stat.isFile) {
-          throw new Error(`Not a file or directory: ${display}`);
-        }
-        searchPath = absolutePath;
-        targetIsFile = stat.isFile;
-      } catch (error) {
-        if (error instanceof Deno.errors.NotFound) throw new Error(`Path not found: ${searchDir ?? "."}`);
-        throw error;
-      }
-
-      let output: string;
-      let usedRg = false;
-      let linesTruncated = false;
-      let matchLimitReached = false;
-
-      if (await commandExists("rg", ctx.signal)) {
-        const result = await grepWithRg(searchPath, pattern, {
-          glob,
-          ignoreCase,
-          literal,
-          context,
-          limit: effectiveLimit,
-          targetIsFile,
-          signal: ctx.signal,
-        });
-        output = result.output;
-        usedRg = true;
-        linesTruncated = result.linesTruncated;
-        matchLimitReached = result.matchLimitReached;
-      } else {
-        const flags = ignoreCase ? "i" : "";
-        const regex = literal ?
-          new RegExp(pattern.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), flags) :
-          new RegExp(pattern, flags);
-        const result = await walkGrep(searchPath, regex, {
-          glob,
-          limit: effectiveLimit,
-          context,
-          targetIsFile,
-          signal: ctx.signal,
-        });
-        output = result.output;
-        linesTruncated = result.linesTruncated;
-        matchLimitReached = result.matchLimitReached;
-      }
-
-      if (!output) return "No matches found";
-
-      const truncation = truncateHead(output, { maxLines: Number.MAX_SAFE_INTEGER });
-      const resultOutput = truncation.content;
-      const notices: string[] = [];
-      if (!usedRg) notices.push("search: built-in walker; install ripgrep for faster search");
-      if (matchLimitReached) {
-        notices.push(`${effectiveLimit} matches limit reached. Use limit=${effectiveLimit * 2} for more`);
-      }
-      if (truncation.truncated) notices.push(`${formatSize(DEFAULT_MAX_BYTES)} limit reached`);
-      if (linesTruncated) notices.push("some lines truncated");
-      return appendSearchNotices(resultOutput, notices);
-    },
-  });
+  return toolFromDefinition(grepToolDefinition, { workspace: ctx } as AgentToolDeps);
 }
