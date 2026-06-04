@@ -38,4 +38,4 @@ exec env -i \
   SILAS_PROJECT_ROOT="$SILAS_PROJECT_ROOT" \
   OTEL_DENO="$OTEL_DENO" \
   OTEL_SERVICE_NAME="$OTEL_SERVICE_NAME" \
-  deno run -A --unstable-kv --env-file=.env main.ts
+  deno run --unstable-kv --env-file=.env main.ts

@@ -1,9 +1,9 @@
+import { extractYaml } from "@std/front-matter";
 import * as path from "@std/path";
-import { parse } from "@std/yaml";
+import { z } from "zod/v3";
 
 const SKILL_FILE_NAME = "SKILL.md";
 const SKILLS_DIR_NAME = "skills";
-const FRONTMATTER_PATTERN = /^---\r?\n([\s\S]*?)\r?\n---[ \t]*(?:\r?\n|$)/;
 const SKILL_NAME_PATTERN = /^[A-Za-z0-9_-]+$/;
 
 /** Public metadata for a discovered AgentSkill. */
@@ -50,31 +50,22 @@ export interface CreateSkillManagerOptions {
   root: string;
 }
 
-type Frontmatter = Record<string, unknown>;
-
 function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
-function stringField(frontmatter: Frontmatter, key: string): string | undefined {
-  const value = frontmatter[key];
-  return typeof value === "string" ? value.trim() : undefined;
-}
-
-function optionalStringField(frontmatter: Frontmatter, key: string): string | undefined {
-  const value = frontmatter[key];
-  if (value === undefined) return undefined;
-  return typeof value === "string" ? value : undefined;
-}
-
-function optionalStringList(frontmatter: Frontmatter, key: string): string[] | undefined {
-  const value = frontmatter[key];
-  if (value === undefined) return undefined;
-  if (typeof value === "string") return [value];
-  if (!Array.isArray(value)) return undefined;
-  const strings = value.filter((item): item is string => typeof item === "string");
-  return strings.length === value.length ? strings : undefined;
-}
+const skillFrontmatterSchema = z.object({
+  "name": z.string().trim().min(1),
+  "description": z.string().trim().min(1),
+  "license": z.preprocess((value) => typeof value === "string" ? value : undefined, z.string().optional()),
+  "compatibility": z.preprocess((value) => typeof value === "string" ? value : undefined, z.string().optional()),
+  "metadata": z.preprocess((value) => isRecord(value) ? value : undefined, z.record(z.unknown()).optional()),
+  "allowed-tools": z.preprocess((value) => {
+    if (typeof value === "string") return [value];
+    if (!Array.isArray(value)) return undefined;
+    return value.every((item) => typeof item === "string") ? value : undefined;
+  }, z.array(z.string()).optional()),
+}).passthrough();
 
 function toSummary(skill: Skill): SkillSummary {
   const summary: SkillSummary = {
@@ -98,25 +89,25 @@ function diagnostic(code: string, message: string, filePath?: string, skillName?
 }
 
 function parseSkillFile(filePath: string, baseDir: string, text: string): Skill | SkillDiagnostic {
-  const match = FRONTMATTER_PATTERN.exec(text);
-  if (!match) {
+  if (!text.startsWith("---")) {
     return diagnostic("missing_frontmatter", "SKILL.md must start with YAML frontmatter.", filePath);
   }
 
-  const yamlText = match[1] ?? "";
-  let parsed: unknown;
+  let extracted: { attrs: unknown; body: string };
   try {
-    parsed = parse(yamlText);
+    extracted = extractYaml(text);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     return diagnostic("bad_yaml", `Could not parse skill frontmatter: ${message}`, filePath);
   }
 
-  if (!isRecord(parsed)) {
+  if (!isRecord(extracted.attrs)) {
     return diagnostic("bad_yaml", "Skill frontmatter must be a YAML object.", filePath);
   }
 
-  const name = stringField(parsed, "name");
+  const parsed = skillFrontmatterSchema.safeParse(extracted.attrs);
+  const nameValue = extracted.attrs["name"];
+  const name = typeof nameValue === "string" ? nameValue.trim() : undefined;
   if (!name) return diagnostic("missing_name", "Skill frontmatter must include a non-empty name.", filePath);
   if (!SKILL_NAME_PATTERN.test(name)) {
     return diagnostic(
@@ -127,27 +118,24 @@ function parseSkillFile(filePath: string, baseDir: string, text: string): Skill 
     );
   }
 
-  const description = stringField(parsed, "description");
-  if (!description) {
+  if (!parsed.success) {
     return diagnostic("missing_description", "Skill frontmatter must include a non-empty description.", filePath, name);
   }
 
-  const metadata = parsed["metadata"];
+  const attrs = parsed.data;
+  const description = attrs.description;
   const skill: Skill = {
     name,
     description,
     filePath,
     baseDir,
-    body: text.slice(match[0].length).replace(/\r\n/g, "\n").trim(),
+    body: extracted.body.replace(/\r\n/g, "\n").trim(),
   };
 
-  const license = optionalStringField(parsed, "license");
-  if (license !== undefined) skill.license = license;
-  const compatibility = optionalStringField(parsed, "compatibility");
-  if (compatibility !== undefined) skill.compatibility = compatibility;
-  if (isRecord(metadata)) skill.metadata = metadata;
-  const allowedTools = optionalStringList(parsed, "allowed-tools");
-  if (allowedTools !== undefined) skill.allowedTools = allowedTools;
+  if (attrs.license !== undefined) skill.license = attrs.license;
+  if (attrs.compatibility !== undefined) skill.compatibility = attrs.compatibility;
+  if (attrs.metadata !== undefined) skill.metadata = attrs.metadata;
+  if (attrs["allowed-tools"] !== undefined) skill.allowedTools = attrs["allowed-tools"];
 
   return skill;
 }

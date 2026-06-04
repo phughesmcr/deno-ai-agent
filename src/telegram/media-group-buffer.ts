@@ -54,7 +54,7 @@ export interface MediaGroupBuffer {
  * @internal
  */
 export function createMediaGroupBuffer(
-  onFlush: (payload: AlbumFlushPayload) => Promise<void>,
+  onFlush: (payload: AlbumFlushPayload) => void | Promise<void>,
 ): MediaGroupBuffer {
   const albums = new Map<string, AlbumState>();
   const chatToGroup = new Map<number, string>();
@@ -89,7 +89,7 @@ export function createMediaGroupBuffer(
   }
 
   return {
-    enqueue({ mediaGroupId, context, turnCtx, item, caption }) {
+    enqueue({ mediaGroupId, context, turnCtx, item, caption }): void {
       let state = albums.get(mediaGroupId);
       if (!state) {
         const created: AlbumState = {
@@ -115,7 +115,7 @@ export function createMediaGroupBuffer(
       scheduleFlush(state);
     },
 
-    flushPendingForChat(chatId) {
+    flushPendingForChat(chatId): void {
       const mediaGroupId = chatToGroup.get(chatId);
       if (!mediaGroupId) return;
       const state = albums.get(mediaGroupId);
@@ -134,7 +134,7 @@ export function createMediaGroupBuffer(
       });
     },
 
-    dispose() {
+    dispose(): void {
       for (const state of albums.values()) clearTimer(state);
       albums.clear();
       chatToGroup.clear();

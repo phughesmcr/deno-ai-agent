@@ -14,7 +14,7 @@ function fakeCtx(message: Message): TelegramContext {
   return {
     message,
     api: {
-      getFile: async () => ({ file_path: "photos/test.jpg" }),
+      getFile: () => Promise.resolve({ file_path: "photos/test.jpg" }),
     },
     // deno-lint-ignore no-explicit-any
   } as any as TelegramContext;

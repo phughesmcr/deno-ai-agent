@@ -1,4 +1,5 @@
 import { type Tool, tool } from "@lmstudio/sdk";
+import { walk } from "@std/fs";
 import * as path from "@std/path";
 import { z } from "zod/v3";
 
@@ -8,7 +9,7 @@ import {
   appendSearchNotices,
   commandExists,
   readStreamToString,
-  SEARCH_SKIP_DIRS,
+  searchSkipPatterns,
   toPosixPath,
 } from "./search-support.ts";
 import { DEFAULT_MAX_BYTES, formatSize, truncateHead, truncateLine } from "./truncate.ts";
@@ -128,28 +129,23 @@ async function walkGrep(
     }
   }
 
-  async function walk(dir: string): Promise<void> {
-    options.signal?.throwIfAborted();
-    if (matchCount >= options.limit) return;
-    for await (const entry of Deno.readDir(dir)) {
-      options.signal?.throwIfAborted();
-      if (matchCount >= options.limit) return;
-      const fullPath = path.join(dir, entry.name);
-      if (entry.isDirectory) {
-        if (!SEARCH_SKIP_DIRS.has(entry.name)) await walk(fullPath);
-        continue;
-      }
-      if (!entry.isFile) continue;
-      const rel = toPosixPath(path.relative(searchPath, fullPath));
-      if (globRe && !globRe.test(rel) && !globRe.test(entry.name)) continue;
-      await grepFile(fullPath, rel);
-    }
-  }
-
   if (options.targetIsFile) {
     await grepFile(searchPath, path.basename(searchPath));
   } else {
-    await walk(searchPath);
+    for await (
+      const entry of walk(searchPath, {
+        includeDirs: false,
+        includeFiles: true,
+        skip: searchSkipPatterns(),
+      })
+    ) {
+      options.signal?.throwIfAborted();
+      if (matchCount >= options.limit) break;
+      if (!entry.isFile) continue;
+      const rel = toPosixPath(path.relative(searchPath, entry.path));
+      if (globRe && !globRe.test(rel) && !globRe.test(entry.name)) continue;
+      await grepFile(entry.path, rel);
+    }
   }
   return { output: outputLines.join("\n"), linesTruncated, matchLimitReached: matchCount >= options.limit };
 }

@@ -3,7 +3,7 @@ import { Bot, type Context, GrammyError, HttpError } from "grammy";
 import { questions, type QuestionsFlavor } from "grammy-questions";
 import type { AskUserQuestionPort, SessionManager, TodoTelegramMeta } from "../agent/mod.ts";
 import type { PermissionCallbackDispatch } from "../permission-broker/mod.ts";
-import { logDebug } from "../shared/mod.ts";
+import { loadTelegramConfig, logDebug } from "../shared/mod.ts";
 import { installConcurrentUpdates } from "./bot-runner.ts";
 import { TelegramCommandHandler } from "./commands.ts";
 import { showTodosForSession } from "./grammy-todo-display-adapter.ts";
@@ -48,16 +48,8 @@ interface TelegramPermissionPromptPort {
 }
 
 function getEnv(): { token: string; adminId: number } {
-  const token = Deno.env.get("TELEGRAM_BOT_TOKEN")!;
-  if (!token) throw new Error("TELEGRAM_BOT_TOKEN is not set");
-
-  const adminIdRaw = Deno.env.get("TELEGRAM_ADMIN_ID")!;
-  if (!adminIdRaw) throw new Error("TELEGRAM_ADMIN_ID is not set");
-
-  const adminId = Number(adminIdRaw);
-  if (isNaN(adminId)) throw new Error("TELEGRAM_ADMIN_ID is not a number");
-
-  return { token, adminId };
+  const config = loadTelegramConfig();
+  return { token: config.TELEGRAM_BOT_TOKEN, adminId: config.TELEGRAM_ADMIN_ID };
 }
 
 /** Bot token for Telegram file downloads (shared with {@link createTelegramManager}). */

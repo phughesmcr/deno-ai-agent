@@ -41,7 +41,7 @@ export function formatSessionStatus(status: SessionStatus): string {
 }
 
 function formatListLine(summary: SavedSessionSummary, currentId: string): string {
-  const label = summary.name ? `${summary.name} — ${summary.id}` : summary.id;
+  const label = summary.name ? `${summary.name} - ${summary.id}` : summary.id;
   return summary.id === currentId ? `${label} (current)` : label;
 }
 

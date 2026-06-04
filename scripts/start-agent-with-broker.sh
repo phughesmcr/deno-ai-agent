@@ -26,4 +26,4 @@ exec env -i \
   DENO_PERMISSION_BROKER_PATH="$DENO_PERMISSION_BROKER_PATH" \
   SILAS_PERMISSION_RUN_PROMPTS="$SILAS_PERMISSION_RUN_PROMPTS" \
   SILAS_PROJECT_ROOT="$SILAS_PROJECT_ROOT" \
-  deno run -A --unstable-kv --env-file=.env main.ts
+  deno run --unstable-kv --env-file=.env main.ts

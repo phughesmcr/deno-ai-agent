@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # One terminal: broker (background) + Silas.
-# If the broker already runs elsewhere, use: deno task start:broker
+# If the broker already runs elsewhere, use: deno task agent:broker
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -25,4 +25,4 @@ wait_for_socket "$SILAS_BROKER_LISTEN_PATH" "broker" || exit 1
 wait_for_socket "$SILAS_PERMISSION_CONTROL_PATH" "control" || exit 1
 
 echo "Broker ready (pid $BROKER_PID). Starting Silas..."
-deno task start:broker
+deno task agent:broker

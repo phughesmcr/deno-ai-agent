@@ -68,11 +68,9 @@
         "jsr"
       ],
       "include": [
-        "camelcase",
         "default-param-last",
         "explicit-function-return-type",
         "explicit-module-boundary-types",
-        "no-await-in-loop",
         "no-await-in-sync-fn",
         "no-console",
         "no-const-assign",
@@ -89,22 +87,22 @@
     }
   },
   "tasks": {
-    "test": "deno test --unstable-kv --allow-read --allow-write --allow-run --allow-env=WS_NO_BUFFER_UTIL,WS_NO_UTF_8_VALIDATE,NODE_ENV,LOG_LEVEL,LMSTUDIO_IMAGE_TEST,DENO_TEST_PERMISSION_BROKER,HOME,REASONING_ENABLED,REASONING_ACT_PARSING,REASONING_START,REASONING_END,KEEP_THINKING,PREPEND_SYSTEM_PROMPT,DRAFT_MODEL,MAX_PREDICTION_ROUNDS,MODEL test/**/*.test.ts",
+    "test": "deno test --unstable-kv --allow-read --allow-write --allow-run --allow-env=WS_NO_BUFFER_UTIL,WS_NO_UTF_8_VALIDATE,NODE_ENV,LOG_LEVEL,LMSTUDIO_IMAGE_TEST,DENO_TEST_PERMISSION_BROKER,HOME,TELEGRAM_BOT_TOKEN,TELEGRAM_ADMIN_ID,TELEGRAM_BOT_ID,MODEL,CONTEXT_LENGTH,BOT_NAME,WORKSPACE_PATH,OTEL_DENO,OTEL_SERVICE_NAME,OTEL_EXPORTER_OTLP_ENDPOINT,OTEL_EXPORTER_OTLP_PROTOCOL,DENO_PERMISSION_BROKER_PATH,SILAS_PERMISSION_CONTROL_PATH,PERMISSION_PROMPT_TIMEOUT_MS,REASONING_ENABLED,REASONING_ACT_PARSING,REASONING_START,REASONING_END,KEEP_THINKING,PREPEND_SYSTEM_PROMPT,DRAFT_MODEL,MAX_PREDICTION_ROUNDS test/**/*.test.ts",
     "test:broker": "DENO_TEST_PERMISSION_BROKER=1 deno test --allow-read --allow-write --allow-run --allow-net --allow-env test/permission-broker/daemon.integration.test.ts",
 
     "broker": "deno run --allow-net --allow-read --allow-write --allow-env src/permission-broker/daemon-entry.ts",
     "broker:only": "bash scripts/start-broker.sh",
-    "start:broker": "deno run -A --unstable-kv --env-file=.env main.ts",
-    "start:broker:otel": "OTEL_DENO=true OTEL_SERVICE_NAME=deno-ai-agent deno run -A --unstable-kv --env-file=.env main.ts",
+    "start:unsafe": "deno run --unstable-kv --env-file=.env --allow-read --allow-write --allow-run --allow-net --allow-env main.ts",
+    "start:unsafe:otel": "OTEL_DENO=true OTEL_SERVICE_NAME=deno-ai-agent deno run --unstable-kv --env-file=.env --allow-read --allow-write --allow-run --allow-net --allow-env main.ts",
+    "start:unsafe:otel:console": "OTEL_DENO=true OTEL_SERVICE_NAME=deno-ai-agent OTEL_EXPORTER_OTLP_PROTOCOL=console deno run --unstable-kv --env-file=.env --allow-read --allow-write --allow-run --allow-net --allow-env main.ts",
     "agent:broker": "bash scripts/start-agent-with-broker.sh",
     "agent:broker:otel": "bash scripts/start-agent-with-broker-otel.sh",
     "start:all": "bash scripts/start-with-broker.sh",
     "start:all:otel": "bash scripts/start-with-broker-otel.sh",
-    "start": "deno run --unstable-kv --env-file=.env --allow-read --allow-write --allow-run --allow-net --allow-env main.ts",
-    "start:otel": "OTEL_DENO=true OTEL_SERVICE_NAME=deno-ai-agent deno run --unstable-kv --env-file=.env --allow-read --allow-write --allow-run --allow-net --allow-env main.ts",
-    "start:otel:console": "OTEL_DENO=true OTEL_SERVICE_NAME=deno-ai-agent OTEL_EXPORTER_OTLP_PROTOCOL=console deno run --unstable-kv --env-file=.env --allow-read --allow-write --allow-run --allow-net --allow-env main.ts",
+    "start": "bash scripts/start-with-broker.sh",
+    "start:otel": "bash scripts/start-with-broker-otel.sh",
 
-    "check:docs": "deno doc --unstable-kv --lint main.ts src/agent/lmstudio.ts src/agent/workspace.ts src/agent/context/*.ts src/shared/approval.ts src/shared/log.ts src/shared/otel.ts src/telegram/commands.ts src/telegram/telegram.ts src/telegram/telegram-reply.ts src/telegram/todo-list-format.ts src/permission-broker/version.ts",
+    "check:docs": "deno doc --unstable-kv --lint main.ts src/agent/lmstudio.ts src/agent/workspace.ts src/agent/context/compactor.ts src/agent/context/persisted-message.ts src/agent/context/session-store.ts src/agent/context/session.ts src/shared/approval.ts src/shared/log.ts src/shared/otel.ts src/telegram/commands.ts src/telegram/telegram.ts src/telegram/telegram-reply.ts src/telegram/todo-list-format.ts src/permission-broker/version.ts",
     "check:fmt": "deno fmt --check",
     "check:lint": "deno lint",
     "check:types": "deno check --unstable-kv --allow-import main.ts src/**/*.ts test/**/*.test.ts bench/**/*.ts",
@@ -117,7 +115,10 @@
   },
   "imports": {
     "@std/async/debounce": "jsr:@std/async/debounce",
+    "@std/front-matter": "jsr:@std/front-matter@^1.0.9",
+    "@std/fs": "jsr:@std/fs@^1.0.19",
     "@std/path": "jsr:@std/path@^1.1.0",
+    "@std/streams": "jsr:@std/streams@^1.0.12",
     "@opentelemetry/api": "npm:@opentelemetry/api@^1.9.1",
     "@lmstudio/sdk": "npm:@lmstudio/sdk@^1.5.0",
     "@std/yaml": "jsr:@std/yaml@^1.1.1",

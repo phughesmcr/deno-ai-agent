@@ -2,7 +2,7 @@ import { assertEquals } from "jsr:@std/assert@1";
 
 import { type AlbumFlushPayload, createMediaGroupBuffer } from "../../src/telegram/media-group-buffer.ts";
 
-function fakeTurnCtx(chatId: number, messageId: number) {
+function fakeTurnCtx(chatId: number, messageId: number): AlbumFlushPayload["turnCtx"] {
   return {
     chat: { id: chatId },
     message: { message_id: messageId, message_thread_id: undefined },
@@ -12,7 +12,7 @@ function fakeTurnCtx(chatId: number, messageId: number) {
 
 Deno.test("media group buffer debounces album photos into one flush", async () => {
   const flushed: AlbumFlushPayload[] = [];
-  const buffer = createMediaGroupBuffer(async (payload) => {
+  const buffer = createMediaGroupBuffer((payload) => {
     flushed.push(payload);
   });
 
@@ -44,7 +44,7 @@ Deno.test("media group buffer debounces album photos into one flush", async () =
 Deno.test("media group buffer caps images per album", async () => {
   Deno.env.set("LOG_LEVEL", "debug");
   const flushed: AlbumFlushPayload[] = [];
-  const buffer = createMediaGroupBuffer(async (payload) => {
+  const buffer = createMediaGroupBuffer((payload) => {
     flushed.push(payload);
   });
 
@@ -65,7 +65,7 @@ Deno.test("media group buffer caps images per album", async () => {
 
 Deno.test("flushPendingForChat flushes before text handling", async () => {
   const flushed: AlbumFlushPayload[] = [];
-  const buffer = createMediaGroupBuffer(async (payload) => {
+  const buffer = createMediaGroupBuffer((payload) => {
     flushed.push(payload);
   });
 

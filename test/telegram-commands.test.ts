@@ -134,7 +134,7 @@ Deno.test("TelegramCommandHandler returns text for successful session commands",
   assertEquals(await handler.fork(), "Forked.\nFrom: current\nTo: forked\n\nUse /save on the new branch when ready.");
   assertEquals(
     await handler.list(),
-    "Saved sessions:\narchived (current)\nactive — current",
+    "Saved sessions:\narchived (current)\nactive - current",
   );
 });
 

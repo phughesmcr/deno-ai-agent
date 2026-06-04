@@ -37,7 +37,7 @@ export function preprocessSystemPrompt(raw: string, workspacePath: string): stri
   }
 
   const workspaceNote =
-    `\nTool workspace root: \`${workspacePath}\`. This is your home — read, write, and create freely here. ` +
+    `\nTool workspace root: \`${workspacePath}\`. This is your home - read, write, and create freely here. ` +
     `Relative paths (and absolutes under this directory) are workspace-scoped. ` +
     `For host paths outside it (e.g. \`~/.codex/config.toml\`), use \`read\`, \`write\`, \`edit\`, \`ls\`, \`grep\`, or \`find\` with an absolute or \`~/\` path (Telegram approval required). ` +
     "`bash` runs with this directory as cwd.\n";

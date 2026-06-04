@@ -1,4 +1,4 @@
-import { assertEquals, assertStringIncludes } from "jsr:@std/assert@1";
+import { assertEquals, assertRejects, assertStringIncludes } from "jsr:@std/assert@1";
 
 import { formatTodoListMarkdown, formatTodoListPlain } from "../../src/telegram/todo-list-format.ts";
 import { createNoopTodoDisplayPort } from "../../src/agent/tools/todo-display-port.ts";
@@ -83,6 +83,22 @@ Deno.test("todo persistence round-trip via mutation queue", async () => {
     const result = await runTool(tool, { todos });
     assertStringIncludes(result, "system-reminder");
     assertEquals(await readTodosForSession(todosDir, SESSION_ID), todos);
+  } finally {
+    await cleanup();
+  }
+});
+
+Deno.test("readTodoFile rejects corrupt todo files clearly", async () => {
+  const { dir, cleanup } = await createTestWorkspace();
+  const todosDir = `${dir}/todos`;
+  await Deno.mkdir(todosDir, { recursive: true });
+  try {
+    await Deno.writeTextFile(`${todosDir}/${SESSION_ID}.json`, JSON.stringify({ sessionId: SESSION_ID, todos: "bad" }));
+    await assertRejects(
+      () => readTodoFile(todosDir, SESSION_ID),
+      Error,
+      `Invalid todo file for session ${SESSION_ID}`,
+    );
   } finally {
     await cleanup();
   }

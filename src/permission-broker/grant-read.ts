@@ -14,6 +14,6 @@ export async function grantBrokerReadPath(absolutePath: string, signal?: AbortSi
   for (const value of new Set(readGrantValues(absolutePath))) {
     if (signal?.aborted) return;
     // deno-lint-ignore no-await-in-loop -- Grant frames must stay in order on the control socket.
-    await sendControlGrant("read", value, "session", signal);
+    await sendControlGrant("read", value, signal);
   }
 }

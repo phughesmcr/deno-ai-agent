@@ -21,7 +21,7 @@ import {
   shouldRunPermissionControlClient,
   waitForPermissionControlClient,
 } from "./src/permission-broker/mod.ts";
-import { logDebug, traceSpan } from "./src/shared/mod.ts";
+import { loadAppConfig, logDebug, logError, logInfo, traceSpan } from "./src/shared/mod.ts";
 import { SESSION_HELP } from "./src/telegram/commands.ts";
 import {
   ActiveTurnRegistry,
@@ -52,13 +52,6 @@ import {
 const PENDING_INTERACTION_HINT =
   "Please resolve the pending Telegram approval or broker permission prompt first (or wait for it to time out).";
 
-function getEnv(): { maxContextLength: number } {
-  const maxContextLength = Number(Deno.env.get("CONTEXT_LENGTH"));
-  if (isNaN(maxContextLength)) throw new Error("CONTEXT_LENGTH is not a number");
-  if (maxContextLength <= 0) throw new Error("CONTEXT_LENGTH must be greater than 0");
-  return { maxContextLength };
-}
-
 function registerShutdown(controller: AbortController, stop: () => Promise<void>): void {
   const shutdown = (): void => {
     if (controller.signal.aborted) return;
@@ -67,11 +60,6 @@ function registerShutdown(controller: AbortController, stop: () => Promise<void>
   };
   Deno.addSignalListener("SIGINT", shutdown);
   Deno.addSignalListener("SIGTERM", shutdown);
-}
-
-function permissionPromptTimeoutMs(): number {
-  const value = Number(Deno.env.get("PERMISSION_PROMPT_TIMEOUT_MS") ?? "120000");
-  return Number.isFinite(value) ? value : 120_000;
 }
 
 function isAbortError(error: unknown): boolean {
@@ -85,31 +73,32 @@ function isImageInputError(error: unknown): boolean {
 }
 
 async function main(): Promise<void> {
-  if (Deno.env.get("DENO_PERMISSION_BROKER_PATH")) {
+  const config = loadAppConfig();
+  if (config.DENO_PERMISSION_BROKER_PATH) {
     assertPermissionBrokerSupported();
   }
 
   const controller = new AbortController();
-  const { maxContextLength } = getEnv();
+  const maxContextLength = config.CONTEXT_LENGTH;
   const botToken = getTelegramBotToken();
 
   const userQuestions = createTelegramAskUserQuestionPort();
-  const permissionPrompts = createTelegramPermissionPromptPort(permissionPromptTimeoutMs());
+  const permissionPrompts = createTelegramPermissionPromptPort(config.PERMISSION_PROMPT_TIMEOUT_MS);
   const approvals = createTelegramApprovalGate();
 
   if (shouldRunPermissionControlClient()) {
-    const controlPath = Deno.env.get("SILAS_PERMISSION_CONTROL_PATH")!;
-    const brokerPath = Deno.env.get("DENO_PERMISSION_BROKER_PATH") ?? "";
-    console.log(`Silas connecting to permission broker\n  broker:  ${brokerPath}\n  control: ${controlPath}`);
+    const controlPath = config.SILAS_PERMISSION_CONTROL_PATH!;
+    const brokerPath = config.DENO_PERMISSION_BROKER_PATH ?? "";
+    logInfo(`Silas connecting to permission broker\n  broker:  ${brokerPath}\n  control: ${controlPath}`);
     void runPermissionControlClient({ controlPath, promptPort: permissionPrompts }, controller.signal);
     await waitForPermissionControlClient();
-    console.log("Permission broker control channel registered.");
+    logInfo("Permission broker control channel registered.");
   }
 
   const workspace = await createWorkspace(new URL(".", import.meta.url));
-  console.log("Loading LM Studio model...");
+  logInfo("Loading LM Studio model...");
   const lmstudio = await createLMStudioManager({ signal: controller.signal, maxContextLength });
-  console.log(`LM Studio model loaded (${Deno.env.get("MODEL") ?? "unknown"}).`);
+  logInfo(`LM Studio model loaded (${config.MODEL}).`);
   const agent = await createAgent({ workspace, lmstudio, maxContextLength, signal: controller.signal });
   const subagentKv = await Deno.openKv(":memory:");
 
@@ -159,7 +148,7 @@ async function main(): Promise<void> {
     approvals.abortPending();
     const aborted = activeTurns.abortActiveTurn();
     if (aborted || hadPendingInteraction) {
-      console.log("Turn aborted (act, approvals, and broker prompts cancelled).");
+      logInfo("Turn aborted (act, approvals, and broker prompts cancelled).");
     }
     return aborted || hadPendingInteraction;
   }
@@ -218,13 +207,13 @@ async function main(): Promise<void> {
         const actStarted = performance.now();
         let completed = false;
         try {
-          console.log(`Model turn started${imageCount > 0 ? ` (${imageCount} image(s))` : ""}.`);
+          logInfo(`Model turn started${imageCount > 0 ? ` (${imageCount} image(s))` : ""}.`);
           const { replyTexts, compacted } = await runTurn(agent, normalized, {
             tools,
             guardToolCall,
             signal: turnController.signal,
           });
-          console.log(`Model turn finished (${replyTexts.length} reply chunk(s)).`);
+          logInfo(`Model turn finished (${replyTexts.length} reply chunk(s)).`);
 
           if (replyTexts.length > 0) {
             await replyWithModelText(ctx, replyTexts, replyToMessageId, message.message_thread_id);
@@ -309,7 +298,7 @@ async function main(): Promise<void> {
             images,
           };
 
-          console.log(
+          logInfo(
             `Telegram album flush (${payload.items.length} image(s), media_group_id=${payload.mediaGroupId}).`,
           );
 
@@ -333,7 +322,7 @@ async function main(): Promise<void> {
       logDebug("telegram.album.error", {
         message: error instanceof Error ? error.message : String(error),
       });
-      console.error(error);
+      logError("telegram.album.exception", { message: error instanceof Error ? error.message : String(error) });
       if (ctx.message) {
         await replyError(ctx, ctx.message.message_thread_id);
       }
@@ -453,7 +442,7 @@ async function main(): Promise<void> {
             length: String(userInput.text.length),
             ...(imageCount > 0 ? { imageCount: String(imageCount) } : {}),
           });
-          console.log(
+          logInfo(
             `Telegram message received (${userInput.text.length} chars${
               imageCount > 0 ? `, ${imageCount} image(s)` : ""
             }).`,
@@ -480,7 +469,7 @@ async function main(): Promise<void> {
       logDebug("telegram.message.error", {
         message: error instanceof Error ? error.message : String(error),
       });
-      console.error(error);
+      logError("telegram.message.exception", { message: error instanceof Error ? error.message : String(error) });
       if (ctx.message) {
         await replyError(ctx, ctx.message.message_thread_id);
       }
@@ -494,7 +483,7 @@ async function main(): Promise<void> {
 
   await traceSpan("telegram.bot.start", async () => {
     telegramRunner = startTelegramBot(telegram.bot);
-    console.log("Silas ready — listening on Telegram.");
+    logInfo("Silas ready - listening on Telegram.");
     await telegramRunner.task();
   }, { root: true });
 }

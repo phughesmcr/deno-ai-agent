@@ -1,4 +1,5 @@
 import { type Tool, tool } from "@lmstudio/sdk";
+import { walk } from "@std/fs";
 import * as path from "@std/path";
 import { z } from "zod/v3";
 
@@ -8,7 +9,7 @@ import {
   appendSearchNotices,
   commandExists,
   readStreamToString,
-  SEARCH_SKIP_DIRS,
+  searchSkipPatterns,
   toPosixPath,
 } from "./search-support.ts";
 import { DEFAULT_MAX_BYTES, formatSize, truncateHead } from "./truncate.ts";
@@ -73,30 +74,22 @@ async function walkFind(
   const re = path.globToRegExp(effectivePattern, { extended: true });
   const results: string[] = [];
 
-  async function walk(dir: string, prefix: string): Promise<void> {
+  for await (
+    const entry of walk(searchPath, {
+      includeDirs: false,
+      includeFiles: true,
+      skip: searchSkipPatterns(),
+    })
+  ) {
     signal?.throwIfAborted();
-    if (results.length >= limit) return;
-    for await (const entry of Deno.readDir(dir)) {
-      signal?.throwIfAborted();
-      if (results.length >= limit) return;
-      const rel = prefix ? `${prefix}/${entry.name}` : entry.name;
-      const fullPath = path.join(dir, entry.name);
-      const posixRel = toPosixPath(rel);
-
-      if (entry.isDirectory) {
-        if (!SEARCH_SKIP_DIRS.has(entry.name)) await walk(fullPath, posixRel);
-        continue;
-      }
-      if (entry.isFile) {
-        const absoluteCandidate = toPosixPath(fullPath);
-        if (re.test(absoluteCandidate) || re.test(posixRel)) {
-          results.push(posixRel);
-        }
-      }
+    if (results.length >= limit) break;
+    if (!entry.isFile) continue;
+    const posixRel = toPosixPath(path.relative(searchPath, entry.path));
+    const absoluteCandidate = toPosixPath(entry.path);
+    if (re.test(absoluteCandidate) || re.test(posixRel)) {
+      results.push(posixRel);
     }
   }
-
-  await walk(searchPath, "");
   return results;
 }
 

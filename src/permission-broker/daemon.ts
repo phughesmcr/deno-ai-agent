@@ -1,6 +1,6 @@
 import * as path from "@std/path";
+import { z } from "zod/v3";
 
-import { logDebug } from "../shared/log.ts";
 import {
   type ControlDecision,
   type ControlPrompt,
@@ -9,6 +9,7 @@ import {
 } from "./control-protocol.ts";
 import { ControlSocketSession } from "./control-socket.ts";
 import { JsonlConnection } from "./jsonl.ts";
+import { logDebug } from "./log.ts";
 import { normalizeAbsolutePath } from "./paths.ts";
 import { createPolicyContext, decidePolicy, type PolicyContext } from "./policy.ts";
 import { type BrokerResponse, formatBrokerResponse, normalizeBrokerValue, parseBrokerRequest } from "./protocol.ts";
@@ -26,27 +27,39 @@ export interface BrokerDaemonEnv {
   runPromptsEnabled: boolean;
 }
 
+const brokerDaemonEnvSchema = z.object({
+  SILAS_BROKER_LISTEN_PATH: z.string().optional(),
+  DENO_PERMISSION_BROKER_PATH: z.string().optional(),
+  SILAS_PERMISSION_CONTROL_PATH: z.string().min(1, "SILAS_PERMISSION_CONTROL_PATH is not set"),
+  WORKSPACE_PATH: z.string().optional().default(".silas"),
+  SILAS_PROJECT_ROOT: z.string().optional(),
+  DENO_DIR: z.string().optional(),
+  HOME: z.string().optional(),
+  PERMISSION_PROMPT_TIMEOUT_MS: z.string().optional().transform((value) => {
+    if (value === undefined || value === "") return 120_000;
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : 120_000;
+  }),
+  SILAS_PERMISSION_RUN_PROMPTS: z.string().optional().transform((value) => value === "1"),
+});
+
 /** Loads daemon configuration from environment variables. */
 export function loadBrokerDaemonEnv(): BrokerDaemonEnv {
-  const brokerPath = Deno.env.get("SILAS_BROKER_LISTEN_PATH") ?? Deno.env.get("DENO_PERMISSION_BROKER_PATH");
+  const env = brokerDaemonEnvSchema.parse(Deno.env.toObject());
+  const brokerPath = env.SILAS_BROKER_LISTEN_PATH ?? env.DENO_PERMISSION_BROKER_PATH;
   if (!brokerPath) throw new Error("SILAS_BROKER_LISTEN_PATH is not set");
-  const controlPath = Deno.env.get("SILAS_PERMISSION_CONTROL_PATH");
-  if (!controlPath) throw new Error("SILAS_PERMISSION_CONTROL_PATH is not set");
-  const workspacePath = Deno.env.get("WORKSPACE_PATH") ?? ".silas";
-  const projectRoot = Deno.env.get("SILAS_PROJECT_ROOT") ?? Deno.cwd();
-  const denoDir = Deno.env.get("DENO_DIR") ?? path.join(Deno.env.get("HOME") ?? "", ".cache", "deno");
-  const promptTimeoutMs = Number(Deno.env.get("PERMISSION_PROMPT_TIMEOUT_MS") ?? "120000");
-  const runPromptsEnabled = Deno.env.get("SILAS_PERMISSION_RUN_PROMPTS") === "1";
+  const projectRoot = env.SILAS_PROJECT_ROOT ?? Deno.cwd();
+  const denoDir = env.DENO_DIR ?? path.join(env.HOME ?? "", ".cache", "deno");
   return {
     brokerPath,
-    controlPath,
+    controlPath: env.SILAS_PERMISSION_CONTROL_PATH,
     workspacePath: normalizeAbsolutePath(
-      path.isAbsolute(workspacePath) ? workspacePath : path.join(projectRoot, workspacePath),
+      path.isAbsolute(env.WORKSPACE_PATH) ? env.WORKSPACE_PATH : path.join(projectRoot, env.WORKSPACE_PATH),
     ),
     projectRoot: normalizeAbsolutePath(projectRoot),
     denoDir: normalizeAbsolutePath(denoDir),
-    promptTimeoutMs: Number.isFinite(promptTimeoutMs) ? promptTimeoutMs : 120_000,
-    runPromptsEnabled,
+    promptTimeoutMs: env.PERMISSION_PROMPT_TIMEOUT_MS,
+    runPromptsEnabled: env.SILAS_PERMISSION_RUN_PROMPTS,
   };
 }
 

@@ -1,4 +1,5 @@
 import type { ChatMessageData } from "@lmstudio/sdk";
+import { z } from "zod/v3";
 
 /** Session event-log file format version. */
 export const FORMAT_VERSION = 3 as const;
@@ -91,10 +92,54 @@ export interface SessionLog {
 const SESSION_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const SESSION_NAME_PATTERN = /^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$/;
 
+const sessionNameSchema = z.string().regex(SESSION_NAME_PATTERN).refine((name) => !isValidSessionId(name));
+
+const sessionHeaderSchema = z.object({
+  version: z.union([z.literal(FORMAT_VERSION), z.literal(LEGACY_FORMAT_VERSION)]),
+  id: z.string(),
+  createdAt: z.string(),
+  name: sessionNameSchema.optional(),
+});
+
+const sessionFileDetailsSchema = z.object({
+  readFiles: z.array(z.string()),
+  modifiedFiles: z.array(z.string()),
+});
+
+const chatMessageDataSchema = z.custom<ChatMessageData>((value) => {
+  return value !== null && typeof value === "object" && "role" in value;
+});
+
+const sessionMessageEntrySchema = z.object({
+  type: z.literal("message"),
+  id: z.string(),
+  createdAt: z.string(),
+  message: chatMessageDataSchema,
+});
+
+const sessionCompactionEntrySchema = z.object({
+  type: z.literal("compaction"),
+  id: z.string(),
+  createdAt: z.string(),
+  summary: z.string(),
+  firstKeptEntryId: z.string().nullable(),
+  tokensBefore: z.number(),
+  tokensAfter: z.number(),
+  reason: z.enum(["auto", "manual"]),
+  details: sessionFileDetailsSchema,
+});
+
+const sessionEntrySchema = z.discriminatedUnion("type", [
+  sessionMessageEntrySchema,
+  sessionCompactionEntrySchema,
+]);
+
+/** Returns true when `id` is a v4 UUID accepted as a session id. */
 export function isValidSessionId(id: string): boolean {
   return SESSION_ID_PATTERN.test(id);
 }
 
+/** Returns true when `name` is a safe user-facing session alias. */
 export function isValidSessionName(name: string): boolean {
   return SESSION_NAME_PATTERN.test(name) && !isValidSessionId(name);
 }
@@ -107,20 +152,11 @@ function assertValidSessionName(name: string): void {
   if (!isValidSessionName(name)) throw new Error("Invalid session name");
 }
 
-function isSupportedHeaderVersion(version: unknown): version is SessionHeader["version"] {
-  return version === FORMAT_VERSION || version === LEGACY_FORMAT_VERSION;
-}
-
 function assertSessionHeader(value: unknown, expectedId: string): asserts value is SessionHeader {
-  if (!value || typeof value !== "object") throw new Error("Invalid session JSONL header");
-  const header = value as Partial<SessionHeader>;
-  if (!isSupportedHeaderVersion(header.version)) throw new Error("Invalid session JSONL header");
+  const result = sessionHeaderSchema.safeParse(value);
+  if (!result.success) throw new Error("Invalid session JSONL header");
+  const header = result.data;
   if (header.id !== expectedId) throw new Error(`Session file id mismatch: expected ${expectedId}, got ${header.id}`);
-  if (typeof header.createdAt !== "string") throw new Error("Invalid session JSONL header");
-  if (header.name !== undefined) {
-    if (typeof header.name !== "string") throw new Error("Invalid session JSONL header");
-    assertValidSessionName(header.name);
-  }
 }
 
 function serializeHeader(header: SessionHeader): string {
@@ -133,46 +169,14 @@ function serializeHeader(header: SessionHeader): string {
   return JSON.stringify(payload);
 }
 
-function assertFileDetails(value: unknown): asserts value is SessionFileDetails {
-  if (!value || typeof value !== "object") throw new Error("Invalid compaction details");
-  const details = value as Partial<SessionFileDetails>;
-  if (!Array.isArray(details.readFiles) || !details.readFiles.every((item) => typeof item === "string")) {
-    throw new Error("Invalid compaction details");
-  }
-  if (!Array.isArray(details.modifiedFiles) || !details.modifiedFiles.every((item) => typeof item === "string")) {
-    throw new Error("Invalid compaction details");
-  }
-}
-
 function assertSessionEntry(value: unknown, line: number): asserts value is SessionEntry {
-  if (!value || typeof value !== "object") throw new Error(`Invalid session JSONL entry at line ${line}`);
-  const entry = value as Partial<SessionEntry>;
-  if (entry.type === "message") {
-    if (typeof entry.id !== "string" || typeof entry.createdAt !== "string") {
-      throw new Error(`Invalid message entry at line ${line}`);
-    }
-    if (!entry.message || typeof entry.message !== "object" || !("role" in entry.message)) {
-      throw new Error(`Invalid message entry at line ${line}`);
-    }
-    return;
-  }
-
-  if (entry.type === "compaction") {
-    if (
-      typeof entry.id !== "string" ||
-      typeof entry.createdAt !== "string" ||
-      typeof entry.summary !== "string" ||
-      (typeof entry.firstKeptEntryId !== "string" && entry.firstKeptEntryId !== null) ||
-      typeof entry.tokensBefore !== "number" ||
-      typeof entry.tokensAfter !== "number" ||
-      (entry.reason !== "auto" && entry.reason !== "manual")
-    ) {
-      throw new Error(`Invalid compaction entry at line ${line}`);
-    }
-    assertFileDetails(entry.details);
-    return;
-  }
-
+  const result = sessionEntrySchema.safeParse(value);
+  if (result.success) return;
+  const type = value !== null && typeof value === "object" && "type" in value ?
+    (value as { type?: unknown }).type :
+    undefined;
+  if (type === "message") throw new Error(`Invalid message entry at line ${line}`);
+  if (type === "compaction") throw new Error(`Invalid compaction entry at line ${line}`);
   throw new Error(`Invalid session JSONL entry at line ${line}`);
 }
 

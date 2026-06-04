@@ -1,8 +1,19 @@
 import { assertEquals } from "jsr:@std/assert@1";
 
-import { createTelegramApprovalGate, encodeApprovalCallback } from "../../src/telegram/approval-gate.ts";
+import {
+  createTelegramApprovalGate,
+  encodeApprovalCallback,
+  type TelegramApprovalCallbackContext,
+  type TelegramApprovalTurnContext,
+} from "../../src/telegram/approval-gate.ts";
 
-function fakeContext(adminId = 42) {
+type FakeApprovalContext = TelegramApprovalTurnContext & TelegramApprovalCallbackContext & {
+  replies: string[];
+  callbackAnswers: string[];
+  markupsEdited: number;
+};
+
+function fakeContext(adminId = 42): FakeApprovalContext {
   return {
     config: { adminId, isAdmin: true },
     from: { id: adminId },

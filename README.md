@@ -69,7 +69,7 @@ Send a **photo** or image **document** (JPEG, PNG, WebP) with an optional captio
 | `OTEL_EXPORTER_OTLP_ENDPOINT`   | OTLP HTTP endpoint (default: `http://localhost:4318`)                                  |
 | `OTEL_EXPORTER_OTLP_PROTOCOL`   | `http/protobuf` (default), `console`, or `grpc`                                        |
 | `LOG_LEVEL`                     | Set to `debug` for token/context stats (no message bodies)                             |
-| `SILAS_BROKER_LISTEN_PATH`      | Unix socket the broker daemon listens on (`deno task start:all`)                       |
+| `SILAS_BROKER_LISTEN_PATH`      | Unix socket the broker daemon listens on (`deno task start`)                           |
 | `DENO_PERMISSION_BROKER_PATH`   | Same path for Silas; Deno connects as broker client (do not set on the daemon process) |
 | `SILAS_PERMISSION_CONTROL_PATH` | Unix socket between broker daemon and main for Telegram prompts                        |
 | `SILAS_PERMISSION_RUN_PROMPTS`  | Set to `1` to prompt in Telegram for each distinct `run` permission (shell)            |
@@ -79,11 +79,23 @@ Send a **photo** or image **document** (JPEG, PNG, WebP) with an optional captio
 
 Copy `.env.example` to `.env` and fill in values.
 
-### Permission broker (optional)
+### Permission Broker
 
-For centralized Deno runtime permissions with Telegram approve/deny, copy the broker variables from `.env.example` into `.env`, then use either layout below.
+`deno task start` is broker-backed by default. It starts a sidecar permission broker, then runs Silas with `DENO_PERMISSION_BROKER_PATH` so Deno permission requests are handled by the daemon policy and Telegram prompts.
 
-**Two terminals (recommended for debugging)** — broker and agent must share the same socket paths from `.env`:
+**One terminal (default):**
+
+```sh
+deno task start
+```
+
+With OpenTelemetry:
+
+```sh
+deno task start:otel
+```
+
+**Two terminals (debugging)** — broker and agent must share the same socket paths from `.env`:
 
 ```sh
 # Terminal 1
@@ -95,19 +107,19 @@ deno task agent:broker:otel
 
 Do **not** run `start:all` / `start:all:otel` in terminal 2; those scripts delete the sockets and spawn another broker.
 
-**One terminal:**
+Unsafe direct mode is available only for debugging broad-permission behavior:
 
 ```sh
-deno task start:all
+deno task start:unsafe
 ```
 
 With OpenTelemetry:
 
 ```sh
-deno task start:all:otel
+deno task start:unsafe:otel
 ```
 
-This starts a sidecar broker (`deno task broker`) then Silas with `DENO_PERMISSION_BROKER_PATH` and `-A`. CLI `--allow-*` flags are ignored while the broker is active; the daemon applies workspace-aware auto-policy and sends ambiguous requests (and every distinct `run`) to the admin chat. Silas waits for the control client to register before loading so startup is not blocked by `prompt`→deny races.
+The broker daemon applies workspace-aware auto-policy and sends ambiguous requests (and every distinct `run` when enabled) to the admin chat. Silas waits for the control client to register before loading so startup is not blocked by prompt-deny races.
 
 - **Allow once / Allow session / Deny** inline buttons handle runtime prompts (`pm:` callbacks).
 - Deno `read`/`write` outside the workspace (including under `$HOME`, e.g. `~/.codex/`) are **prompted**; `/etc`, `/.ssh`, and repo `src/` stay auto-denied.
@@ -143,7 +155,7 @@ Silas exposes twelve tools: eight filesystem/shell tools (pi-aligned) — `read`
 
 The `skill` tool lists available workspace skills in its description, returns the selected skill body wrapped as protected context, and lists files under that skill's `scripts/`, `references/`, and `assets/` directories without reading them eagerly. `allowed-tools` is metadata only; it does not pre-approve shell or file actions. Bundled TypeScript scripts should be run explicitly by the agent with `deno run --allow-`* permissions and `jsr:`/`npm:` imports.
 
-Most file tools are scoped to `WORKSPACE_PATH` (e.g. `.silas/`); `read` can also open host paths via absolute or `~/` paths with approval. The bot cannot modify application source under `src/` via tools. `bash` and `typescript-repl` require `--allow-run` (included in `deno task start`). Optional `rg` and `fd` on PATH speed up search; built-in fallbacks work without them.
+Most file tools are scoped to `WORKSPACE_PATH` (e.g. `.silas/`); `read` can also open host paths via absolute or `~/` paths with approval. The bot cannot modify application source under `src/` via tools. `bash` and `typescript-repl` require run permission, which broker mode prompts for when enabled. Optional `rg` and `fd` on PATH speed up search; built-in fallbacks work without them.
 
 The `subagent` tool tracks subagents per current session with in-memory Deno KV. Subagents can only use `read`, `grep`, `find`, `ls`, and `skill`; they cannot mutate files, run shell commands, ask the user, manage todos, or spawn nested subagents. Jobs survive only for the current bot process.
 
@@ -191,7 +203,7 @@ After messaging the bot, open Jaeger → **Search** → service `**deno-ai-agent
 
 | Task                                                       | Use when                                                |
 | ---------------------------------------------------------- | ------------------------------------------------------- |
-| `deno task start:otel:console`                             | Print spans/metrics/logs to stderr; no collector        |
+| `deno task start:unsafe:otel:console`                      | Print spans/metrics/logs to stderr; no collector        |
 | `deno task otel:collector:jaeger` + `deno task start:otel` | Forward traces to Jaeger and print collector debug logs |
 
 

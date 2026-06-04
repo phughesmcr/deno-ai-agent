@@ -1,85 +1,69 @@
+import { z } from "zod/v3";
+
+const controlRegisterSchema = z.object({
+  type: z.literal("register"),
+  pid: z.number(),
+});
+
+const controlPromptSchema = z.object({
+  type: z.literal("prompt"),
+  requestId: z.string().min(1),
+  brokerId: z.number(),
+  permission: z.string().min(1),
+  value: z.union([z.string(), z.null(), z.undefined()]).transform((value) => value ?? null),
+});
+
+const controlDecisionSchema = z.object({
+  type: z.literal("decision"),
+  requestId: z.string().min(1),
+  result: z.enum(["allow", "deny"]),
+  grant: z.enum(["once", "session"]).optional(),
+});
+
+const controlAbortSchema = z.object({
+  type: z.literal("abort"),
+  requestId: z.string().min(1).optional(),
+});
+
+const controlGrantSchema = z.object({
+  type: z.literal("grant"),
+  permission: z.string().min(1),
+  value: z.union([z.string(), z.null(), z.undefined()]).transform((value) => value ?? null),
+  scope: z.enum(["once", "session"]),
+});
+
+const controlMessageSchema = z.discriminatedUnion("type", [
+  controlRegisterSchema,
+  controlPromptSchema,
+  controlDecisionSchema,
+  controlAbortSchema,
+  controlGrantSchema,
+]);
+
 /** Control channel: main registers with the broker daemon. */
-export interface ControlRegister {
-  type: "register";
-  pid: number;
-}
+export type ControlRegister = z.infer<typeof controlRegisterSchema>;
 
 /** Control channel: daemon asks main to show a Telegram prompt. */
-export interface ControlPrompt {
-  type: "prompt";
-  requestId: string;
-  brokerId: number;
-  permission: string;
-  value: string | null;
-}
+export type ControlPrompt = z.infer<typeof controlPromptSchema>;
 
 /** Control channel: main returns the user's decision. */
-export interface ControlDecision {
-  type: "decision";
-  requestId: string;
-  result: "allow" | "deny";
-  grant?: "once" | "session";
-}
+export type ControlDecision = z.infer<typeof controlDecisionSchema>;
 
 /** Control channel: cancel a pending prompt. */
-export interface ControlAbort {
-  type: "abort";
-  requestId?: string;
-}
+export type ControlAbort = z.infer<typeof controlAbortSchema>;
 
 /** Control channel: main pre-grants a permission in the broker session cache. */
-export interface ControlGrant {
-  type: "grant";
-  permission: string;
-  value: string | null;
-  scope: "once" | "session";
-}
+export type ControlGrant = z.infer<typeof controlGrantSchema>;
 
 /** All control messages. */
-export type ControlMessage = ControlRegister | ControlPrompt | ControlDecision | ControlAbort | ControlGrant;
+export type ControlMessage = z.infer<typeof controlMessageSchema>;
 
 /** Parses a control JSONL line. */
 export function parseControlMessage(line: string): ControlMessage {
-  const parsed: unknown = JSON.parse(line.trim());
-  if (!parsed || typeof parsed !== "object") throw new Error("invalid control message");
-  const record = parsed as Record<string, unknown>;
-  const type = String(record["type"]);
-  switch (type) {
-    case "register":
-      return { type: "register", pid: Number(record["pid"]) };
-    case "prompt":
-      return {
-        type: "prompt",
-        requestId: String(record["requestId"]),
-        brokerId: Number(record["brokerId"]),
-        permission: String(record["permission"]),
-        value: record["value"] === null || record["value"] === undefined ? null : String(record["value"]),
-      };
-    case "decision":
-      return {
-        type: "decision",
-        requestId: String(record["requestId"]),
-        result: record["result"] === "allow" ? "allow" : "deny",
-        grant: record["grant"] === "session" ? "session" : record["grant"] === "once" ? "once" : undefined,
-      };
-    case "abort":
-      return {
-        type: "abort",
-        requestId: record["requestId"] === undefined ? undefined : String(record["requestId"]),
-      };
-    case "grant":
-      return {
-        type: "grant",
-        permission: String(record["permission"]),
-        value: record["value"] === null || record["value"] === undefined ? null : String(record["value"]),
-        scope: record["scope"] === "once" ? "once" : "session",
-      };
-    default:
-      throw new Error(`unknown control message type: ${type}`);
-  }
+  return controlMessageSchema.parse(JSON.parse(line.trim()));
 }
 
 /** Serializes a control message with trailing newline. */
 export function formatControlMessage(message: ControlMessage): string {
-  return `${JSON.stringify(message)}\n`;
+  return `${JSON.stringify(controlMessageSchema.parse(message))}\n`;
 }

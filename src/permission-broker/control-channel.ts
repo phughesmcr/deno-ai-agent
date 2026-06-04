@@ -1,5 +1,6 @@
 import { formatControlMessage } from "./control-protocol.ts";
 import { ControlSocketSession } from "./control-socket.ts";
+import { logError } from "./log.ts";
 
 const CONTROL_WRITE_TIMEOUT_MS = 5_000;
 
@@ -53,8 +54,8 @@ export async function writeControlLine(line: string, signal?: AbortSignal): Prom
 export async function sendControlGrant(
   permission: string,
   value: string | null,
-  scope: "once" | "session" = "session",
   signal?: AbortSignal,
+  scope: "once" | "session" = "session",
 ): Promise<void> {
   if (!controlSession.isAttached()) return;
   const line = formatControlMessage({ type: "grant", permission, value, scope });
@@ -62,6 +63,6 @@ export async function sendControlGrant(
     await writeControlLine(line, signal);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    console.error(`Control grant failed (${permission}): ${message}`);
+    logError("permission_broker.control_grant_failed", { permission, message });
   }
 }

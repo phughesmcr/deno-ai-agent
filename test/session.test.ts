@@ -128,11 +128,11 @@ function recordingObserver(events: string[]): ModelActObserver {
 function withDebugLogs(fn: () => Promise<void>): Promise<string[]> {
   const previousLevel = Deno.env.get("LOG_LEVEL");
   const lines: string[] = [];
-  // deno-lint-ignore no-console
-  const originalError = console.error;
-  // deno-lint-ignore no-console
-  console.error = (...args: unknown[]): void => {
-    lines.push(args.map(String).join(" "));
+  const decoder = new TextDecoder();
+  const originalWriteSync = Deno.stderr.writeSync.bind(Deno.stderr);
+  Deno.stderr.writeSync = (data: Uint8Array): number => {
+    lines.push(...decoder.decode(data).trimEnd().split("\n").filter((line) => line.length > 0));
+    return data.length;
   };
   Deno.env.set("LOG_LEVEL", "debug");
 
@@ -142,8 +142,7 @@ function withDebugLogs(fn: () => Promise<void>): Promise<string[]> {
       throw error;
     },
   ).finally(() => {
-    // deno-lint-ignore no-console
-    console.error = originalError;
+    Deno.stderr.writeSync = originalWriteSync;
     if (previousLevel === undefined) {
       Deno.env.delete("LOG_LEVEL");
     } else {

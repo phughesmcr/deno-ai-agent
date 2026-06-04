@@ -11,7 +11,7 @@ export async function grantBrokerRunValues(values: readonly string[], signal?: A
   for (const value of new Set(values)) {
     if (signal?.aborted) return;
     // deno-lint-ignore no-await-in-loop -- Grant frames must stay in order on the control socket.
-    await sendControlGrant("run", value, "session", signal);
+    await sendControlGrant("run", value, signal);
   }
 }
 

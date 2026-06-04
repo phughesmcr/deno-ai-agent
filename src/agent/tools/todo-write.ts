@@ -51,6 +51,37 @@ export interface TodoWriteDeps {
 
 const SESSION_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 
+const persistedTodoItemSchema = z.object({
+  id: z.string().trim().min(1),
+  content: z.string().trim().min(1),
+  status: z.enum(["pending", "in_progress", "completed"]),
+});
+
+const todoWriteParamsSchema = z.object({
+  todos: z.array(persistedTodoItemSchema),
+}).superRefine((params, ctx) => {
+  const ids = params.todos.map((todo) => todo.id);
+  if (ids.length !== new Set(ids).size) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: "Todo IDs must be unique within the array.",
+      path: ["todos"],
+    });
+  }
+});
+
+const todoTelegramMetaSchema = z.object({
+  chatId: z.number(),
+  threadId: z.number().optional(),
+  messageId: z.number(),
+});
+
+const todoFileSchema = z.object({
+  sessionId: z.string().regex(SESSION_ID_PATTERN),
+  todos: z.array(persistedTodoItemSchema),
+  telegram: todoTelegramMetaSchema.optional(),
+});
+
 function assertValidSessionId(id: string): void {
   if (!SESSION_ID_PATTERN.test(id)) throw new Error("Invalid session id");
 }
@@ -82,24 +113,31 @@ export function detectTodoChanges(oldTodos: TodoItem[], newTodos: TodoItem[]): T
  * @returns Error message or null if valid.
  */
 export function validateTodoWriteParams(params: TodoWriteParams): string | null {
+  if (!params || typeof params !== "object") {
+    return 'Parameter "todos" must be an array.';
+  }
   if (!Array.isArray(params.todos)) {
     return 'Parameter "todos" must be an array.';
   }
 
-  for (const todo of params.todos) {
-    if (!todo.id || typeof todo.id !== "string" || todo.id.trim() === "") {
+  for (const todo of params.todos as unknown[]) {
+    const record = todo as Partial<TodoItem>;
+    if (!record.id || typeof record.id !== "string" || record.id.trim() === "") {
       return 'Each todo must have a non-empty "id" string.';
     }
-    if (!todo.content || typeof todo.content !== "string" || todo.content.trim() === "") {
+    if (!record.content || typeof record.content !== "string" || record.content.trim() === "") {
       return 'Each todo must have a non-empty "content" string.';
     }
-    if (!["pending", "in_progress", "completed"].includes(todo.status)) {
+    if (!persistedTodoItemSchema.shape.status.safeParse(record.status).success) {
       return 'Each todo must have a valid "status" (pending, in_progress, completed).';
     }
   }
 
-  const ids = params.todos.map((todo) => todo.id);
-  if (ids.length !== new Set(ids).size) {
+  const result = todoWriteParamsSchema.safeParse(params);
+  if (
+    !result.success &&
+    result.error.issues.some((issue) => issue.message === "Todo IDs must be unique within the array.")
+  ) {
     return "Todo IDs must be unique within the array.";
   }
 
@@ -110,19 +148,18 @@ async function readTodoFileRaw(todosDir: string, sessionId: string): Promise<Tod
   const path = todoFilePath(todosDir, sessionId);
   try {
     const content = await Deno.readTextFile(path);
-    const parsed: unknown = JSON.parse(content);
-    if (parsed && typeof parsed === "object" && "todos" in parsed) {
-      const file = parsed as TodoFile;
-      return {
-        sessionId,
-        todos: Array.isArray(file.todos) ? file.todos : [],
-        telegram: file.telegram,
-      };
-    }
-    return { sessionId, todos: [] };
+    const parsed = todoFileSchema.parse(JSON.parse(content));
+    return {
+      sessionId,
+      todos: parsed.todos,
+      telegram: parsed.telegram,
+    };
   } catch (error) {
     if (error instanceof Deno.errors.NotFound) {
       return { sessionId, todos: [] };
+    }
+    if (error instanceof SyntaxError || error instanceof z.ZodError) {
+      throw new Error(`Invalid todo file for session ${sessionId}: ${error.message}`);
     }
     throw error;
   }

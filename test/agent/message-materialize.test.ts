@@ -32,7 +32,7 @@ Deno.test("materializeMessageForChat returns plain message when no images", () =
 Deno.test("materializeMessageForChat uses placeholders when rehydrate fails", () => {
   const client = {
     files: {
-      createFileHandleFromChatMessagePartFileData() {
+      createFileHandleFromChatMessagePartFileData(): never {
         throw new Error("file gone");
       },
     },

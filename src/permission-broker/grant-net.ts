@@ -13,5 +13,5 @@ export function brokerNetValueForUrl(url: URL): string {
  * @internal
  */
 export async function grantBrokerNetUrl(url: URL, scope: BrokerGrantScope = "session"): Promise<void> {
-  await sendControlGrant("net", brokerNetValueForUrl(url), scope);
+  await sendControlGrant("net", brokerNetValueForUrl(url), undefined, scope);
 }

@@ -12,7 +12,9 @@ export {
   denyDecision,
   requireApproval,
 } from "./approval.ts";
-export { logDebug } from "./log.ts";
+export { loadAppConfig, loadBrokerEnvConfig, loadReasoningEnvConfig, loadTelegramConfig } from "./config.ts";
+export type { AppConfig, BrokerEnvConfig, ReasoningEnvConfig, TelegramConfig } from "./config.ts";
+export { logDebug, logError, logInfo } from "./log.ts";
 export {
   SERVICE_NAME,
   SERVICE_VERSION,

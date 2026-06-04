@@ -1,19 +1,25 @@
+import { z } from "zod/v3";
+
+const brokerRequestSchema = z.object({
+  v: z.number(),
+  pid: z.number(),
+  id: z.number(),
+  datetime: z.string(),
+  permission: z.string().min(1),
+  value: z.union([z.string(), z.null(), z.undefined()]).transform((value) => value ?? null),
+});
+
+const brokerResponseSchema = z.object({
+  id: z.number(),
+  result: z.enum(["allow", "deny"]),
+  reason: z.string().optional(),
+});
+
 /** Deno permission broker request (v1). */
-export interface BrokerRequest {
-  v: number;
-  pid: number;
-  id: number;
-  datetime: string;
-  permission: string;
-  value: string | null;
-}
+export type BrokerRequest = z.infer<typeof brokerRequestSchema>;
 
 /** Deno permission broker response. */
-export interface BrokerResponse {
-  id: number;
-  result: "allow" | "deny";
-  reason?: string;
-}
+export type BrokerResponse = z.infer<typeof brokerResponseSchema>;
 
 /** Policy decision before human escalation. */
 export type PolicyDecision = "auto_allow" | "auto_deny" | "prompt";
@@ -38,20 +44,10 @@ export function normalizeBrokerValue(value: string | null): string | null {
 
 /** Parses one JSONL broker request line. */
 export function parseBrokerRequest(line: string): BrokerRequest {
-  const parsed: unknown = JSON.parse(line.trim());
-  if (!parsed || typeof parsed !== "object") throw new Error("invalid broker request");
-  const record = parsed as Record<string, unknown>;
-  return {
-    v: Number(record["v"]),
-    pid: Number(record["pid"]),
-    id: Number(record["id"]),
-    datetime: String(record["datetime"]),
-    permission: String(record["permission"]),
-    value: record["value"] === null || record["value"] === undefined ? null : String(record["value"]),
-  };
+  return brokerRequestSchema.parse(JSON.parse(line.trim()));
 }
 
 /** Serializes a broker response line (includes trailing newline). */
 export function formatBrokerResponse(response: BrokerResponse): string {
-  return `${JSON.stringify(response)}\n`;
+  return `${JSON.stringify(brokerResponseSchema.parse(response))}\n`;
 }

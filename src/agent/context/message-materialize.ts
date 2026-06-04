@@ -18,7 +18,7 @@ export function imageFileParts(data: ChatMessageData): ChatMessagePartFileData[]
 }
 
 function placeholderLine(name: string): string {
-  return `${PLACEHOLDER_PREFIX} ${name} — not available after reload]`;
+  return `${PLACEHOLDER_PREFIX} ${name} - not available after reload]`;
 }
 
 function textOnlyData(data: ChatMessageData): ChatMessageData {

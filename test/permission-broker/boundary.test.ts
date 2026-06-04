@@ -1,15 +1,13 @@
 import { assertEquals } from "jsr:@std/assert@1";
+import { walk } from "@std/fs";
 import * as path from "@std/path";
 
 async function collectTsFiles(dir: string): Promise<string[]> {
   const files: string[] = [];
-  for await (const entry of Deno.readDir(dir)) {
-    const absolutePath = path.join(dir, entry.name);
-    if (entry.isDirectory) {
-      files.push(...await collectTsFiles(absolutePath));
-      continue;
+  for await (const entry of walk(dir, { exts: [".ts"], includeDirs: false })) {
+    if (entry.isFile) {
+      files.push(entry.path);
     }
-    if (entry.isFile && entry.name.endsWith(".ts")) files.push(absolutePath);
   }
   return files;
 }

@@ -8,6 +8,15 @@ export function toPosixPath(value: string): string {
   return value.split(path.SEPARATOR).join("/");
 }
 
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+/** Regexes for `@std/fs/walk` skip directories used by search fallbacks. */
+export function searchSkipPatterns(): RegExp[] {
+  return [...SEARCH_SKIP_DIRS].map((name) => new RegExp(`(^|[/\\\\])${escapeRegExp(name)}([/\\\\]|$)`));
+}
+
 export async function commandExists(name: string, signal?: AbortSignal): Promise<boolean> {
   await grantBrokerRunForCommands(["which"], signal);
   try {

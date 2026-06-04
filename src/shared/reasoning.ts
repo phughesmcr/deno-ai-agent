@@ -30,43 +30,18 @@ export interface ActReasoningParsing {
 const DEFAULT_REASONING_START = "<think>";
 const DEFAULT_REASONING_END = "</think>";
 
-function envFlag(key: string, defaultValue: boolean): boolean {
-  const raw = Deno.env.get(key);
-  if (raw === undefined || raw === "") return defaultValue;
-  return raw !== "false" && raw !== "0";
-}
-
-function reasoningEnabled(): boolean {
-  return envFlag("REASONING_ENABLED", true);
-}
-
-/** LM Studio `reasoningParsing` on `model.act()` — default off (Gemma and similar templates break when on). */
-function reasoningActParsingEnabled(): boolean {
-  return envFlag("REASONING_ACT_PARSING", true);
-}
-
-function keepThinkingInSession(): boolean {
-  const raw = Deno.env.get("KEEP_THINKING");
-  if (raw === undefined || raw === "") return true;
-  return raw !== "false" && raw !== "0";
-}
-
-function reasoningTag(key: "REASONING_START" | "REASONING_END", fallback: string): string {
-  const value = Deno.env.get(key);
-  return value ? value : fallback;
-}
-
 function stripReasoningTags(text: string, start: string, end: string): string {
   return text.replaceAll(start, "").replaceAll(end, "").trim();
 }
 
 /** Reads `REASONING_*` and `KEEP_THINKING` environment variables (defaults match `.env.example`). */
 export function getReasoningConfig(): ReasoningConfig {
+  const env = loadReasoningEnvConfig();
   return {
-    enabled: reasoningEnabled(),
-    start: reasoningTag("REASONING_START", DEFAULT_REASONING_START),
-    end: reasoningTag("REASONING_END", DEFAULT_REASONING_END),
-    keepThinking: keepThinkingInSession(),
+    enabled: env.REASONING_ENABLED,
+    start: env.REASONING_START || DEFAULT_REASONING_START,
+    end: env.REASONING_END || DEFAULT_REASONING_END,
+    keepThinking: env.KEEP_THINKING,
   };
 }
 
@@ -94,7 +69,7 @@ export function persistedModelText(text: string): string {
  * Returns `undefined` for models whose LM Studio prompt template does not support reasoning (e.g. Gemma).
  */
 export function getActReasoningParsing(): ActReasoningParsing | undefined {
-  if (!reasoningActParsingEnabled()) return undefined;
+  if (!loadReasoningEnvConfig().REASONING_ACT_PARSING) return undefined;
   const { enabled, start, end } = getReasoningConfig();
   if (!enabled) return undefined;
   return { enabled: true, startString: start, endString: end };
@@ -105,3 +80,4 @@ export function actReasoningParsingOption(): { readonly reasoningParsing: ActRea
   const reasoningParsing = getActReasoningParsing();
   return reasoningParsing ? { reasoningParsing } : undefined;
 }
+import { loadReasoningEnvConfig } from "./config.ts";

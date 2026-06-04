@@ -1,9 +1,13 @@
 import { context, type Span, SpanKind, SpanStatusCode, trace } from "@opentelemetry/api";
 
+/** Default OpenTelemetry service name for Silas. */
 export const SERVICE_NAME = "deno-ai-agent";
+/** Default OpenTelemetry service version for Silas. */
 export const SERVICE_VERSION = "0.0.1";
 
+/** Primitive attribute values accepted by the telemetry helper layer. */
 export type TelemetryAttributeValue = string | number | boolean;
+/** Attribute bag accepted by the telemetry helper layer. */
 export type TelemetryAttributes = Record<string, TelemetryAttributeValue>;
 
 const tracer = trace.getTracer(SERVICE_NAME, SERVICE_VERSION);

@@ -1,4 +1,3 @@
-import { logDebug } from "../shared/log.ts";
 import {
   attachControlConnection,
   detachControlConnection,
@@ -11,6 +10,7 @@ import {
   formatControlMessage,
   parseControlMessage,
 } from "./control-protocol.ts";
+import { logDebug } from "./log.ts";
 import type { PermissionPromptPort } from "./permission-prompt-port.ts";
 
 /** Options for the permission broker control client. */
