@@ -4,7 +4,12 @@ import { traceSpan } from "../shared/otel.ts";
 import { createModelActObserver, tokenBucket } from "./act-telemetry.ts";
 import { createSummaryCompactor } from "./context/compactor.ts";
 import { SessionStore } from "./context/session-store.ts";
-import { SessionManager, type SessionTurnResult } from "./context/session.ts";
+import {
+  type AgentSessions,
+  LmStudioModelTurnPort,
+  PersistentAgentSessions,
+  type SessionTurnResult,
+} from "./context/session.ts";
 import type { LMStudioManager } from "./lmstudio.ts";
 import type { ToolCallGuard } from "./tools/authorization.ts";
 import { normalizeUserTurnInput, type UserTurnInput } from "./user-turn.ts";
@@ -12,8 +17,8 @@ import type { Workspace } from "./workspace.ts";
 
 /** Wired agent: session state and LM Studio model. */
 export interface Agent {
-  /** Conversation session manager. */
-  readonly session: SessionManager;
+  /** Conversation sessions facade. */
+  readonly sessions: AgentSessions;
   /** LM Studio client and model. */
   readonly lmstudio: LMStudioManager;
 }
@@ -35,25 +40,30 @@ export async function createAgent(spec: CreateAgentOptions): Promise<Agent> {
   const { workspace, lmstudio, maxContextLength, signal } = spec;
 
   const store = new SessionStore(workspace.sessionsDir);
-  const session = new SessionManager({
+  const model = new LmStudioModelTurnPort({
     client: lmstudio.client,
     model: lmstudio.model,
+  });
+  const sessions = new PersistentAgentSessions({
+    model,
     store,
     systemPrompt: workspace.systemPrompt,
     maxContextLength,
-    compactor: createSummaryCompactor(lmstudio.model, signal),
+    summary: {
+      summarize: createSummaryCompactor(lmstudio.model, signal),
+    },
   });
 
-  await session.refreshStatus();
+  await sessions.status({ refresh: true });
 
   workspace.subscribeToFsEvents(async (event) => {
     if (event.kind === "modify" && event.paths.at(-1)?.endsWith("SYSTEM.md")) {
       const prompt = await workspace.reloadSystemPrompt();
-      await session.applySystemPrompt(prompt);
+      await sessions.applySystemPrompt(prompt);
     }
   });
 
-  return { session, lmstudio };
+  return { sessions, lmstudio };
 }
 
 /** Result of a single user turn through the model. */
@@ -78,7 +88,7 @@ export async function runTurn(
   userInput: string | UserTurnInput,
   options: RunTurnOptions,
 ): Promise<TurnResult> {
-  const { session } = agent;
+  const { sessions } = agent;
   const { tools, guardToolCall, signal } = options;
   const input = normalizeUserTurnInput(userInput);
 
@@ -91,7 +101,7 @@ export async function runTurn(
       const imageCount = input.images?.length ?? 0;
       if (imageCount > 0) actSpan.setAttribute("user.images.count", imageCount);
 
-      result = await session.runTurn(input, {
+      result = await sessions.turn(input, {
         tools,
         guardToolCall,
         signal,

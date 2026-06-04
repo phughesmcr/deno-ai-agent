@@ -1,7 +1,7 @@
 import { Bot, type Context, GrammyError, HttpError } from "grammy";
 
 import { questions, type QuestionsFlavor } from "grammy-questions";
-import type { AskUserQuestionPort, SessionManager, TodoTelegramMeta } from "../agent/mod.ts";
+import type { AgentSessions, AskUserQuestionPort, TodoTelegramMeta } from "../agent/mod.ts";
 import type { PermissionCallbackDispatch } from "../permission-broker/mod.ts";
 import { loadTelegramConfig, logDebug } from "../shared/mod.ts";
 import { installConcurrentUpdates } from "./bot-runner.ts";
@@ -83,7 +83,7 @@ export function createTelegramManager({
   todosDir,
   updateTelegramMeta,
 }: {
-  session: SessionManager;
+  session: AgentSessions;
   onAdminStart: (ctx: TelegramContext) => Promise<void>;
   userQuestions?: AskUserQuestionPort;
   permissionPrompts?: TelegramPermissionPromptPort;
@@ -197,7 +197,7 @@ export function createTelegramManager({
 
   bot.command("session", async (ctx: TelegramContext) => {
     if (blockIfInteractionPending(ctx)) return;
-    await ctx.reply(commands.session());
+    await ctx.reply(await commands.session());
   });
 
   bot.command("stats", async (ctx: TelegramContext) => {
@@ -246,7 +246,7 @@ export function createTelegramManager({
       return;
     }
     try {
-      await showTodosForSession(ctx, session.id, todosDir, updateTelegramMeta);
+      await showTodosForSession(ctx, session.current.id, todosDir, updateTelegramMeta);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       await ctx.reply(`Failed to show todos: ${message}`);

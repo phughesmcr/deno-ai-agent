@@ -194,11 +194,11 @@ function parseJsonLine(line: string, lineNumber: number): unknown {
  * @internal
  */
 export class SessionStore {
-  readonly #dir: string;
+  private readonly _dir: string;
 
   /** @param sessionsDir Directory containing `{id}.jsonl` session files. */
   constructor(sessionsDir: string) {
-    this.#dir = sessionsDir;
+    this._dir = sessionsDir;
   }
 
   /** Creates an empty v3 session log if it does not already exist. */
@@ -208,7 +208,7 @@ export class SessionStore {
     const name = options?.name;
     if (name !== undefined) {
       assertValidSessionName(name);
-      await this.#assertNameAvailable(name);
+      await this._assertNameAvailable(name);
     }
     const header: SessionHeader = {
       version: FORMAT_VERSION,
@@ -216,13 +216,13 @@ export class SessionStore {
       createdAt: new Date().toISOString(),
       ...(name !== undefined ? { name } : {}),
     };
-    await Deno.writeTextFile(this.#path(id), `${serializeHeader(header)}\n`, { createNew: true });
+    await Deno.writeTextFile(this._path(id), `${serializeHeader(header)}\n`, { createNew: true });
   }
 
   /** Appends one entry to an existing session log. */
   async append(id: string, entry: SessionEntry): Promise<void> {
     assertValidSessionId(id);
-    await Deno.writeTextFile(this.#path(id), `${JSON.stringify(entry)}\n`, { append: true });
+    await Deno.writeTextFile(this._path(id), `${JSON.stringify(entry)}\n`, { append: true });
   }
 
   /** Appends multiple entries in one write to an existing session log. */
@@ -230,13 +230,13 @@ export class SessionStore {
     assertValidSessionId(id);
     if (entries.length === 0) return;
     const text = entries.map((entry) => JSON.stringify(entry)).join("\n") + "\n";
-    await Deno.writeTextFile(this.#path(id), text, { append: true });
+    await Deno.writeTextFile(this._path(id), text, { append: true });
   }
 
   /** Reads the session JSONL header (line 1). */
   async readHeader(id: string): Promise<SessionHeader> {
     assertValidSessionId(id);
-    const text = await Deno.readTextFile(this.#path(id));
+    const text = await Deno.readTextFile(this._path(id));
     const line = text.split("\n").find((row) => row.length > 0);
     if (!line) throw new Error("Invalid session JSONL header");
     const header = parseJsonLine(line, 1);
@@ -249,7 +249,7 @@ export class SessionStore {
     assertValidSessionId(id);
     let text: string;
     try {
-      text = await Deno.readTextFile(this.#path(id));
+      text = await Deno.readTextFile(this._path(id));
     } catch (error) {
       if (error instanceof Deno.errors.NotFound && await this.legacyExists(id)) {
         throw new Error(`Legacy session ${id} is not supported. Start a new session instead.`);
@@ -279,7 +279,7 @@ export class SessionStore {
     assertValidSessionId(id);
     if (name !== undefined) {
       assertValidSessionName(name);
-      await this.#assertNameAvailable(name, id);
+      await this._assertNameAvailable(name, id);
     }
 
     const log = await this.read(id);
@@ -291,10 +291,10 @@ export class SessionStore {
     };
     const lines = [serializeHeader(header), ...log.entries.map((entry) => JSON.stringify(entry))];
     const text = lines.join("\n") + "\n";
-    const tempPath = `${this.#path(id)}.tmp-${crypto.randomUUID()}`;
+    const tempPath = `${this._path(id)}.tmp-${crypto.randomUUID()}`;
     try {
       await Deno.writeTextFile(tempPath, text);
-      await Deno.rename(tempPath, this.#path(id));
+      await Deno.rename(tempPath, this._path(id));
     } catch (error) {
       await Deno.remove(tempPath).catch(() => undefined);
       throw error;
@@ -332,7 +332,7 @@ export class SessionStore {
 
   /** Lists session ids (filenames without `.jsonl`). */
   async list(): Promise<string[]> {
-    const entries = await Array.fromAsync(Deno.readDir(this.#dir));
+    const entries = await Array.fromAsync(Deno.readDir(this._dir));
     return entries
       .filter((entry) => entry.isFile && entry.name.endsWith(".jsonl"))
       .map((entry) => entry.name.replace(/\.jsonl$/, ""))
@@ -344,7 +344,7 @@ export class SessionStore {
   async exists(id: string): Promise<boolean> {
     assertValidSessionId(id);
     try {
-      await Deno.stat(this.#path(id));
+      await Deno.stat(this._path(id));
       return true;
     } catch (error) {
       if (error instanceof Deno.errors.NotFound) return false;
@@ -356,7 +356,7 @@ export class SessionStore {
   async legacyExists(id: string): Promise<boolean> {
     assertValidSessionId(id);
     try {
-      await Deno.stat(this.#legacyPath(id));
+      await Deno.stat(this._legacyPath(id));
       return true;
     } catch (error) {
       if (error instanceof Deno.errors.NotFound) return false;
@@ -364,16 +364,16 @@ export class SessionStore {
     }
   }
 
-  async #assertNameAvailable(name: string, exceptId?: string): Promise<void> {
+  async _assertNameAvailable(name: string, exceptId?: string): Promise<void> {
     const matches = await this.findIdsByName(name, exceptId);
     if (matches.length > 0) throw new Error("Session name already in use");
   }
 
-  #path(id: string): string {
-    return `${this.#dir}/${id}.jsonl`;
+  _path(id: string): string {
+    return `${this._dir}/${id}.jsonl`;
   }
 
-  #legacyPath(id: string): string {
-    return `${this.#dir}/${id}.json`;
+  _legacyPath(id: string): string {
+    return `${this._dir}/${id}.json`;
   }
 }

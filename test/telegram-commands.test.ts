@@ -1,9 +1,9 @@
 import { assertEquals } from "jsr:@std/assert@1/equals";
-import type { SavedSessionSummary, SessionManager, SessionStatus } from "../src/agent/context/session.ts";
+import type { AgentSessions, SavedSessionSummary, SessionStatus } from "../src/agent/context/session.ts";
 import { formatSessionStatus, SESSION_HELP, TelegramCommandHandler } from "../src/telegram/commands.ts";
 
 class FakeSession {
-  id = "current";
+  current: { id: string; name?: string } = { id: "current", name: "active" };
   refreshCalls = 0;
   loadIds: string[] = [];
   renameNames: string[] = [];
@@ -27,56 +27,59 @@ class FakeSession {
     maxContextLength: 100,
   };
 
-  status(): SessionStatus {
-    return { ...this.statusValue, id: this.id };
+  status(options?: { refresh?: boolean }): Promise<SessionStatus> {
+    if (options?.refresh) this.refreshCalls++;
+    const tokenCount = options?.refresh ? 40 : this.statusValue.tokenCount;
+    return Promise.resolve({ ...this.statusValue, id: this.current.id, name: this.current.name, tokenCount });
   }
 
-  refreshStatus(): Promise<SessionStatus> {
-    this.refreshCalls++;
-    return Promise.resolve({ ...this.status(), tokenCount: 40 });
-  }
-
-  newSession(): string {
-    this.id = "new-id";
+  new(): SessionStatus {
+    this.current = { id: "new-id" };
     this.statusValue = { ...this.statusValue, id: "new-id", name: undefined, dirty: false, existsOnDisk: false };
-    return this.id;
+    return { ...this.statusValue };
   }
 
-  save(): Promise<string> {
-    return this.saveError ? Promise.reject(this.saveError) : Promise.resolve(this.id);
+  save(): Promise<SessionStatus> {
+    return this.saveError ? Promise.reject(this.saveError) : this.status();
   }
 
-  load(ref: string): Promise<void> {
+  load(ref: string): Promise<SessionStatus> {
     this.loadIds.push(ref);
     if (this.loadError) return Promise.reject(this.loadError);
-    this.id = ref === "archived" ? "archived" : this.id;
+    this.current = ref === "archived" ? { id: "archived" } : this.current;
     this.statusValue = {
       ...this.statusValue,
-      id: this.id,
+      id: this.current.id,
       name: ref === "archived" ? undefined : this.statusValue.name,
       dirty: false,
       existsOnDisk: true,
     };
-    return Promise.resolve();
+    return this.status();
   }
 
-  rename(name: string): Promise<void> {
+  rename(name: string): Promise<SessionStatus> {
     this.renameNames.push(name);
     if (this.renameError) return Promise.reject(this.renameError);
     this.statusValue = { ...this.statusValue, name };
-    return Promise.resolve();
+    this.current = { ...this.current, name };
+    return this.status();
   }
 
-  fork(): Promise<{ fromId: string; toId: string }> {
-    return this.forkError ? Promise.reject(this.forkError) : Promise.resolve({ fromId: "current", toId: "forked" });
+  fork(): Promise<{ from: SessionStatus; to: SessionStatus }> {
+    return this.forkError ? Promise.reject(this.forkError) : Promise.resolve({
+      from: { ...this.statusValue, id: "current" },
+      to: { ...this.statusValue, id: "forked", name: undefined },
+    });
   }
 
-  listSaved(): Promise<SavedSessionSummary[]> {
+  list(): Promise<SavedSessionSummary[]> {
     return Promise.resolve(this.listSavedResult);
   }
 
-  compact(instructions?: string): Promise<{ compacted: boolean; beforeTokens: number; afterTokens: number }> {
-    this.compactInstructions.push(instructions);
+  compact(
+    options?: { instructions?: string },
+  ): Promise<{ compacted: boolean; beforeTokens: number; afterTokens: number }> {
+    this.compactInstructions.push(options?.instructions);
     if (this.compactError) return Promise.reject(this.compactError);
     return Promise.resolve({ compacted: true, beforeTokens: 90, afterTokens: 30 });
   }
@@ -84,7 +87,7 @@ class FakeSession {
 
 function createHandler(session = new FakeSession()): { handler: TelegramCommandHandler; session: FakeSession } {
   return {
-    handler: new TelegramCommandHandler(session as unknown as SessionManager),
+    handler: new TelegramCommandHandler(session as unknown as AgentSessions),
     session,
   };
 }

@@ -122,7 +122,7 @@ async function main(): Promise<void> {
     }
   }
   setMcpSystemPromptAppendix(mcpRegistry.systemPromptAppendix);
-  await agent.session.applySystemPrompt(await workspace.reloadSystemPrompt());
+  await agent.sessions.applySystemPrompt(await workspace.reloadSystemPrompt());
 
   const subagentKv = await Deno.openKv(":memory:");
 
@@ -132,7 +132,7 @@ async function main(): Promise<void> {
   let activeTurnId = "no-active-turn";
   const activeTurns = new ActiveTurnRegistry();
   const toolContext = await createToolContext(workspace.path, {
-    sessionId: () => agent.session.id,
+    sessionId: () => agent.sessions.current.id,
     turnId: () => activeTurnId,
     signal: () => activeTurns.actSignal ?? controller.signal,
   });
@@ -142,7 +142,7 @@ async function main(): Promise<void> {
     model: lmstudio.model,
     workspace: toolContext,
     skills,
-    getSessionId: () => agent.session.id,
+    getSessionId: () => agent.sessions.current.id,
   });
   const createTurnToolSet = async (): Promise<
     { tools: Tool[]; guardToolCall: ReturnType<typeof getModelToolSet>["guardToolCall"] }
@@ -155,14 +155,14 @@ async function main(): Promise<void> {
       approvalGate: approvals,
       userQuestions,
       todos: {
-        getSessionId: () => agent.session.id,
+        getSessionId: () => agent.sessions.current.id,
         todosDir: workspace.todosDir,
         display: todoDisplay,
         updateTelegramMeta: bindUpdateTelegramMeta,
       },
       skills: {
         manager: skills,
-        getSessionId: () => agent.session.id,
+        getSessionId: () => agent.sessions.current.id,
       },
       subagents,
       mcp: mcpRegistry,
@@ -251,7 +251,7 @@ async function main(): Promise<void> {
           }
 
           if (compacted) {
-            logDebug("session.compacted", { sessionId: agent.session.id });
+            logDebug("session.compacted", { sessionId: agent.sessions.current.id });
           }
           completed = true;
         } finally {
@@ -277,11 +277,11 @@ async function main(): Promise<void> {
   }
 
   const telegram = createTelegramManager({
-    session: agent.session,
+    session: agent.sessions,
     onAdminStart: async (ctx) => {
       const bootstrap = await readBootstrapIfPresent(workspace.path);
       if (bootstrap && ctx.message) {
-        logDebug("bootstrap.start", { sessionId: agent.session.id, length: bootstrap.length });
+        logDebug("bootstrap.start", { sessionId: agent.sessions.current.id, length: bootstrap.length });
         await executeTelegramTurn(
           ctx,
           { text: bootstrap },
@@ -316,7 +316,7 @@ async function main(): Promise<void> {
             "telegram.album.size": payload.items.length,
             "telegram.has_images": true,
             "telegram.image_count": payload.items.length,
-            "session.id": agent.session.id,
+            "session.id": agent.sessions.current.id,
           });
 
           const images = await prepareTelegramImages(lmstudio.client, payload.items);
@@ -461,7 +461,7 @@ async function main(): Promise<void> {
           span.setAttributes({
             "telegram.update_id": ctx.update.update_id,
             "message.length": userInput.text.length,
-            "session.id": agent.session.id,
+            "session.id": agent.sessions.current.id,
             ...(imageCount > 0 ? { "telegram.has_images": true, "telegram.image_count": imageCount } : {}),
           });
 

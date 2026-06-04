@@ -1,10 +1,17 @@
 import { type Chat, ChatMessage, type ChatMessageData, type LLM, type LMStudioClient, type Tool } from "@lmstudio/sdk";
 import { assert } from "jsr:@std/assert@1/assert";
 import { assertEquals } from "jsr:@std/assert@1/equals";
-import { assertStringIncludes } from "jsr:@std/assert@1/string-includes";
-import type { SummaryCompactor } from "../src/agent/context/compactor.ts";
+import type { SummaryCompactionInput } from "../src/agent/context/compactor.ts";
 import { SessionStore } from "../src/agent/context/session-store.ts";
-import { type ModelActObserver, SessionManager } from "../src/agent/context/session.ts";
+import {
+  type ContextSummaryPort,
+  LmStudioModelTurnPort,
+  type ModelActObserver,
+  type ModelTurnOutput,
+  type ModelTurnPort,
+  type ModelTurnRequest,
+  PersistentAgentSessions,
+} from "../src/agent/context/session.ts";
 import { withEnv } from "./_env.ts";
 
 type ChatMessageWithRaw = ChatMessage & {
@@ -14,6 +21,10 @@ type ChatMessageWithRaw = ChatMessage & {
 interface FakeActOptions {
   guardToolCall?: unknown;
   contextOverflowPolicy?: "truncateMiddle" | "stopAtLimit" | "rollingWindow";
+  allowParallelToolExecution?: boolean;
+  maxTokens?: number;
+  maxPredictionRounds?: number;
+  signal?: AbortSignal;
   onMessage?: (message: ChatMessage) => void;
   onFirstToken?: (roundIndex: number) => void;
   onRoundStart?: (roundIndex: number) => void;
@@ -40,7 +51,7 @@ interface FakeActCall {
   options: FakeActOptions;
 }
 
-class FakeModel {
+class FakeSdkModel {
   replies = ["reply"];
   messages?: ChatMessage[];
   emitToolEvents = false;
@@ -62,9 +73,7 @@ class FakeModel {
     }
 
     const messages = this.messages ?? this.replies.map((reply) => ChatMessage.create("assistant", reply));
-    for (const message of messages) {
-      options.onMessage?.(message);
-    }
+    for (const message of messages) options.onMessage?.(message);
     options.onRoundEnd?.(0);
     return Promise.resolve();
   }
@@ -76,37 +85,91 @@ class FakeModel {
   }
 }
 
+class FakeModelTurnPort implements ModelTurnPort {
+  readonly calls: ModelTurnRequest[] = [];
+  readonly countTokenMessages: ChatMessageData[][] = [];
+  outputs: ModelTurnOutput[] = [{
+    persistedMessages: [rawMessage("assistant", "reply")],
+    replyTexts: ["reply"],
+    firstTokenMs: 12,
+  }];
+
+  run(request: ModelTurnRequest): Promise<ModelTurnOutput> {
+    this.calls.push(request);
+    return Promise.resolve(
+      this.outputs.shift() ?? {
+        persistedMessages: [rawMessage("assistant", "reply")],
+        replyTexts: ["reply"],
+      },
+    );
+  }
+
+  countTokens(messages: ChatMessageData[]): Promise<number[]> {
+    this.countTokenMessages.push(messages);
+    return Promise.resolve(messages.map(defaultTokenCount));
+  }
+}
+
+class FakeSummaryPort implements ContextSummaryPort {
+  readonly inputs: SummaryCompactionInput[] = [];
+  summary = "summary";
+
+  summarize(input: SummaryCompactionInput): Promise<string> {
+    this.inputs.push(input);
+    return Promise.resolve(this.summary);
+  }
+}
+
 function rawMessage(role: "assistant" | "system" | "user", text: string): ChatMessageData {
   return (ChatMessage.create(role, text) as ChatMessageWithRaw).getRaw();
 }
 
-function toolMessage(text: string): ChatMessage {
-  return ChatMessage.from(
-    {
-      role: "tool",
-      content: [{ type: "toolCallResult", content: text, toolCallId: "tool-call-1" }],
-    } satisfies ChatMessageData,
-  );
+function toolResultMessage(text: string): ChatMessageData {
+  return {
+    role: "tool",
+    content: [{ type: "toolCallResult", content: text, toolCallId: "tool-call-1" }],
+  } as ChatMessageData;
 }
 
-function assistantToolRequestMessage(text: string): ChatMessage {
-  return ChatMessage.from(
-    {
-      role: "assistant",
-      content: [
-        { type: "text", text },
-        {
-          type: "toolCallRequest",
-          toolCallRequest: {
-            id: "tool-call-1",
-            type: "function",
-            name: "read",
-            arguments: { path: "README.md" },
-          },
+function assistantToolRequestMessage(text: string): ChatMessageData {
+  return {
+    role: "assistant",
+    content: [
+      { type: "text", text },
+      {
+        type: "toolCallRequest",
+        toolCallRequest: {
+          id: "tool-call-1",
+          type: "function",
+          name: "read",
+          arguments: { path: "README.md" },
         },
-      ],
-    } satisfies ChatMessageData,
-  );
+      },
+    ],
+  } as ChatMessageData;
+}
+
+function imageMessage(text: string): ChatMessageData {
+  return {
+    role: "user",
+    content: [
+      { type: "text", text },
+      { type: "file", fileType: "image", name: "diagram.png" },
+    ],
+  } as unknown as ChatMessageData;
+}
+
+function textOf(message: ChatMessageData): string {
+  return message.content.flatMap((part) => part.type === "text" ? [part.text] : []).join("");
+}
+
+function defaultTokenCount(message: ChatMessageData): number {
+  if (message.role === "assistant") return 5;
+  return 2;
+}
+
+function rolesAndText(messages: ChatMessageData[]): [string, string][] {
+  return messages.map((message) => [message.role, textOf(message)]);
 }
 
 function snapshot(chat: Chat): [string, string][] {
@@ -121,10 +184,6 @@ function fakeLmClient(): LMStudioClient {
       },
     },
   } as unknown as LMStudioClient;
-}
-
-function messageHasImagePart(data: ChatMessageData): boolean {
-  return data.content.some((part) => part.type === "file" && part.fileType === "image");
 }
 
 function recordingObserver(events: string[]): ModelActObserver {
@@ -173,245 +232,228 @@ function withDebugLogs(fn: () => Promise<void>): Promise<string[]> {
 }
 
 async function withSession(
-  fn: (spec: { session: SessionManager; store: SessionStore; model: FakeModel }) => Promise<void>,
+  fn: (
+    spec: {
+      session: PersistentAgentSessions;
+      store: SessionStore;
+      model: FakeModelTurnPort;
+      summary: FakeSummaryPort;
+    },
+  ) => Promise<void>,
   options?: {
     reserveTokens?: number;
     keepRecentTokens?: number;
-    compactor?: SummaryCompactor;
     maxContextLength?: number;
     systemPrompt?: string;
-    client?: LMStudioClient;
   },
 ): Promise<void> {
   const dir = await Deno.makeTempDir({ prefix: "deno-ai-agent-session-" });
   try {
     const store = new SessionStore(dir);
-    const model = new FakeModel();
-    const session = new SessionManager({
-      client: options?.client ?? fakeLmClient(),
+    const model = new FakeModelTurnPort();
+    const summary = new FakeSummaryPort();
+    const session = new PersistentAgentSessions({
       store,
-      model: model as unknown as LLM,
+      model,
+      summary,
       systemPrompt: options?.systemPrompt ?? "current system prompt",
       maxContextLength: options?.maxContextLength ?? 100,
       reserveTokens: options?.reserveTokens,
       keepRecentTokens: options?.keepRecentTokens,
-      compactor: options?.compactor ?? (() => Promise.resolve("summary")),
     });
-    await fn({ session, store, model });
+    await fn({ session, store, model, summary });
   } finally {
     await Deno.remove(dir, { recursive: true });
   }
 }
 
-Deno.test("SessionManager sends prompt, user text, tools, replies, tokens, and observer events through runTurn", async () => {
-  await withSession(async ({ session, model }) => {
-    model.emitToolEvents = true;
-    const events: string[] = [];
-    const tools = [{ name: "fake-tool" }] as unknown as Tool[];
+Deno.test("PersistentAgentSessions appends user input, projects context, persists model output, and returns replies", async () => {
+  await withSession(async ({ session, model, store }) => {
+    model.outputs = [{
+      persistedMessages: [
+        rawMessage("assistant", "visible reply"),
+        toolResultMessage("tool result"),
+      ],
+      replyTexts: ["raw visible reply"],
+      firstTokenMs: 7,
+    }];
 
-    const result = await session.runTurn("hello", {
-      tools,
-      signal: new AbortController().signal,
-      observer: recordingObserver(events),
-    });
+    const result = await session.turn("hello", { tools: [], signal: new AbortController().signal });
 
-    const call = model.actCalls[0];
-    assert(call);
-    assertEquals(call.tools, tools);
-    assertEquals(snapshot(call.chat), [
-      ["system", "current system prompt"],
-      ["user", "hello"],
-    ]);
-    assertEquals(result.replyTexts, ["reply"]);
-    assertEquals(result.turnTokens, 5);
-    assertEquals(result.compacted, false);
-    assertEquals(result.totalTokens, 9);
-    assertEquals(events, [
-      "round-start:0",
-      "first:0:number",
-      "tool-start:0:7:tool-1",
-      "tool-name:7:read",
-      "tool-end:0:7:read:true",
-      "tool-dequeued:0:7",
-      "tool-failure:8:tool failed",
-      "tool-finalized:7:read",
-      "message",
-      "round-end:0",
-    ]);
-  });
-});
-
-Deno.test("SessionManager forwards guardToolCall to model.act", async () => {
-  await withSession(async ({ session, model }) => {
-    const tools = [{ name: "fake-tool" }] as unknown as Tool[];
-    const guardToolCall = () => {};
-
-    await session.runTurn("hello", {
-      tools,
-      guardToolCall,
-      signal: new AbortController().signal,
-    });
-
-    assertEquals(model.actCalls[0]?.options.guardToolCall, guardToolCall);
-  });
-});
-
-Deno.test("SessionManager uses rolling overflow policy for tool-heavy turns", async () => {
-  await withSession(async ({ session, model }) => {
-    await session.runTurn("hello", { tools: [], signal: new AbortController().signal });
-
-    assertEquals(model.actCalls[0]?.options.contextOverflowPolicy, "rollingWindow");
-  });
-});
-
-Deno.test("SessionManager keeps tool results in context without returning them as Telegram replies", async () => {
-  await withSession(async ({ session, model }) => {
-    model.messages = [
-      toolMessage('<skill_content name="docs">\nSkill body\n</skill_content>'),
-      ChatMessage.create("assistant", "visible reply"),
-    ];
-
-    const result = await session.runTurn("load docs skill", {
-      tools: [],
-      signal: new AbortController().signal,
-    });
-
-    assertEquals(result.replyTexts, ["visible reply"]);
+    assertEquals(result.replyTexts, ["raw visible reply"]);
+    assertEquals(result.firstTokenMs, 7);
     assertEquals(result.turnTokens, 7);
+    assertEquals(result.compacted, false);
     assertEquals(result.totalTokens, 11);
+    assertEquals(model.calls[0]?.systemPrompt, "current system prompt");
+    assertEquals(rolesAndText(model.calls[0]?.messages ?? []), [["user", "hello"]]);
 
-    await session.runTurn("after tool", { tools: [], signal: new AbortController().signal });
-    const call = model.actCalls[1];
-    assert(call);
-    assertEquals(snapshot(call.chat), [
-      ["system", "current system prompt"],
-      ["user", "load docs skill"],
-      ["tool", ""],
-      ["assistant", "visible reply"],
-      ["user", "after tool"],
+    const log = await store.read(session.current.id);
+    assertEquals(log.entries.map((entry) => entry.type), ["message", "message", "message"]);
+    assertEquals(log.entries.map((entry) => entry.type === "message" ? entry.message.role : entry.type), [
+      "user",
+      "assistant",
+      "tool",
     ]);
-    assertStringIncludes(call.chat.getMessagesArray()[2]?.toString() ?? "", '<skill_content name="docs">');
   });
 });
 
-Deno.test("SessionManager does not return assistant tool request text as a Telegram reply", async () => {
+Deno.test("PersistentAgentSessions forwards tools, guardToolCall, signal, and observer to ModelTurnPort", async () => {
   await withSession(async ({ session, model }) => {
-    model.messages = [
-      assistantToolRequestMessage("I will call a tool first."),
-      toolMessage("tool result"),
-      ChatMessage.create("assistant", "final answer"),
-    ];
+    const tools = [{ name: "fake-tool" }] as unknown as Tool[];
+    const signal = new AbortController().signal;
+    const guardToolCall = () => {};
+    const events: string[] = [];
+    const observer = recordingObserver(events);
 
-    const result = await session.runTurn("use a tool", {
-      tools: [],
-      signal: new AbortController().signal,
-    });
+    await session.turn("hello", { tools, guardToolCall, signal, observer });
 
-    assertEquals(result.replyTexts, ["final answer"]);
-
-    await session.runTurn("follow up", { tools: [], signal: new AbortController().signal });
-    const call = model.actCalls[1];
-    assert(call);
-    assertEquals(snapshot(call.chat), [
-      ["system", "current system prompt"],
-      ["user", "use a tool"],
-      ["assistant", "I will call a tool first."],
-      ["tool", ""],
-      ["assistant", "final answer"],
-      ["user", "follow up"],
-    ]);
-    assertStringIncludes(call.chat.getMessagesArray()[2]?.toString() ?? "", 'read({"path":"README.md"})');
+    assertEquals(model.calls[0]?.tools, tools);
+    assertEquals(model.calls[0]?.guardToolCall, guardToolCall);
+    assertEquals(model.calls[0]?.signal, signal);
+    assertEquals(model.calls[0]?.observer, observer);
   });
 });
 
-Deno.test("SessionManager strips thinking from session but not replyTexts when KEEP_THINKING=false", async () => {
-  await withEnv({ KEEP_THINKING: "false" }, async () => {
-    await withSession(async ({ session, model }) => {
-      const raw = "<think>secret</think>visible";
-      model.replies = [raw];
-
-      const result = await session.runTurn("hello", { tools: [], signal: new AbortController().signal });
-      assertEquals(result.replyTexts, [raw]);
-
-      await session.runTurn("follow-up", { tools: [], signal: new AbortController().signal });
-      const call = model.actCalls[1];
-      assert(call);
-      assertEquals(snapshot(call.chat), [
-        ["system", "current system prompt"],
-        ["user", "hello"],
-        ["assistant", "visible"],
-        ["user", "follow-up"],
-      ]);
-    });
-  });
-});
-
-Deno.test("SessionManager newSession keeps the current system prompt", async () => {
-  await withSession(async ({ session, model }) => {
-    session.newSession();
-    await session.runTurn("fresh", { tools: [], signal: new AbortController().signal });
-
-    const call = model.actCalls[0];
-    assert(call);
-    assertEquals(snapshot(call.chat), [
-      ["system", "current system prompt"],
-      ["user", "fresh"],
-    ]);
-  });
-});
-
-Deno.test("SessionManager rename before save writes name on first persist", async () => {
-  await withSession(async ({ session, store }) => {
-    await session.rename("my-alias");
-    await session.runTurn("hello", { tools: [], signal: new AbortController().signal });
-    const header = await store.readHeader(session.id);
-    assertEquals(header.name, "my-alias");
-    assertEquals(header.version, 3);
-  });
-});
-
-Deno.test("SessionManager rename on saved session updates header", async () => {
-  await withSession(async ({ session, store }) => {
-    await session.runTurn("hello", { tools: [], signal: new AbortController().signal });
-    await session.rename("saved-alias");
-    const header = await store.readHeader(session.id);
-    assertEquals(header.name, "saved-alias");
-  });
-});
-
-Deno.test("SessionManager load resolves session by name", async () => {
-  await withSession(async ({ session, store }) => {
+Deno.test("PersistentAgentSessions projects follow-up context with prior assistant, tool, and image file parts", async () => {
+  await withSession(async ({ session, model, store }) => {
     const id = crypto.randomUUID();
-    await store.create(id, { name: "disk-alias" });
+    await store.create(id);
     await store.append(id, {
       type: "message",
       id: crypto.randomUUID(),
       createdAt: "2026-06-03T00:00:00.000Z",
-      message: rawMessage("user", "from disk"),
+      message: imageMessage("look"),
     });
+    await session.load(id);
+    model.outputs = [{
+      persistedMessages: [rawMessage("assistant", "first reply"), toolResultMessage("tool result")],
+      replyTexts: ["first reply"],
+    }, {
+      persistedMessages: [rawMessage("assistant", "second reply")],
+      replyTexts: ["second reply"],
+    }];
 
-    await session.load("disk-alias");
-    assertEquals(session.id, id);
-    assertEquals(session.status().name, "disk-alias");
+    await session.turn("first follow-up", { tools: [], signal: new AbortController().signal });
+    await session.turn("second follow-up", { tools: [], signal: new AbortController().signal });
+
+    const secondCallMessages = model.calls[1]?.messages ?? [];
+    assertEquals(rolesAndText(secondCallMessages), [
+      ["user", "look"],
+      ["user", "first follow-up"],
+      ["assistant", "first reply"],
+      ["tool", ""],
+      ["user", "second follow-up"],
+    ]);
+    assert(secondCallMessages[0]?.content.some((part) => part.type === "file" && part.fileType === "image"));
   });
 });
 
-Deno.test("SessionManager fork and newSession clear name", async () => {
-  await withSession(async ({ session }) => {
-    await session.rename("branch");
-    await session.runTurn("x", { tools: [], signal: new AbortController().signal });
-    assertEquals(session.status().name, "branch");
+Deno.test("PersistentAgentSessions manual compaction runs below budget and preserves instructions", async () => {
+  await withSession(async ({ session, model, summary }) => {
+    summary.summary = "manual summary";
+    model.outputs = [
+      { persistedMessages: [rawMessage("assistant", "first reply")], replyTexts: ["first reply"] },
+      { persistedMessages: [rawMessage("assistant", "second reply")], replyTexts: ["second reply"] },
+      { persistedMessages: [rawMessage("assistant", "after manual")], replyTexts: ["after manual"] },
+    ];
 
-    const { toId } = await session.fork();
-    assertEquals(session.status().name, undefined);
-    assertEquals(session.id, toId);
+    await session.turn("first", { tools: [], signal: new AbortController().signal });
+    await session.turn("second", { tools: [], signal: new AbortController().signal });
+    const result = await session.compact({ instructions: "manual checkpoint" });
 
-    session.newSession();
-    assertEquals(session.status().name, undefined);
+    assertEquals(result.compacted, true);
+    assertEquals(result.beforeTokens, 16);
+    assertEquals(result.afterTokens, 4);
+    assertEquals(summary.inputs[0]?.instructions, "manual checkpoint");
+    assertEquals(summary.inputs[0]?.messages.map((message) => message.role), [
+      "user",
+      "assistant",
+      "user",
+      "assistant",
+    ]);
+
+    await session.turn("after compact", { tools: [], signal: new AbortController().signal });
+    assertEquals(rolesAndText(model.calls[2]?.messages ?? []), [
+      ["user", "[Earlier conversation summary]\nmanual summary"],
+      ["user", "after compact"],
+    ]);
   });
 });
 
-Deno.test("SessionManager load reapplies the current prompt over saved prompt", async () => {
+Deno.test("PersistentAgentSessions auto compaction appends a checkpoint and projects summary plus safe retained messages", async () => {
+  await withSession(
+    async ({ session, model, summary, store }) => {
+      summary.summary = "summary";
+      model.outputs = [
+        { persistedMessages: [rawMessage("assistant", "reply")], replyTexts: ["reply"] },
+        { persistedMessages: [rawMessage("assistant", "after compact")], replyTexts: ["after compact"] },
+      ];
+
+      const first = await session.turn("too much context", { tools: [], signal: new AbortController().signal });
+      assertEquals(first.compacted, true);
+      assertEquals(first.totalTokens, 9);
+      assertEquals(summary.inputs[0]?.messages.map((message) => message.role), ["user"]);
+
+      const log = await store.read(session.current.id);
+      assertEquals(log.entries.at(-1)?.type, "compaction");
+
+      await session.turn("after compact", { tools: [], signal: new AbortController().signal });
+      assertEquals(rolesAndText(model.calls[1]?.messages ?? []), [
+        ["user", "[Earlier conversation summary]\nsummary"],
+        ["assistant", "reply"],
+        ["user", "after compact"],
+      ]);
+    },
+    { maxContextLength: 10, reserveTokens: 2, keepRecentTokens: 5 },
+  );
+});
+
+Deno.test("PersistentAgentSessions derives compaction budgets from context length by default", async () => {
+  await withSession(
+    async ({ session, summary }) => {
+      const first = await session.turn("one", { tools: [], signal: new AbortController().signal });
+      const second = await session.turn("two", { tools: [], signal: new AbortController().signal });
+      const third = await session.turn("three", { tools: [], signal: new AbortController().signal });
+
+      assertEquals(first.compacted, false);
+      assertEquals(second.compacted, false);
+      assertEquals(third.compacted, true);
+      assertEquals(third.totalTokens, 16);
+      assertEquals(summary.inputs[0]?.messages.map((message) => message.role), ["user", "assistant", "user"]);
+    },
+    { maxContextLength: 24 },
+  );
+});
+
+Deno.test("PersistentAgentSessions load, fork, new, rename, save, list, and status behavior", async () => {
+  await withSession(async ({ session, store }) => {
+    await session.rename("my-alias");
+    await session.turn("hello", { tools: [], signal: new AbortController().signal });
+    assertEquals((await store.readHeader(session.current.id)).name, "my-alias");
+
+    const saved = await session.save();
+    assertEquals(saved.existsOnDisk, true);
+    assertEquals(saved.dirty, false);
+    assertEquals((await session.list()).map((summary) => summary.name), ["my-alias"]);
+
+    const { from, to } = await session.fork();
+    assertEquals(from.name, "my-alias");
+    assertEquals(to.name, undefined);
+    assert(from.id !== to.id);
+
+    const fresh = session.new();
+    assertEquals(fresh.name, undefined);
+    assertEquals(fresh.existsOnDisk, false);
+
+    await session.load("my-alias");
+    const loaded = await session.status();
+    assertEquals(loaded.id, from.id);
+    assertEquals(loaded.name, "my-alias");
+  });
+});
+
+Deno.test("PersistentAgentSessions load reapplies the current prompt over saved prompt", async () => {
   await withSession(async ({ session, store, model }) => {
     const id = crypto.randomUUID();
     await store.create(id);
@@ -429,24 +471,25 @@ Deno.test("SessionManager load reapplies the current prompt over saved prompt", 
     });
 
     await session.load(id);
-    await session.runTurn("after load", { tools: [], signal: new AbortController().signal });
+    await session.turn("after load", { tools: [], signal: new AbortController().signal });
 
-    const call = model.actCalls[0];
-    assert(call);
-    assertEquals(snapshot(call.chat), [
-      ["system", "current system prompt"],
+    assertEquals(model.calls[0]?.systemPrompt, "current system prompt");
+    assertEquals(rolesAndText(model.calls[0]?.messages ?? []), [
       ["user", "from disk"],
       ["user", "after load"],
     ]);
   });
 });
 
-Deno.test("SessionManager debug append logs metadata without message text", async () => {
+Deno.test("PersistentAgentSessions debug append logs metadata without message text", async () => {
   await withSession(async ({ session, model }) => {
-    model.replies = ["assistant secret"];
+    model.outputs = [{
+      persistedMessages: [rawMessage("assistant", "assistant secret")],
+      replyTexts: ["assistant secret"],
+    }];
 
     const logs = await withDebugLogs(async () => {
-      await session.runTurn("user secret", { tools: [], signal: new AbortController().signal });
+      await session.turn("user secret", { tools: [], signal: new AbortController().signal });
     });
 
     const appendFields = logs
@@ -460,169 +503,83 @@ Deno.test("SessionManager debug append logs metadata without message text", asyn
   });
 });
 
-Deno.test("SessionManager fork preserves messages and reapplies the prompt", async () => {
-  await withSession(async ({ session, model }) => {
-    model.replies = ["before reply"];
-    await session.runTurn("before fork", { tools: [], signal: new AbortController().signal });
+Deno.test("LmStudioModelTurnPort assembles act options, forwards callbacks, and extracts visible replies", async () => {
+  const sdkModel = new FakeSdkModel();
+  sdkModel.emitToolEvents = true;
+  sdkModel.messages = [
+    ChatMessage.from(assistantToolRequestMessage("I will call a tool first.")),
+    ChatMessage.from(toolResultMessage("tool result")),
+    ChatMessage.create("assistant", "final answer"),
+  ];
+  const port = new LmStudioModelTurnPort({ client: fakeLmClient(), model: sdkModel as unknown as LLM });
+  const events: string[] = [];
+  const tools = [{ name: "fake-tool" }] as unknown as Tool[];
+  const signal = new AbortController().signal;
+  const guardToolCall = () => {};
 
-    const { fromId, toId } = await session.fork();
-    assert(fromId !== toId);
-
-    model.replies = ["after reply"];
-    await session.runTurn("after fork", { tools: [], signal: new AbortController().signal });
-
-    const call = model.actCalls[1];
-    assert(call);
-    assertEquals(snapshot(call.chat), [
-      ["system", "current system prompt"],
-      ["user", "before fork"],
-      ["assistant", "before reply"],
-      ["user", "after fork"],
-    ]);
+  const output = await port.run({
+    systemPrompt: "current system prompt",
+    messages: [rawMessage("user", "use a tool")],
+    tools,
+    guardToolCall,
+    signal,
+    observer: recordingObserver(events),
   });
+
+  const call = sdkModel.actCalls[0];
+  assert(call);
+  assertEquals(call.tools, tools);
+  assertEquals(call.options.guardToolCall, guardToolCall);
+  assertEquals(call.options.signal, signal);
+  assertEquals(call.options.contextOverflowPolicy, "rollingWindow");
+  assertEquals(call.options.allowParallelToolExecution, true);
+  assertEquals(snapshot(call.chat), [
+    ["system", "current system prompt"],
+    ["user", "use a tool"],
+  ]);
+  assertEquals(output.replyTexts, ["final answer"]);
+  assertEquals(output.persistedMessages.map((message) => message.role), ["assistant", "tool", "assistant"]);
+  assertEquals(events, [
+    "round-start:0",
+    "first:0:number",
+    "tool-start:0:7:tool-1",
+    "tool-name:7:read",
+    "tool-end:0:7:read:true",
+    "tool-dequeued:0:7",
+    "tool-failure:8:tool failed",
+    "tool-finalized:7:read",
+    "message",
+    "message",
+    "message",
+    "round-end:0",
+  ]);
 });
 
-Deno.test("SessionManager persists turns immediately", async () => {
-  await withSession(async ({ session }) => {
-    await session.runTurn("change", { tools: [], signal: new AbortController().signal });
+Deno.test("LmStudioModelTurnPort strips thinking from persistence but not raw replyTexts when KEEP_THINKING=false", async () => {
+  await withEnv({ KEEP_THINKING: "false" }, async () => {
+    const sdkModel = new FakeSdkModel();
+    const raw = "<think>secret</think>visible";
+    sdkModel.replies = [raw];
+    const port = new LmStudioModelTurnPort({ client: fakeLmClient(), model: sdkModel as unknown as LLM });
 
-    assertEquals(session.status().existsOnDisk, true);
-    assertEquals(session.status().dirty, false);
-  });
-});
-
-Deno.test("SessionManager manual compaction runs below the automatic token budget", async () => {
-  const summarized: ChatMessageData[][] = [];
-  await withSession(
-    async ({ session, model }) => {
-      model.replies = ["first reply"];
-      await session.runTurn("first", { tools: [], signal: new AbortController().signal });
-      model.replies = ["second reply"];
-      await session.runTurn("second", { tools: [], signal: new AbortController().signal });
-
-      const result = await session.compact("manual checkpoint");
-
-      assertEquals(result.compacted, true);
-      assertEquals(result.beforeTokens, 16);
-      assertEquals(result.afterTokens, 4);
-      assertEquals(summarized[0]?.map((message) => message.role), ["user", "assistant", "user", "assistant"]);
-
-      model.replies = ["after manual"];
-      await session.runTurn("after compact", { tools: [], signal: new AbortController().signal });
-      const call = model.actCalls[2];
-      assert(call);
-      assertEquals(snapshot(call.chat), [
-        ["system", "current system prompt"],
-        ["user", "[Earlier conversation summary]\nmanual summary"],
-        ["user", "after compact"],
-      ]);
-    },
-    {
-      compactor: (input) => {
-        summarized.push(input.messages);
-        assertEquals(input.instructions, "manual checkpoint");
-        return Promise.resolve("manual summary");
-      },
-    },
-  );
-});
-
-Deno.test("SessionManager appends compaction checkpoints and preserves the current prompt", async () => {
-  await withSession(
-    async ({ session, model }) => {
-      const first = await session.runTurn("too much context", { tools: [], signal: new AbortController().signal });
-      assertEquals(first.compacted, true);
-      assertEquals(first.totalTokens, 9);
-
-      await session.runTurn("after compact", { tools: [], signal: new AbortController().signal });
-
-      const call = model.actCalls[1];
-      assert(call);
-      assertEquals(snapshot(call.chat), [
-        ["system", "current system prompt"],
-        ["user", "[Earlier conversation summary]\nsummary"],
-        ["assistant", "reply"],
-        ["user", "after compact"],
-      ]);
-    },
-    {
-      maxContextLength: 10,
-      reserveTokens: 2,
-      keepRecentTokens: 5,
-      compactor: () => Promise.resolve("summary"),
-    },
-  );
-});
-
-Deno.test("SessionManager derives compaction budgets from context length by default", async () => {
-  const summarized: ChatMessageData[][] = [];
-  await withSession(
-    async ({ session }) => {
-      const first = await session.runTurn("one", { tools: [], signal: new AbortController().signal });
-      const second = await session.runTurn("two", { tools: [], signal: new AbortController().signal });
-      const third = await session.runTurn("three", { tools: [], signal: new AbortController().signal });
-
-      assertEquals(first.compacted, false);
-      assertEquals(second.compacted, false);
-      assertEquals(third.compacted, true);
-      assertEquals(third.totalTokens, 16);
-      assertEquals(summarized[0]?.map((message) => message.role), ["user", "assistant", "user"]);
-    },
-    {
-      maxContextLength: 24,
-      compactor: (input) => {
-        summarized.push(input.messages);
-        return Promise.resolve("summary");
-      },
-    },
-  );
-});
-
-const TINY_PNG_BASE64 =
-  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
-
-Deno.test({
-  name: "SessionManager persists image file parts on runTurn",
-  ignore: !Deno.env.get("LMSTUDIO_IMAGE_TEST"),
-}, async () => {
-  const { LMStudioClient } = await import("@lmstudio/sdk");
-  const client = new LMStudioClient();
-  const handle = await client.files.prepareImageBase64("session-test.png", TINY_PNG_BASE64);
-
-  await withSession(async ({ session, model }) => {
-    await session.runTurn({ text: "describe", images: [handle] }, {
+    const output = await port.run({
+      systemPrompt: "current system prompt",
+      messages: [rawMessage("user", "hello")],
       tools: [],
       signal: new AbortController().signal,
     });
 
-    const call = model.actCalls[0];
-    assert(call);
-    const userMessage = call.chat.getMessagesArray().find((m) => m.getRole() === "user");
-    assert(userMessage);
-    const raw = (userMessage as ChatMessageWithRaw).getRaw();
-    assert(messageHasImagePart(raw));
-  }, { client });
+    assertEquals(output.replyTexts, [raw]);
+    assertEquals(rolesAndText(output.persistedMessages), [["assistant", "visible"]]);
+  });
 });
 
-Deno.test({
-  name: "SessionManager keeps image parts in context on a follow-up turn",
-  ignore: !Deno.env.get("LMSTUDIO_IMAGE_TEST"),
-}, async () => {
-  const { LMStudioClient } = await import("@lmstudio/sdk");
-  const client = new LMStudioClient();
-  const handle = await client.files.prepareImageBase64("follow-up.png", TINY_PNG_BASE64);
+Deno.test("LmStudioModelTurnPort counts tokens through materialized chat messages", async () => {
+  const sdkModel = new FakeSdkModel();
+  const port = new LmStudioModelTurnPort({ client: fakeLmClient(), model: sdkModel as unknown as LLM });
 
-  await withSession(async ({ session, model }) => {
-    await session.runTurn({ text: "look", images: [handle] }, {
-      tools: [],
-      signal: new AbortController().signal,
-    });
-    await session.runTurn("follow up", { tools: [], signal: new AbortController().signal });
+  const counts = await port.countTokens([rawMessage("system", "prompt"), rawMessage("assistant", "reply")]);
 
-    const call = model.actCalls[1];
-    assert(call);
-    const userMessages = call.chat.getMessagesArray().filter((m) => m.getRole() === "user");
-    const withImage = userMessages.some((m) => messageHasImagePart((m as ChatMessageWithRaw).getRaw()));
-    assert(withImage);
-  }, { client });
+  assertEquals(counts, [2, 5]);
+  assertEquals(sdkModel.countTokenInputs, ["system: prompt", "assistant: reply"]);
 });

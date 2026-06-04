@@ -15,7 +15,7 @@ import { traceSpan } from "../../shared/otel.ts";
 import { actReasoningParsingOption } from "../../shared/reasoning.ts";
 import type { ToolCallGuard } from "../tools/authorization.ts";
 import { normalizeUserTurnInput, type UserTurnInput } from "../user-turn.ts";
-import type { SummaryCompactor } from "./compactor.ts";
+import type { SummaryCompactionInput } from "./compactor.ts";
 import { materializeMessageForChat } from "./message-materialize.ts";
 import { chatMessageForPersistence } from "./persisted-message.ts";
 import {
@@ -42,8 +42,8 @@ function messageToData(message: ChatMessage): ChatMessageData {
   return (message as ChatMessageWithRaw).getRaw();
 }
 
-function countTokensForMessage(model: LLM, message: ChatMessage): Promise<number> {
-  return model.countTokens(message.toString());
+function createTextMessageData(role: "assistant" | "system" | "user", text: string): ChatMessageData {
+  return messageToData(ChatMessage.create(role, text));
 }
 
 function createMessageEntry(message: ChatMessageData): SessionMessageEntry {
@@ -68,8 +68,8 @@ function toolRequests(message: ChatMessageData): ToolCallRequest[] {
   return message.content.flatMap((part) => part.type === "toolCallRequest" ? [part.toolCallRequest] : []);
 }
 
-function isUserVisibleAssistantReply(message: ChatMessage): boolean {
-  return message.getRole() === "assistant" && toolRequests(messageToData(message)).length === 0;
+function isUserVisibleAssistantReply(message: ChatMessageData): boolean {
+  return message.role === "assistant" && toolRequests(message).length === 0;
 }
 
 function collectFileDetails(entries: SessionEntry[]): SessionFileDetails {
@@ -103,6 +103,23 @@ function isSafeFirstKept(message: ChatMessageData): boolean {
   if (message.role === "user") return true;
   if (message.role !== "assistant") return false;
   return toolRequests(message).length === 0;
+}
+
+function statusFromLedger(
+  ledger: SessionLedger,
+  messageCount: number,
+  tokenCount: number,
+  maxContextLength: number,
+): SessionStatus {
+  return {
+    id: ledger.id,
+    name: ledger.name,
+    dirty: ledger.dirty,
+    existsOnDisk: ledger.existsOnDisk,
+    messageCount,
+    tokenCount,
+    maxContextLength,
+  };
 }
 
 /** Summary of a saved session for list commands. */
@@ -183,22 +200,117 @@ export interface ModelActObserver {
   onToolCallRequestDequeued(roundIndex: number, callId: number): void;
 }
 
-interface SessionManagerOptions {
-  client: LMStudioClient;
+/**
+ * Request passed from session orchestration to a model adapter.
+ * @internal
+ */
+export interface ModelTurnRequest {
+  /** Current system prompt, supplied out-of-band from persisted messages. */
+  systemPrompt: string;
+  /** Projected visible context, excluding the system prompt. */
+  messages: ChatMessageData[];
+  /** Tools available to the model during this turn. */
+  tools: Tool[];
+  /** App-level guard for approving or denying model tool calls. */
+  guardToolCall?: ToolCallGuard;
+  /** Signal that cancels the active turn. */
+  signal: AbortSignal;
+  /** Optional telemetry observer for model callback events. */
+  observer?: ModelActObserver;
+}
+
+/**
+ * Output returned by a model adapter after one turn.
+ * @internal
+ */
+export interface ModelTurnOutput {
+  /** Messages to append to the durable session log. */
+  persistedMessages: ChatMessageData[];
+  /** User-visible assistant text, before persistence-specific stripping. */
+  replyTexts: string[];
+  /** Time to first model token, when one was observed. */
+  firstTokenMs?: number;
+}
+
+/**
+ * Adapter boundary for model turns and token counting.
+ * @internal
+ */
+export interface ModelTurnPort {
+  /** Runs one model turn over an already-projected session context. */
+  run(request: ModelTurnRequest): Promise<ModelTurnOutput>;
+  /** Counts tokens for each message in order. */
+  countTokens(messages: ChatMessageData[]): Promise<number[]>;
+}
+
+/**
+ * Adapter boundary for generating compaction summaries.
+ * @internal
+ */
+export interface ContextSummaryPort {
+  /** Generates an updated structured context checkpoint. */
+  summarize(input: SummaryCompactionInput): Promise<string>;
+}
+
+/**
+ * Options for one session turn.
+ * @internal
+ */
+export interface SessionTurnOptions {
+  /** Tools available to the model during this turn. */
+  tools: Tool[];
+  /** App-level guard for approving or denying model tool calls. */
+  guardToolCall?: ToolCallGuard;
+  /** Signal that cancels the active turn. */
+  signal: AbortSignal;
+  /** Optional telemetry observer for model callback events. */
+  observer?: ModelActObserver;
+}
+
+/**
+ * Caller-facing session API.
+ * @internal
+ */
+export interface AgentSessions {
+  /** Current in-memory session identity. */
+  readonly current: { id: string; name?: string };
+
+  /** Runs one user turn and persists resulting session events. */
+  turn(input: string | UserTurnInput, options: SessionTurnOptions): Promise<SessionTurnResult>;
+
+  /** Starts a fresh in-memory session without saving the previous one. */
+  readonly new: () => SessionStatus;
+  /** Saves the current session log to disk. */
+  save(): Promise<SessionStatus>;
+  /** Loads a saved session by id or name. */
+  load(ref: string): Promise<SessionStatus>;
+  /** Saves the current session and branches into a new unsaved session id. */
+  fork(): Promise<{ from: SessionStatus; to: SessionStatus }>;
+  /** Sets a user-facing session name. */
+  rename(name: string): Promise<SessionStatus>;
+  /** Lists saved sessions. */
+  list(): Promise<SavedSessionSummary[]>;
+  /** Returns the current status, optionally refreshing token counts. */
+  status(options?: { refresh?: boolean }): Promise<SessionStatus>;
+  /** Appends a manual compaction checkpoint when possible. */
+  compact(options?: { instructions?: string }): Promise<SessionCompactionResult>;
+  /** Applies the latest system prompt to future context projections. */
+  applySystemPrompt(prompt: string): Promise<SessionStatus>;
+}
+
+interface PersistentAgentSessionsOptions {
   store: SessionStore;
-  model: LLM;
+  model: ModelTurnPort;
+  summary: ContextSummaryPort;
   systemPrompt: string;
   maxContextLength: number;
   reserveTokens?: number;
   keepRecentTokens?: number;
-  compactor: SummaryCompactor;
 }
 
-interface RunTurnOptions {
-  tools: Tool[];
-  signal: AbortSignal;
-  guardToolCall?: ToolCallGuard;
-  observer?: ModelActObserver;
+interface LmStudioModelTurnPortOptions {
+  client: LMStudioClient;
+  model: LLM;
 }
 
 const DEFAULT_RESERVE_TOKEN_RATIO = 0.25;
@@ -209,305 +321,129 @@ function percentageTokens(maxContextLength: number, ratio: number): number {
   return Math.max(1, Math.floor(maxContextLength * ratio));
 }
 
-/**
- * User-facing session: chat state, persistence, compaction, and model turns.
- * @internal
- */
-export class SessionManager {
-  readonly #client: LMStudioClient;
-  readonly #store: SessionStore;
-  readonly #model: LLM;
-  readonly #maxContextLength: number;
-  readonly #reserveTokens: number;
-  readonly #keepRecentTokens: number;
-  readonly #compactor: SummaryCompactor;
+class SessionLedger {
+  private readonly _store: SessionStore;
+  private _id: string = crypto.randomUUID();
+  private _name: string | undefined;
+  private _dirty = false;
+  private _existsOnDisk = false;
+  private _entries: SessionEntry[] = [];
+  private _writeQueue: Promise<void> = Promise.resolve();
 
-  #chat: Chat;
-  #systemPrompt: string;
-  #id: string;
-  #name: string | undefined;
-  #dirty = false;
-  #existsOnDisk = false;
-  #tokenCount = 0;
-  #entries: SessionEntry[] = [];
-  #writeQueue: Promise<void> = Promise.resolve();
-
-  constructor(spec: SessionManagerOptions) {
-    this.#client = spec.client;
-    this.#store = spec.store;
-    this.#model = spec.model;
-    this.#systemPrompt = spec.systemPrompt;
-    this.#maxContextLength = spec.maxContextLength;
-    this.#reserveTokens = spec.reserveTokens ?? percentageTokens(spec.maxContextLength, DEFAULT_RESERVE_TOKEN_RATIO);
-    this.#keepRecentTokens = spec.keepRecentTokens ??
-      percentageTokens(spec.maxContextLength, DEFAULT_KEEP_RECENT_TOKEN_RATIO);
-    this.#compactor = spec.compactor;
-    this.#chat = this.#freshChat();
-    this.#id = crypto.randomUUID();
-    this.#name = undefined;
+  constructor(store: SessionStore) {
+    this._store = store;
   }
 
   get id(): string {
-    return this.#id;
+    return this._id;
   }
 
-  status(): SessionStatus {
-    return {
-      id: this.#id,
-      name: this.#name,
-      dirty: this.#dirty,
-      existsOnDisk: this.#existsOnDisk,
-      messageCount: this.#chat.getMessagesArray().length,
-      tokenCount: this.#tokenCount,
-      maxContextLength: this.#maxContextLength,
-    };
+  get name(): string | undefined {
+    return this._name;
   }
 
-  async refreshStatus(): Promise<SessionStatus> {
-    await this.#writeQueue;
-    this.#rebuildChat();
-    await this.#refreshTokenCount();
-    return this.status();
+  get dirty(): boolean {
+    return this._dirty;
   }
 
-  async applySystemPrompt(prompt: string): Promise<void> {
-    this.#systemPrompt = prompt;
-    this.#rebuildChat();
-    await this.#refreshTokenCount();
+  get existsOnDisk(): boolean {
+    return this._existsOnDisk;
   }
 
-  /** Starts a new in-memory session (does not write the previous one). */
-  newSession(): string {
-    this.#chat = this.#freshChat();
-    this.#id = crypto.randomUUID();
-    this.#name = undefined;
-    this.#dirty = false;
-    this.#existsOnDisk = false;
-    this.#tokenCount = 0;
-    this.#entries = [];
-    this.#writeQueue = Promise.resolve();
-    return this.#id;
+  get entries(): readonly SessionEntry[] {
+    return this._entries;
   }
 
-  async save(): Promise<string> {
-    await this.#writeQueue;
-    if (!this.#existsOnDisk) {
-      await this.#store.create(this.#id, { name: this.#name });
-      await this.#store.appendMany(this.#id, this.#entries);
-      this.#existsOnDisk = true;
+  get current(): { id: string; name?: string } {
+    return this._name ? { id: this._id, name: this._name } : { id: this._id };
+  }
+
+  new(): void {
+    this._id = crypto.randomUUID();
+    this._name = undefined;
+    this._dirty = false;
+    this._existsOnDisk = false;
+    this._entries = [];
+    this._writeQueue = Promise.resolve();
+  }
+
+  async save(): Promise<void> {
+    await this._writeQueue;
+    if (!this._existsOnDisk) {
+      await this._store.create(this._id, { name: this._name });
+      await this._store.appendMany(this._id, this._entries);
+      this._existsOnDisk = true;
     }
-    this.#dirty = false;
-    this.#rebuildChat();
-    await this.#refreshTokenCount();
-    return this.#id;
+    this._dirty = false;
   }
 
   async load(ref: string): Promise<void> {
-    await this.#writeQueue;
-    const id = await this.#store.resolveId(ref);
-    const log = await this.#store.read(id);
-    this.#id = log.header.id;
-    this.#name = log.header.name;
-    this.#entries = log.entries;
-    this.#existsOnDisk = true;
-    this.#dirty = false;
-    this.#rebuildChat();
-    await this.#refreshTokenCount();
+    await this._writeQueue;
+    const id = await this._store.resolveId(ref);
+    const log = await this._store.read(id);
+    this._id = log.header.id;
+    this._name = log.header.name;
+    this._entries = log.entries;
+    this._existsOnDisk = true;
+    this._dirty = false;
+    this._writeQueue = Promise.resolve();
   }
 
-  /** Saves the current session, then branches into a new id with the same raw event log. */
-  async fork(): Promise<{ fromId: string; toId: string }> {
+  async fork(): Promise<void> {
     await this.save();
-    const fromId = this.#id;
-    const copiedEntries = structuredClone(this.#entries) as SessionEntry[];
-    this.#id = crypto.randomUUID();
-    this.#name = undefined;
-    this.#entries = copiedEntries;
-    this.#existsOnDisk = false;
-    this.#dirty = true;
-    this.#rebuildChat();
-    await this.#refreshTokenCount();
-    return { fromId, toId: this.#id };
+    this._id = crypto.randomUUID();
+    this._name = undefined;
+    this._entries = structuredClone(this._entries) as SessionEntry[];
+    this._existsOnDisk = false;
+    this._dirty = true;
+    this._writeQueue = Promise.resolve();
   }
 
-  async list(): Promise<string[]> {
-    return await this.#store.list();
+  async rename(name: string): Promise<void> {
+    if (!isValidSessionName(name)) throw new Error("Invalid session name");
+    const matches = await this._store.findIdsByName(name, this._id);
+    if (matches.length > 0) throw new Error("Session name already in use");
+    await this._writeQueue;
+    this._name = name;
+    if (this._existsOnDisk) await this._store.setName(this._id, name);
   }
 
-  async listSaved(): Promise<SavedSessionSummary[]> {
-    return (await this.#store.listHeaders()).map((header) => ({
+  async list(): Promise<SavedSessionSummary[]> {
+    return (await this._store.listHeaders()).map((header) => ({
       id: header.id,
       createdAt: header.createdAt,
       name: header.name,
     }));
   }
 
-  /** Sets a user-facing alias for the current session. */
-  async rename(name: string): Promise<void> {
-    if (!isValidSessionName(name)) throw new Error("Invalid session name");
-    const matches = await this.#store.findIdsByName(name, this.#id);
-    if (matches.length > 0) throw new Error("Session name already in use");
-    this.#name = name;
-    if (!this.#existsOnDisk) return;
-    await this.#writeQueue;
-    await this.#store.setName(this.#id, name);
-  }
-
-  /** Manually compacts the current session. */
-  async compact(instructions?: string): Promise<SessionCompactionResult> {
-    await this.#writeQueue;
-    await this.#refreshTokenCount();
-    return await this.#compact("manual", instructions);
-  }
-
-  /**
-   * Appends the user message, runs `model.act`, and finalizes the context.
-   * @internal
-   */
-  async runTurn(userInput: string | UserTurnInput, options: RunTurnOptions): Promise<SessionTurnResult> {
-    const { tools, signal, guardToolCall, observer } = options;
-    const input = normalizeUserTurnInput(userInput);
-
-    await this.#appendUser(input);
-
-    const replyTexts: string[] = [];
-    const turnTokenCounts: Promise<number>[] = [];
-    const persistWrites: Promise<void>[] = [];
-    const actStarted = performance.now();
-    let firstTokenMs: number | undefined;
-
-    await this.#model.act(this.#snapshot(), tools, {
-      ...(getActDraftModel() ?? {}),
-      ...actReasoningParsingOption(),
-      allowParallelToolExecution: true,
-      guardToolCall,
-      contextOverflowPolicy: "rollingWindow",
-      maxTokens: 4096,
-      maxPredictionRounds: getActMaxPredictionRounds(),
-      onMessage: (msg) => {
-        observer?.onMessage();
-        const toPersist = chatMessageForPersistence(msg);
-        const { message, persisted } = this.#appendAssistant(toPersist);
-        persistWrites.push(persisted);
-        turnTokenCounts.push(this.#model.countTokens(message.toString()));
-        if (isUserVisibleAssistantReply(msg)) {
-          const text = msg.getText();
-          if (text) replyTexts.push(text);
-        }
-      },
-      onFirstToken: (roundIndex) => {
-        const ms = performance.now() - actStarted;
-        if (firstTokenMs === undefined) firstTokenMs = ms;
-        observer?.onFirstToken(roundIndex, ms);
-      },
-      onRoundStart: (roundIndex) => observer?.onRoundStart(roundIndex),
-      onRoundEnd: (roundIndex) => observer?.onRoundEnd(roundIndex),
-      onToolCallRequestDequeued: (roundIndex, callId) => {
-        observer?.onToolCallRequestDequeued(roundIndex, callId);
-      },
-      onToolCallRequestEnd: (roundIndex, callId, info) => {
-        observer?.onToolCallRequestEnd(roundIndex, callId, info.toolCallRequest.name, info.isQueued);
-      },
-      onToolCallRequestFailure: (_roundIndex, callId, error) => {
-        observer?.onToolCallRequestFailure(callId, error.message);
-      },
-      onToolCallRequestFinalized: (_roundIndex, callId, info) => {
-        observer?.onToolCallRequestFinalized(callId, info.toolCallRequest.name);
-      },
-      onToolCallRequestNameReceived: (_roundIndex, callId, name) => {
-        observer?.onToolCallRequestNameReceived(callId, name);
-      },
-      onToolCallRequestStart: (roundIndex, callId, info) => {
-        observer?.onToolCallRequestStart(roundIndex, callId, info.toolCallId);
-      },
-      signal,
-    });
-
-    await Promise.all(persistWrites);
-    const turnTokens = (await Promise.all(turnTokenCounts)).reduce((sum, n) => sum + n, 0);
-    const compacted = await this.#finalizeTurn();
-
-    return {
-      replyTexts,
-      firstTokenMs,
-      turnTokens,
-      compacted,
-      totalTokens: this.#tokenCount,
-    };
-  }
-
-  #freshChat(): Chat {
-    const chat = Chat.empty();
-    chat.replaceSystemPrompt(this.#systemPrompt);
-    return chat;
-  }
-
-  #snapshot(): Chat {
-    return this.#chat.asMutableCopy();
-  }
-
-  async #appendUser(input: UserTurnInput): Promise<ChatMessage> {
-    const message = ChatMessage.create("user", input.text);
-    for (const image of input.images ?? []) {
-      message.appendFile(image);
-    }
-    this.#chat.append(message);
-    const imageCount = input.images?.length ?? 0;
-    logDebug("chat.append", {
-      role: message.getRole(),
-      textLength: message.getText().length,
-      ...(imageCount > 0 ? { imageCount } : {}),
-    });
-    await this.#persistNewEntry(createMessageEntry(messageToData(message)));
-    return message;
-  }
-
-  #appendAssistant(message: ChatMessage): { message: ChatMessage; persisted: Promise<void> } {
-    const appended = this.#append(message);
-    return {
-      message: appended,
-      persisted: this.#persistNewEntry(createMessageEntry(messageToData(appended))),
-    };
-  }
-
-  #append(chat: ChatMessage): ChatMessage;
-  #append(role: "user" | "assistant" | "system", content: string): ChatMessage;
-  #append(chatOrRole: ChatMessage | ("user" | "assistant" | "system"), content?: string): ChatMessage {
-    const message = chatOrRole instanceof ChatMessage ? chatOrRole : ChatMessage.create(chatOrRole, content ?? "");
-    this.#chat.append(message);
-    logDebug("chat.append", {
-      role: message.getRole(),
-      textLength: message.getText().length,
-    });
-    return message;
-  }
-
-  async #persistNewEntry(entry: SessionEntry): Promise<void> {
-    this.#writeQueue = this.#writeQueue.then(async () => {
-      if (!this.#existsOnDisk) {
-        await this.#store.create(this.#id, { name: this.#name });
-        await this.#store.appendMany(this.#id, this.#entries);
-        this.#existsOnDisk = true;
+  async appendEntries(entries: SessionEntry[]): Promise<void> {
+    if (entries.length === 0) return;
+    this._writeQueue = this._writeQueue.then(async () => {
+      if (!this._existsOnDisk) {
+        await this._store.create(this._id, { name: this._name });
+        await this._store.appendMany(this._id, this._entries);
+        this._existsOnDisk = true;
       }
-      await this.#store.append(this.#id, entry);
-      this.#entries.push(entry);
-      this.#dirty = false;
+      await this._store.appendMany(this._id, entries);
+      this._entries.push(...entries);
+      this._dirty = false;
     });
-    await this.#writeQueue;
+    await this._writeQueue;
   }
 
-  #rebuildChat(entries = this.#entries): void {
-    this.#chat = this.#chatFromEntries(entries);
+  async awaitWrites(): Promise<void> {
+    await this._writeQueue;
   }
+}
 
-  #chatFromEntries(entries: SessionEntry[]): Chat {
-    const chat = this.#freshChat();
-    const compaction = latestCompaction(entries);
-    const firstKeptIndex = compaction?.entry.firstKeptEntryId === null || compaction === undefined ? -1 : entries
-      .findIndex((entry) => entry.type === "message" && entry.id === compaction.entry.firstKeptEntryId);
+class ContextProjector {
+  project(entries: readonly SessionEntry[]): ChatMessageData[] {
+    const messages: ChatMessageData[] = [];
+    const compaction = latestCompaction([...entries]);
+    const firstKeptIndex = this._firstKeptIndex(entries, compaction);
 
     if (compaction) {
-      chat.append("user", `[Earlier conversation summary]\n${compaction.entry.summary}`);
+      messages.push(createTextMessageData("user", `[Earlier conversation summary]\n${compaction.entry.summary}`));
     }
 
     for (const [index, entry] of entries.entries()) {
@@ -518,46 +454,91 @@ export class SessionManager {
         const isKeptFromCheckpoint = firstKeptIndex >= 0 && index >= firstKeptIndex;
         if (!isAfterCompaction && !isKeptFromCheckpoint) continue;
       }
-      chat.append(materializeMessageForChat(this.#client, entry.message));
+      messages.push(entry.message);
     }
-    return chat;
+
+    return messages;
   }
 
-  async #refreshTokenCount(): Promise<number> {
-    const messages = this.#chat.getMessagesArray();
-    const counts = await Promise.all(messages.map((m) => countTokensForMessage(this.#model, m)));
-    this.#tokenCount = counts.reduce((sum, n) => sum + n, 0);
-    return this.#tokenCount;
+  visibleMessageEntries(entries: readonly SessionEntry[]): Omit<MessageEntryWithIndex, "tokens">[] {
+    const compaction = latestCompaction([...entries]);
+    const firstKeptIndex = this._firstKeptIndex(entries, compaction);
+
+    return entries
+      .map((entry, index) => entry.type === "message" ? { entry, index } : undefined)
+      .filter((entry): entry is Omit<MessageEntryWithIndex, "tokens"> => {
+        if (entry === undefined || entry.entry.message.role === "system") return false;
+        if (!compaction) return true;
+        return entry.index > compaction.index || (firstKeptIndex >= 0 && entry.index >= firstKeptIndex);
+      });
   }
 
-  async #finalizeTurn(): Promise<boolean> {
-    await this.#writeQueue;
-    this.#rebuildChat();
-    await this.#refreshTokenCount();
-    if (!this.#shouldCompact()) return false;
-    return (await this.#compact("auto")).compacted;
+  _firstKeptIndex(
+    entries: readonly SessionEntry[],
+    compaction: { entry: SessionCompactionEntry; index: number } | undefined,
+  ): number {
+    if (compaction === undefined || compaction.entry.firstKeptEntryId === null) return -1;
+    return entries.findIndex((entry) => entry.type === "message" && entry.id === compaction.entry.firstKeptEntryId);
+  }
+}
+
+class CompactionController {
+  private readonly _model: ModelTurnPort;
+  private readonly _summary: ContextSummaryPort;
+  private readonly _projector: ContextProjector;
+  private readonly _maxContextLength: number;
+  private readonly _reserveTokens: number;
+  private readonly _keepRecentTokens: number;
+
+  constructor(options: {
+    model: ModelTurnPort;
+    summary: ContextSummaryPort;
+    projector: ContextProjector;
+    maxContextLength: number;
+    reserveTokens?: number;
+    keepRecentTokens?: number;
+  }) {
+    this._model = options.model;
+    this._summary = options.summary;
+    this._projector = options.projector;
+    this._maxContextLength = options.maxContextLength;
+    this._reserveTokens = options.reserveTokens ??
+      percentageTokens(options.maxContextLength, DEFAULT_RESERVE_TOKEN_RATIO);
+    this._keepRecentTokens = options.keepRecentTokens ??
+      percentageTokens(options.maxContextLength, DEFAULT_KEEP_RECENT_TOKEN_RATIO);
   }
 
-  #shouldCompact(): boolean {
-    return this.#tokenCount > this.#maxContextLength - this.#reserveTokens;
+  shouldCompact(tokenCount: number): boolean {
+    return tokenCount > this._maxContextLength - this._reserveTokens;
   }
 
-  async #compact(reason: "auto" | "manual", instructions?: string): Promise<SessionCompactionResult> {
+  async compact(options: {
+    entries: readonly SessionEntry[];
+    systemPrompt: string;
+    beforeTokens: number;
+    reason: "auto" | "manual";
+    instructions?: string;
+    append: (entry: SessionCompactionEntry) => Promise<void>;
+  }): Promise<SessionCompactionResult> {
     return await traceSpan("context.compact", async (span) => {
-      const before = this.#tokenCount;
-      const previous = latestCompaction(this.#entries);
-      if (reason === "manual" && this.#entries.at(-1)?.type === "compaction") {
-        return { compacted: false, beforeTokens: before, afterTokens: before, reason };
+      const before = options.beforeTokens;
+      const entries = [...options.entries];
+      const previous = latestCompaction(entries);
+      if (options.reason === "manual" && entries.at(-1)?.type === "compaction") {
+        return { compacted: false, beforeTokens: before, afterTokens: before, reason: options.reason };
       }
-      const selected = await this.#selectCompactionCut(reason);
-      if (!selected) return { compacted: false, beforeTokens: before, afterTokens: before, reason };
 
-      const details = collectFileDetails(this.#entries);
-      const summary = await this.#compactor({
-        systemPrompt: this.#systemPrompt,
+      const selected = await this._selectCompactionCut(entries, options.reason);
+      if (!selected) {
+        return { compacted: false, beforeTokens: before, afterTokens: before, reason: options.reason };
+      }
+
+      const details = collectFileDetails(entries);
+      const summary = await this._summary.summarize({
+        systemPrompt: options.systemPrompt,
         previousSummary: previous?.entry.summary,
         messages: selected.toSummarize.map((entry) => entry.message),
-        instructions,
+        instructions: options.instructions,
         details,
       });
 
@@ -569,47 +550,27 @@ export class SessionManager {
         firstKeptEntryId: selected.firstKeptEntryId,
         tokensBefore: before,
         tokensAfter: before,
-        reason,
+        reason: options.reason,
         details,
       };
-
-      const compactedChat = this.#chatFromEntries([...this.#entries, provisional]);
-      const counts = await Promise.all(
-        compactedChat.getMessagesArray().map((m) => countTokensForMessage(this.#model, m)),
-      );
-      const after = counts.reduce((sum, n) => sum + n, 0);
+      const after = await this._countContextTokens(options.systemPrompt, [...entries, provisional]);
       const entry: SessionCompactionEntry = { ...provisional, tokensAfter: after };
 
-      await this.#persistNewEntry(entry);
-      this.#rebuildChat();
-      this.#tokenCount = after;
+      await options.append(entry);
       span.setAttributes({
         "context.tokens.before": before,
         "context.tokens.after": after,
       });
-      logDebug("context.compact", { before, after, reason });
-      return { compacted: true, beforeTokens: before, afterTokens: after, reason };
+      logDebug("context.compact", { before, after, reason: options.reason });
+      return { compacted: true, beforeTokens: before, afterTokens: after, reason: options.reason };
     });
   }
 
-  #visibleMessageEntries(entries: SessionEntry[]): Omit<MessageEntryWithIndex, "tokens">[] {
-    const compaction = latestCompaction(entries);
-    const firstKeptIndex = compaction?.entry.firstKeptEntryId === null || compaction === undefined ? -1 : entries
-      .findIndex((entry) => entry.type === "message" && entry.id === compaction.entry.firstKeptEntryId);
-
-    return entries
-      .map((entry, index) => entry.type === "message" ? { entry, index } : undefined)
-      .filter((entry): entry is Omit<MessageEntryWithIndex, "tokens"> => {
-        if (entry === undefined || entry.entry.message.role === "system") return false;
-        if (!compaction) return true;
-        return entry.index > compaction.index || (firstKeptIndex >= 0 && entry.index >= firstKeptIndex);
-      });
-  }
-
-  async #selectCompactionCut(reason: "auto" | "manual"): Promise<
-    { firstKeptEntryId: string | null; toSummarize: SessionMessageEntry[] } | undefined
-  > {
-    const messageEntries = this.#visibleMessageEntries(this.#entries);
+  async _selectCompactionCut(
+    entries: readonly SessionEntry[],
+    reason: "auto" | "manual",
+  ): Promise<{ firstKeptEntryId: string | null; toSummarize: SessionMessageEntry[] } | undefined> {
+    const messageEntries = this._projector.visibleMessageEntries(entries);
     if (messageEntries.length === 0) return undefined;
     if (reason === "manual") {
       return {
@@ -619,9 +580,7 @@ export class SessionManager {
     }
     if (messageEntries.length < 2) return undefined;
 
-    const tokenCounts = await Promise.all(
-      messageEntries.map(({ entry }) => countTokensForMessage(this.#model, ChatMessage.from(entry.message))),
-    );
+    const tokenCounts = await this._model.countTokens(messageEntries.map(({ entry }) => entry.message));
     const withTokens = messageEntries.map((entry, index) => ({ ...entry, tokens: tokenCounts[index] ?? 0 }));
 
     let retainedTokens = 0;
@@ -629,7 +588,7 @@ export class SessionManager {
     for (let index = withTokens.length - 1; index >= 0; index -= 1) {
       const candidate = withTokens[index];
       if (!candidate) continue;
-      if (firstKeptMessageIndex !== withTokens.length && retainedTokens + candidate.tokens > this.#keepRecentTokens) {
+      if (firstKeptMessageIndex !== withTokens.length && retainedTokens + candidate.tokens > this._keepRecentTokens) {
         break;
       }
       retainedTokens += candidate.tokens;
@@ -649,5 +608,271 @@ export class SessionManager {
 
     if (toSummarize.length === 0) return undefined;
     return { firstKeptEntryId: firstKept.entry.id, toSummarize };
+  }
+
+  async _countContextTokens(systemPrompt: string, entries: readonly SessionEntry[]): Promise<number> {
+    const messages = [createTextMessageData("system", systemPrompt), ...this._projector.project(entries)];
+    const counts = await this._model.countTokens(messages);
+    return counts.reduce((sum, count) => sum + count, 0);
+  }
+}
+
+/**
+ * User-facing session facade: chat state, persistence, projection, compaction, and model turns.
+ * @internal
+ */
+export class PersistentAgentSessions implements AgentSessions {
+  private readonly _ledger: SessionLedger;
+  private readonly _projector = new ContextProjector();
+  private readonly _model: ModelTurnPort;
+  private readonly _compaction: CompactionController;
+  private readonly _maxContextLength: number;
+  private _systemPrompt: string;
+  private _tokenCount = 0;
+
+  constructor(spec: PersistentAgentSessionsOptions) {
+    this._ledger = new SessionLedger(spec.store);
+    this._model = spec.model;
+    this._systemPrompt = spec.systemPrompt;
+    this._maxContextLength = spec.maxContextLength;
+    this._compaction = new CompactionController({
+      model: spec.model,
+      summary: spec.summary,
+      projector: this._projector,
+      maxContextLength: spec.maxContextLength,
+      reserveTokens: spec.reserveTokens,
+      keepRecentTokens: spec.keepRecentTokens,
+    });
+  }
+
+  get current(): { id: string; name?: string } {
+    return this._ledger.current;
+  }
+
+  async turn(input: string | UserTurnInput, options: SessionTurnOptions): Promise<SessionTurnResult> {
+    const userInput = normalizeUserTurnInput(input);
+    const userMessage = this._createUserMessage(userInput);
+    await this._appendEntries([createMessageEntry(userMessage)]);
+
+    const output = await this._model.run({
+      systemPrompt: this._systemPrompt,
+      messages: this._projector.project(this._ledger.entries),
+      tools: options.tools,
+      guardToolCall: options.guardToolCall,
+      signal: options.signal,
+      observer: options.observer,
+    });
+
+    const assistantEntries = output.persistedMessages.map(createMessageEntry);
+    for (const message of output.persistedMessages) this._logAppend(message);
+    await this._appendEntries(assistantEntries);
+
+    const turnTokens = (await this._model.countTokens(output.persistedMessages))
+      .reduce((sum, count) => sum + count, 0);
+    const compacted = await this._finalizeTurn();
+
+    return {
+      replyTexts: output.replyTexts,
+      firstTokenMs: output.firstTokenMs,
+      turnTokens,
+      compacted,
+      totalTokens: this._tokenCount,
+    };
+  }
+
+  new(): SessionStatus {
+    this._ledger.new();
+    this._tokenCount = 0;
+    return this._status();
+  }
+
+  async save(): Promise<SessionStatus> {
+    await this._ledger.save();
+    return await this.status({ refresh: true });
+  }
+
+  async load(ref: string): Promise<SessionStatus> {
+    await this._ledger.load(ref);
+    return await this.status({ refresh: true });
+  }
+
+  async fork(): Promise<{ from: SessionStatus; to: SessionStatus }> {
+    const fromStatus = await this.save();
+    await this._ledger.fork();
+    const to = await this.status({ refresh: true });
+    return { from: fromStatus, to };
+  }
+
+  async rename(name: string): Promise<SessionStatus> {
+    await this._ledger.rename(name);
+    return this._status();
+  }
+
+  async list(): Promise<SavedSessionSummary[]> {
+    return await this._ledger.list();
+  }
+
+  async status(options?: { refresh?: boolean }): Promise<SessionStatus> {
+    await this._ledger.awaitWrites();
+    if (options?.refresh) await this._refreshTokenCount();
+    return this._status();
+  }
+
+  async compact(options?: { instructions?: string }): Promise<SessionCompactionResult> {
+    await this._ledger.awaitWrites();
+    await this._refreshTokenCount();
+    const result = await this._compaction.compact({
+      entries: this._ledger.entries,
+      systemPrompt: this._systemPrompt,
+      beforeTokens: this._tokenCount,
+      reason: "manual",
+      instructions: options?.instructions,
+      append: (entry) => this._appendEntries([entry]),
+    });
+    this._tokenCount = result.afterTokens;
+    return result;
+  }
+
+  async applySystemPrompt(prompt: string): Promise<SessionStatus> {
+    this._systemPrompt = prompt;
+    await this._refreshTokenCount();
+    return this._status();
+  }
+
+  _createUserMessage(input: UserTurnInput): ChatMessageData {
+    const message = ChatMessage.create("user", input.text);
+    for (const image of input.images ?? []) message.appendFile(image);
+    this._logAppend(messageToData(message), input.images?.length ?? 0);
+    return messageToData(message);
+  }
+
+  async _appendEntries(entries: SessionEntry[]): Promise<void> {
+    await this._ledger.appendEntries(entries);
+  }
+
+  async _finalizeTurn(): Promise<boolean> {
+    await this._ledger.awaitWrites();
+    await this._refreshTokenCount();
+    if (!this._compaction.shouldCompact(this._tokenCount)) return false;
+    const result = await this._compaction.compact({
+      entries: this._ledger.entries,
+      systemPrompt: this._systemPrompt,
+      beforeTokens: this._tokenCount,
+      reason: "auto",
+      append: (entry) => this._appendEntries([entry]),
+    });
+    this._tokenCount = result.afterTokens;
+    return result.compacted;
+  }
+
+  async _refreshTokenCount(): Promise<number> {
+    const messages = [
+      createTextMessageData("system", this._systemPrompt),
+      ...this._projector.project(this._ledger.entries),
+    ];
+    const counts = await this._model.countTokens(messages);
+    this._tokenCount = counts.reduce((sum, count) => sum + count, 0);
+    return this._tokenCount;
+  }
+
+  _status(): SessionStatus {
+    const messageCount = 1 + this._projector.project(this._ledger.entries).length;
+    return statusFromLedger(this._ledger, messageCount, this._tokenCount, this._maxContextLength);
+  }
+
+  _logAppend(message: ChatMessageData, imageCount = 0): void {
+    const textLength = message.content
+      .flatMap((part) => part.type === "text" ? [part.text] : [])
+      .join("")
+      .length;
+    logDebug("chat.append", {
+      role: message.role,
+      textLength,
+      ...(imageCount > 0 ? { imageCount } : {}),
+    });
+  }
+}
+
+/**
+ * Production LM Studio model adapter for session turns.
+ * @internal
+ */
+export class LmStudioModelTurnPort implements ModelTurnPort {
+  private readonly _client: LMStudioClient;
+  private readonly _model: LLM;
+
+  /** Creates a production LM Studio model turn adapter. */
+  constructor(options: LmStudioModelTurnPortOptions) {
+    this._client = options.client;
+    this._model = options.model;
+  }
+
+  /** Runs `model.act()` and normalizes SDK callback output for persistence. */
+  async run(request: ModelTurnRequest): Promise<ModelTurnOutput> {
+    const chat = Chat.empty();
+    if (request.systemPrompt) chat.replaceSystemPrompt(request.systemPrompt);
+    for (const message of request.messages) {
+      chat.append(materializeMessageForChat(this._client, message));
+    }
+
+    const persistedMessages: ChatMessageData[] = [];
+    const replyTexts: string[] = [];
+    const actStarted = performance.now();
+    let firstTokenMs: number | undefined;
+
+    await this._model.act(chat, request.tools, {
+      ...(getActDraftModel() ?? {}),
+      ...actReasoningParsingOption(),
+      allowParallelToolExecution: true,
+      guardToolCall: request.guardToolCall,
+      contextOverflowPolicy: "rollingWindow",
+      maxTokens: 4096,
+      maxPredictionRounds: getActMaxPredictionRounds(),
+      onMessage: (message) => {
+        request.observer?.onMessage();
+        const raw = messageToData(message);
+        const toPersist = chatMessageForPersistence(message);
+        persistedMessages.push(messageToData(toPersist));
+        if (isUserVisibleAssistantReply(raw)) {
+          const text = message.getText();
+          if (text) replyTexts.push(text);
+        }
+      },
+      onFirstToken: (roundIndex) => {
+        const ms = performance.now() - actStarted;
+        if (firstTokenMs === undefined) firstTokenMs = ms;
+        request.observer?.onFirstToken(roundIndex, ms);
+      },
+      onRoundStart: (roundIndex) => request.observer?.onRoundStart(roundIndex),
+      onRoundEnd: (roundIndex) => request.observer?.onRoundEnd(roundIndex),
+      onToolCallRequestDequeued: (roundIndex, callId) => {
+        request.observer?.onToolCallRequestDequeued(roundIndex, callId);
+      },
+      onToolCallRequestEnd: (roundIndex, callId, info) => {
+        request.observer?.onToolCallRequestEnd(roundIndex, callId, info.toolCallRequest.name, info.isQueued);
+      },
+      onToolCallRequestFailure: (_roundIndex, callId, error) => {
+        request.observer?.onToolCallRequestFailure(callId, error.message);
+      },
+      onToolCallRequestFinalized: (_roundIndex, callId, info) => {
+        request.observer?.onToolCallRequestFinalized(callId, info.toolCallRequest.name);
+      },
+      onToolCallRequestNameReceived: (_roundIndex, callId, name) => {
+        request.observer?.onToolCallRequestNameReceived(callId, name);
+      },
+      onToolCallRequestStart: (roundIndex, callId, info) => {
+        request.observer?.onToolCallRequestStart(roundIndex, callId, info.toolCallId);
+      },
+      signal: request.signal,
+    });
+
+    return { persistedMessages, replyTexts, firstTokenMs };
+  }
+
+  /** Counts tokens using LM Studio chat message materialization. */
+  async countTokens(messages: ChatMessageData[]): Promise<number[]> {
+    return await Promise.all(
+      messages.map((message) => this._model.countTokens(materializeMessageForChat(this._client, message).toString())),
+    );
   }
 }

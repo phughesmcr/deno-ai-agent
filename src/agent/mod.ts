@@ -12,11 +12,18 @@ export {
   SessionStore,
 } from "./context/session-store.ts";
 export {
+  type AgentSessions,
+  type ContextSummaryPort,
+  LmStudioModelTurnPort,
   type ModelActObserver,
+  type ModelTurnOutput,
+  type ModelTurnPort,
+  type ModelTurnRequest,
+  PersistentAgentSessions,
   type SavedSessionSummary,
   type SessionCompactionResult,
-  SessionManager,
   type SessionStatus,
+  type SessionTurnOptions,
   type SessionTurnResult,
 } from "./context/session.ts";
 export { createLMStudioManager, type LMStudioManager } from "./lmstudio.ts";
