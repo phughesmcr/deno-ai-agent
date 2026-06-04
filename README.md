@@ -7,6 +7,8 @@ A [Deno](https://deno.com/) Telegram bot backed by a local [LM Studio](https://l
 - [Deno](https://docs.deno.com/runtime/getting_started/installation/) 2.x
 - [LM Studio](https://lmstudio.ai/) running locally with a loaded model
 - A Telegram bot token ([@BotFather](https://t.me/BotFather))
+- For topic-isolated sessions: a Telegram supergroup with **Topics** enabled. Add the bot to the group; grant
+  `can_manage_topics`/topic management admin rights if you want `/topic <name>` to create topics for you.
 
 ## Quick start
 
@@ -32,7 +34,9 @@ WORKSPACE_PATH=.silas
 deno task start
 ```
 
-Only the Telegram user matching `TELEGRAM_ADMIN_ID` can chat with the bot (others get a short refusal).
+Only the Telegram user matching `TELEGRAM_ADMIN_ID` can chat with the bot (others get a short refusal). In a forum
+supergroup, each topic has its own Silas session. Private chats, ordinary groups, and the main supergroup chat use the
+main conversation session.
 
 ### Images (Telegram + LM Studio)
 
@@ -145,7 +149,8 @@ flowchart LR
 
 
 
-1. An incoming Telegram text or image message is appended to the current session (photos are uploaded to LM Studio as temporary vision inputs).
+1. An incoming Telegram text or image message is appended to the session bound to that Telegram conversation
+   (`chat.id + message_thread_id`; photos are uploaded to LM Studio as temporary vision inputs).
 2. `model.act()` runs against LM Studio with the current history and tools.
 3. Assistant text is streamed into context and sent back as a MarkdownV2 reply (`stripThinking` removes model “thinking” blocks).
 4. Changes to `SYSTEM.md` in the workspace reload the system prompt without restarting.
@@ -161,6 +166,16 @@ Most file tools are scoped to `WORKSPACE_PATH` (e.g. `.silas/`); `read` can also
 
 The `subagent` tool tracks subagents per current session with in-memory Deno KV. Subagents can only use `read`, `grep`, `find`, `ls`, and `skill`; they cannot mutate files, run shell commands, ask the user, manage todos, or spawn nested subagents. Jobs survive only for the current bot process.
 
+### Telegram topic sessions
+
+Silas binds Telegram conversations to saved sessions in Deno KV under the workspace. The conversation ref is
+`chat.id + message_thread_id`; when `message_thread_id` is absent, the binding is the chat's `main` session. Forum
+supergroup topics therefore have isolated conversation memory, todos, approval prompts, permission prompts, and status.
+
+The repo workspace, MCP servers, subagent service, and LM Studio model are still shared. v1 uses one global turn queue so
+two topics cannot mutate the workspace at the same time. `/q` is global and aborts the one active model turn, regardless
+of topic.
+
 ### MCP servers
 
 Configure remote and local MCP servers in `{WORKSPACE_PATH}/mcp.json` (admin-trusted: `command` spawns subprocesses). Silas connects at startup (fail-open per server), exposes tools as `mcp__<serverId>__<toolName>`, and requires Telegram approval (`mcp` operation, high risk). Defaults: max 40 MCP tools total, 20 per server; omitted tools are listed in the system prompt only.
@@ -172,12 +187,14 @@ Supported transports: **Streamable HTTP** (`url`) and **stdio** (`command` + `ar
 
 | Command           | Action                                                                                    |
 | ----------------- | ----------------------------------------------------------------------------------------- |
-| `/start`          | Reset session; if `BOOTSTRAP.md` exists in the workspace, run an initial onboarding turn (no session help on that path) |
-| `/new`            | Fresh in-memory session (new id; does not save the previous one)                          |
+| `/start`          | Ensure the current Telegram conversation has a session; run `BOOTSTRAP.md` only for a newly created binding; show help/status |
+| `/topic <name>`   | Create a Telegram forum topic, create and save a fresh Silas session, bind it to that topic |
+| `/topics`         | List known topic/main bindings for the current chat (only topics the bot has seen or created) |
+| `/new`            | Fresh saved session bound to the current Telegram conversation                             |
 | `/save`           | Write current chat to `{WORKSPACE_PATH}/sessions/{id}.jsonl`                              |
-| `/load <id\|name>` | Restore a saved session (`/resume` is an alias; use `/rename` to set a name)              |
+| `/load <id\|name>` | Restore a saved session and bind the current Telegram conversation to it (`/resume` is an alias; use `/rename` to set a name) |
 | `/rename <name>`  | Label the current session (`[a-zA-Z0-9_-]`, one word, unique among saved sessions)        |
-| `/fork`           | Save current session, then branch into a new id with the same history (name not copied)   |
+| `/fork`           | Save current session, branch into a new saved id with the same history, and rebind the current Telegram conversation |
 | `/list`           | List saved sessions (names and ids)                                                       |
 | `/session`        | Current session, save state, message and token counts                                     |
 | `/stats`          | Same as `/session` but refreshes token count first                                        |

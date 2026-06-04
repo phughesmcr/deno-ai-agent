@@ -1,6 +1,11 @@
 import { assertEquals } from "jsr:@std/assert@1/equals";
-import type { AgentSessions, SavedSessionSummary, SessionStatus } from "../src/agent/context/session.ts";
-import { formatSessionStatus, SESSION_HELP, TelegramCommandHandler } from "../src/telegram/commands.ts";
+import type { SavedSessionSummary, SessionStatus } from "../src/agent/context/session.ts";
+import {
+  type CommandSession,
+  formatSessionStatus,
+  SESSION_HELP,
+  TelegramCommandHandler,
+} from "../src/telegram/commands.ts";
 
 class FakeSession {
   current: { id: string; name?: string } = { id: "current", name: "active" };
@@ -17,6 +22,22 @@ class FakeSession {
   forkError: Error | undefined;
   compactError: Error | undefined;
   compactInstructions: (string | undefined)[] = [];
+  bindings = [
+    {
+      chatId: 123,
+      sessionId: "main-session",
+      createdAt: "2026-06-03T00:00:00.000Z",
+      updatedAt: "2026-06-03T00:00:00.000Z",
+    },
+    {
+      chatId: 123,
+      threadId: 77,
+      sessionId: "topic-session",
+      createdAt: "2026-06-03T00:00:00.000Z",
+      updatedAt: "2026-06-03T00:00:00.000Z",
+      topicName: "Build",
+    },
+  ];
   statusValue: SessionStatus = {
     id: "current",
     name: "active",
@@ -33,10 +54,14 @@ class FakeSession {
     return Promise.resolve({ ...this.statusValue, id: this.current.id, name: this.current.name, tokenCount });
   }
 
-  new(): SessionStatus {
+  new(): Promise<SessionStatus> {
     this.current = { id: "new-id" };
     this.statusValue = { ...this.statusValue, id: "new-id", name: undefined, dirty: false, existsOnDisk: false };
-    return { ...this.statusValue };
+    return Promise.resolve({ ...this.statusValue });
+  }
+
+  newSession(): Promise<SessionStatus> {
+    return this.new();
   }
 
   save(): Promise<SessionStatus> {
@@ -83,11 +108,15 @@ class FakeSession {
     if (this.compactError) return Promise.reject(this.compactError);
     return Promise.resolve({ compacted: true, beforeTokens: 90, afterTokens: 30 });
   }
+
+  listBindings(): Promise<typeof this.bindings> {
+    return Promise.resolve(this.bindings);
+  }
 }
 
 function createHandler(session = new FakeSession()): { handler: TelegramCommandHandler; session: FakeSession } {
   return {
-    handler: new TelegramCommandHandler(session as unknown as AgentSessions),
+    handler: new TelegramCommandHandler(session as unknown as CommandSession),
     session,
   };
 }
@@ -116,7 +145,7 @@ Deno.test("TelegramCommandHandler returns text for successful session commands",
   const { handler, session } = createHandler();
 
   assertEquals(handler.help(), SESSION_HELP);
-  assertEquals(handler.newSession(), "New session.\nID: new-id\n\nUse /save to persist.");
+  assertEquals(await handler.newSession(), "New session bound to this Telegram conversation.\nID: new-id");
   assertEquals(await handler.save(), "Saved.\nnew-id");
   assertEquals(await handler.compact("keep file paths"), "Compacted.\nTokens before: 90\nTokens after: 30");
   assertEquals(session.compactInstructions, ["keep file paths"]);
@@ -134,10 +163,14 @@ Deno.test("TelegramCommandHandler returns text for successful session commands",
     ].join("\n"),
   );
   assertEquals(session.loadIds, ["archived"]);
-  assertEquals(await handler.fork(), "Forked.\nFrom: current\nTo: forked\n\nUse /save on the new branch when ready.");
+  assertEquals(await handler.fork(), "Forked and rebound this Telegram conversation.\nFrom: current\nTo: forked");
   assertEquals(
     await handler.list(),
     "Saved sessions:\narchived (current)\nactive - current",
+  );
+  assertEquals(
+    await handler.topics(),
+    "Known topic sessions:\nmain -> main-session\nBuild #77 -> topic-session",
   );
 });
 

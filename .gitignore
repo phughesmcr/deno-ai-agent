@@ -10,3 +10,5 @@ otel/jaeger-all-in-one
 .silas/todos
 .silas/skills
 .silas/mcp.json
+*.kv
+*.kv-*

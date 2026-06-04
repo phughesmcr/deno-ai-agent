@@ -1,5 +1,3 @@
-let activeTurn: Promise<void> = Promise.resolve();
-
 /** Abort controllers for the currently running Telegram-triggered model turn. */
 export interface ActiveTurn {
   /** Telegram update id or other stable turn identifier. */
@@ -42,21 +40,5 @@ export class ActiveTurnRegistry {
     turn.actController.abort();
     turn.approvalController.abort();
     return true;
-  }
-}
-
-/**
- * Runs fn after any in-flight agent turn completes (one turn at a time).
- * @internal
- */
-export async function withTurnMutex(fn: () => Promise<void>): Promise<void> {
-  const previous = activeTurn;
-  const gate = Promise.withResolvers<void>();
-  activeTurn = gate.promise;
-  await previous;
-  try {
-    await fn();
-  } finally {
-    gate.resolve();
   }
 }

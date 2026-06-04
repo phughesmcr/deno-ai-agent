@@ -1,4 +1,5 @@
 import { botCommandName } from "./is-bot-command.ts";
+import { telegramConversationKey, telegramConversationRef } from "./conversation.ts";
 import type { TelegramContext } from "./telegram.ts";
 
 function commandName(ctx: TelegramContext): string | undefined {
@@ -11,6 +12,6 @@ function commandName(ctx: TelegramContext): string | undefined {
 export function telegramUpdateKey(ctx: TelegramContext): string | undefined {
   if (ctx.callbackQuery) return undefined;
   if (commandName(ctx) === "q") return undefined;
-  const chatId = ctx.chat?.id;
-  return chatId === undefined ? undefined : `msg:${chatId}`;
+  const ref = telegramConversationRef(ctx);
+  return ref === undefined ? undefined : `msg:${telegramConversationKey(ref)}`;
 }

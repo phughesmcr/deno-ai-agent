@@ -1,13 +1,15 @@
 import { Bot, type Context, GrammyError, HttpError } from "grammy";
 
 import { questions, type QuestionsFlavor } from "grammy-questions";
-import type { AgentSessions, AskUserQuestionPort, TodoTelegramMeta } from "../agent/mod.ts";
+import type { AskUserQuestionPort, TodoTelegramMeta } from "../agent/mod.ts";
 import type { PermissionCallbackDispatch } from "../permission-broker/mod.ts";
 import { loadTelegramConfig, logDebug } from "../shared/mod.ts";
 import { installConcurrentUpdates } from "./bot-runner.ts";
-import { TelegramCommandHandler } from "./commands.ts";
+import { SESSION_HELP, TelegramCommandHandler } from "./commands.ts";
+import { telegramConversationRef } from "./conversation.ts";
 import { showTodosForSession } from "./grammy-todo-display-adapter.ts";
 import { isPermissionCallback } from "./permission-callback.ts";
+import type { TelegramSessionCoordinator } from "./session-coordinator.ts";
 import { replyError } from "./telegram-reply.ts";
 
 interface BotConfig {
@@ -69,12 +71,20 @@ function commandRest(ctx: TelegramContext): string | undefined {
 
 const PENDING_INTERACTION_HINT = "Please resolve the pending question or approval first.";
 
+function replyThreadId(ctx: TelegramContext): number | undefined {
+  return ctx.message?.message_thread_id;
+}
+
+async function replyInConversation(ctx: TelegramContext, text: string): Promise<void> {
+  await ctx.reply(text, { message_thread_id: replyThreadId(ctx) });
+}
+
 /**
  * Creates and configures the Telegram bot from environment variables.
  * @internal
  */
 export function createTelegramManager({
-  session,
+  sessions,
   onAdminStart,
   userQuestions,
   permissionPrompts,
@@ -83,7 +93,7 @@ export function createTelegramManager({
   todosDir,
   updateTelegramMeta,
 }: {
-  session: AgentSessions;
+  sessions: TelegramSessionCoordinator;
   onAdminStart: (ctx: TelegramContext) => Promise<void>;
   userQuestions?: AskUserQuestionPort;
   permissionPrompts?: TelegramPermissionPromptPort;
@@ -95,7 +105,15 @@ export function createTelegramManager({
   const { token, adminId } = getEnv();
 
   const bot = new Bot<TelegramContext>(token);
-  const commands = new TelegramCommandHandler(session, todosDir);
+
+  function commandsFor(ctx: TelegramContext): TelegramCommandHandler | undefined {
+    const ref = telegramConversationRef(ctx);
+    if (!ref) return undefined;
+    return new TelegramCommandHandler(
+      sessions.forConversation(ref, { createdBy: ctx.from?.id }),
+      todosDir,
+    );
+  }
 
   bot.catch(async (err) => {
     const ctx = err.ctx;
@@ -125,7 +143,7 @@ export function createTelegramManager({
 
   bot.on("message", async (ctx, next) => {
     if (!ctx.config.isAdmin) {
-      await ctx.reply("Sorry, you are not authorized to use this bot.");
+      await replyInConversation(ctx, "Sorry, you are not authorized to use this bot.");
       return;
     }
     await next();
@@ -134,7 +152,7 @@ export function createTelegramManager({
   bot.command("q", async (ctx: TelegramContext) => {
     const aborted = turnAbort?.abortActiveTurn() ?? false;
     await ctx.reply(aborted ? "Aborted current turn." : "No active turn.", {
-      message_thread_id: ctx.message?.message_thread_id,
+      message_thread_id: replyThreadId(ctx),
     });
   });
 
@@ -170,7 +188,7 @@ export function createTelegramManager({
 
   function blockIfInteractionPending(ctx: TelegramContext): boolean {
     if (userQuestions?.isPending() || permissionPrompts?.isPending() || approvals?.isPending()) {
-      void ctx.reply(PENDING_INTERACTION_HINT);
+      void replyInConversation(ctx, PENDING_INTERACTION_HINT);
       return true;
     }
     return false;
@@ -179,45 +197,66 @@ export function createTelegramManager({
   bot.command("start", async (ctx) => {
     if (ctx.config.isAdmin) {
       if (blockIfInteractionPending(ctx)) return;
-      await ctx.reply(commands.newSession());
-      await onAdminStart(ctx);
+      const ref = telegramConversationRef(ctx);
+      if (!ref) {
+        await replyInConversation(ctx, "No Telegram chat found for this command.");
+        return;
+      }
+      const resolution = await sessions.ensure(ref, { createdBy: ctx.from?.id });
+      if (resolution.created) await onAdminStart(ctx);
+      const commands = commandsFor(ctx);
+      if (!commands) return;
+      await replyInConversation(ctx, `Hello, admin!\n\n${commands.help()}\n\n${await commands.session()}`);
     } else {
-      await ctx.reply("Sorry, you are not authorized to use this bot.");
+      await replyInConversation(ctx, "Sorry, you are not authorized to use this bot.");
     }
   });
 
   bot.command("help", async (ctx) => {
-    await ctx.reply(commands.help());
+    const commands = commandsFor(ctx);
+    await replyInConversation(ctx, commands?.help() ?? SESSION_HELP);
   });
 
   bot.command("new", async (ctx: TelegramContext) => {
     if (blockIfInteractionPending(ctx)) return;
-    await ctx.reply(commands.newSession());
+    const commands = commandsFor(ctx);
+    await replyInConversation(ctx, commands ? await commands.newSession() : "No Telegram chat found for this command.");
   });
 
   bot.command("session", async (ctx: TelegramContext) => {
     if (blockIfInteractionPending(ctx)) return;
-    await ctx.reply(await commands.session());
+    const commands = commandsFor(ctx);
+    await replyInConversation(ctx, commands ? await commands.session() : "No Telegram chat found for this command.");
   });
 
   bot.command("stats", async (ctx: TelegramContext) => {
     if (blockIfInteractionPending(ctx)) return;
-    await ctx.reply(await commands.stats());
+    const commands = commandsFor(ctx);
+    await replyInConversation(ctx, commands ? await commands.stats() : "No Telegram chat found for this command.");
   });
 
   bot.command("compact", async (ctx: TelegramContext) => {
     if (blockIfInteractionPending(ctx)) return;
-    await ctx.reply(await commands.compact(commandRest(ctx)));
+    const commands = commandsFor(ctx);
+    await replyInConversation(
+      ctx,
+      commands ? await commands.compact(commandRest(ctx)) : "No Telegram chat found for this command.",
+    );
   });
 
   bot.command("fork", async (ctx: TelegramContext) => {
     if (blockIfInteractionPending(ctx)) return;
-    await ctx.reply(await commands.fork());
+    const commands = commandsFor(ctx);
+    await replyInConversation(ctx, commands ? await commands.fork() : "No Telegram chat found for this command.");
   });
 
   async function handleLoad(ctx: TelegramContext): Promise<void> {
     if (blockIfInteractionPending(ctx)) return;
-    await ctx.reply(await commands.load(sessionArg(ctx)));
+    const commands = commandsFor(ctx);
+    await replyInConversation(
+      ctx,
+      commands ? await commands.load(sessionArg(ctx)) : "No Telegram chat found for this command.",
+    );
   }
 
   bot.command("load", handleLoad);
@@ -226,30 +265,76 @@ export function createTelegramManager({
   bot.command("rename", async (ctx: TelegramContext) => {
     if (blockIfInteractionPending(ctx)) return;
     const name = commandRest(ctx)?.trim();
-    await ctx.reply(await commands.rename(name && name.length > 0 ? name : undefined));
+    const commands = commandsFor(ctx);
+    await replyInConversation(
+      ctx,
+      commands ?
+        await commands.rename(name && name.length > 0 ? name : undefined) :
+        "No Telegram chat found for this command.",
+    );
   });
 
   bot.command("save", async (ctx: TelegramContext) => {
     if (blockIfInteractionPending(ctx)) return;
-    await ctx.reply(await commands.save());
+    const commands = commandsFor(ctx);
+    await replyInConversation(ctx, commands ? await commands.save() : "No Telegram chat found for this command.");
   });
 
   bot.command("list", async (ctx: TelegramContext) => {
     if (blockIfInteractionPending(ctx)) return;
-    await ctx.reply(await commands.list());
+    const commands = commandsFor(ctx);
+    await replyInConversation(ctx, commands ? await commands.list() : "No Telegram chat found for this command.");
+  });
+
+  bot.command("topics", async (ctx: TelegramContext) => {
+    if (blockIfInteractionPending(ctx)) return;
+    const commands = commandsFor(ctx);
+    await replyInConversation(ctx, commands ? await commands.topics() : "No Telegram chat found for this command.");
+  });
+
+  bot.command("topic", async (ctx: TelegramContext) => {
+    if (blockIfInteractionPending(ctx)) return;
+    const name = commandRest(ctx)?.trim();
+    if (!name) {
+      await replyInConversation(ctx, "Usage: /topic <name>");
+      return;
+    }
+    if (!ctx.chat) {
+      await replyInConversation(ctx, "No Telegram chat found for this command.");
+      return;
+    }
+    try {
+      const topic = await ctx.api.createForumTopic(ctx.chat.id, name);
+      const ref = { chatId: ctx.chat.id, threadId: topic.message_thread_id };
+      const status = await sessions.replaceWithNew(ref, { createdBy: ctx.from?.id, topicName: name });
+      await ctx.api.sendMessage(
+        ctx.chat.id,
+        `Session ready.\nID: ${status.id}`,
+        { message_thread_id: topic.message_thread_id },
+      );
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      await replyInConversation(ctx, `Topic creation failed: ${message}`);
+    }
   });
 
   bot.command("todos", async (ctx: TelegramContext) => {
     if (blockIfInteractionPending(ctx)) return;
     if (!todosDir || !updateTelegramMeta) {
-      await ctx.reply("Todo list is not configured.");
+      await replyInConversation(ctx, "Todo list is not configured.");
+      return;
+    }
+    const commands = commandsFor(ctx);
+    if (!commands) {
+      await replyInConversation(ctx, "No Telegram chat found for this command.");
       return;
     }
     try {
-      await showTodosForSession(ctx, session.current.id, todosDir, updateTelegramMeta);
+      const status = await commands.sessionStatus();
+      await showTodosForSession(ctx, status.id, todosDir, updateTelegramMeta);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      await ctx.reply(`Failed to show todos: ${message}`);
+      await replyInConversation(ctx, `Failed to show todos: ${message}`);
     }
   });
 

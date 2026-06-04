@@ -1,6 +1,7 @@
 // deno-lint-ignore-file camelcase -- Telegram API field names are snake_case.
 
 import { logDebug } from "../shared/log.ts";
+import { telegramConversationKey, type TelegramConversationRef } from "./conversation.ts";
 import type { TelegramImageItem } from "./telegram-image.ts";
 import type { TelegramContext } from "./telegram.ts";
 
@@ -43,8 +44,8 @@ export interface MediaGroupBuffer extends Disposable {
     item: TelegramImageItem;
     caption?: string;
   }): void;
-  /** Flushes any pending album for the chat before handling text. */
-  flushPendingForChat(chatId: number): void;
+  /** Flushes any pending album for the conversation before handling text. */
+  flushPendingForConversation(ref: TelegramConversationRef): void;
   /** Clears pending timers (app shutdown). */
   dispose(): void;
 }
@@ -57,21 +58,25 @@ export function createMediaGroupBuffer(
   onFlush: (payload: AlbumFlushPayload) => void | Promise<void>,
 ): MediaGroupBuffer {
   const albums = new Map<string, AlbumState>();
-  const chatToGroup = new Map<number, string>();
+  const conversationToGroup = new Map<string, string>();
+
+  function albumKey(context: AlbumFlushContext, mediaGroupId: string): string {
+    return `${telegramConversationKey(context)}:${mediaGroupId}`;
+  }
 
   function clearTimer(state: AlbumState): void {
     if (state.flushTimer !== undefined) clearTimeout(state.flushTimer);
   }
 
-  function removeAlbum(mediaGroupId: string): void {
-    const state = albums.get(mediaGroupId);
+  function removeAlbum(key: string): void {
+    const state = albums.get(key);
     if (!state) return;
     clearTimer(state);
-    albums.delete(mediaGroupId);
-    chatToGroup.delete(state.context.chatId);
+    albums.delete(key);
+    conversationToGroup.delete(telegramConversationKey(state.context));
   }
 
-  function scheduleFlush(state: AlbumState): void {
+  function scheduleFlush(key: string, state: AlbumState): void {
     clearTimer(state);
     state.flushTimer = setTimeout(() => {
       void Promise.try(async () => {
@@ -82,7 +87,7 @@ export function createMediaGroupBuffer(
           items: state.items,
           text: state.text,
         };
-        removeAlbum(state.mediaGroupId);
+        removeAlbum(key);
         await onFlush(payload);
       });
     }, ALBUM_DEBOUNCE_MS);
@@ -91,12 +96,13 @@ export function createMediaGroupBuffer(
   function dispose(): void {
     for (const state of albums.values()) clearTimer(state);
     albums.clear();
-    chatToGroup.clear();
+    conversationToGroup.clear();
   }
 
   return {
     enqueue({ mediaGroupId, context, turnCtx, item, caption }): void {
-      let state = albums.get(mediaGroupId);
+      const key = albumKey(context, mediaGroupId);
+      let state = albums.get(key);
       if (!state) {
         const created: AlbumState = {
           mediaGroupId,
@@ -104,8 +110,8 @@ export function createMediaGroupBuffer(
           turnCtx,
           items: [],
         };
-        albums.set(mediaGroupId, created);
-        chatToGroup.set(context.chatId, mediaGroupId);
+        albums.set(key, created);
+        conversationToGroup.set(telegramConversationKey(context), key);
         state = created;
       }
 
@@ -118,13 +124,13 @@ export function createMediaGroupBuffer(
       const trimmed = caption?.trim();
       if (trimmed && !state.text) state.text = trimmed;
 
-      scheduleFlush(state);
+      scheduleFlush(key, state);
     },
 
-    flushPendingForChat(chatId): void {
-      const mediaGroupId = chatToGroup.get(chatId);
-      if (!mediaGroupId) return;
-      const state = albums.get(mediaGroupId);
+    flushPendingForConversation(ref): void {
+      const key = conversationToGroup.get(telegramConversationKey(ref));
+      if (!key) return;
+      const state = albums.get(key);
       if (!state) return;
       clearTimer(state);
       void Promise.try(async () => {
@@ -135,7 +141,7 @@ export function createMediaGroupBuffer(
           items: state.items,
           text: state.text,
         };
-        removeAlbum(mediaGroupId);
+        removeAlbum(key);
         await onFlush(payload);
       });
     },

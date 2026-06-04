@@ -24,7 +24,6 @@ import {
   waitForPermissionControlClient,
 } from "./src/permission-broker/mod.ts";
 import { loadAppConfig, logDebug, logError, logInfo, traceSpan } from "./src/shared/mod.ts";
-import { SESSION_HELP } from "./src/telegram/commands.ts";
 import {
   ActiveTurnRegistry,
   botCommandName,
@@ -47,8 +46,10 @@ import {
   startTelegramBot,
   startTelegramTypingIndicator,
   type TelegramContext,
+  telegramConversationRef,
+  TelegramSessionBindingStore,
+  TelegramSessionCoordinator,
   UnsupportedImageError,
-  withTurnMutex,
 } from "./src/telegram/mod.ts";
 
 const PENDING_INTERACTION_HINT =
@@ -125,6 +126,11 @@ async function main(): Promise<void> {
   await agent.sessions.applySystemPrompt(await workspace.reloadSystemPrompt());
 
   const subagentKv = await Deno.openKv(":memory:");
+  const telegramBindingsKv = await Deno.openKv(`${workspace.path}/telegram-bindings.kv`);
+  const telegramSessions = new TelegramSessionCoordinator({
+    sessions: agent.sessions,
+    bindings: new TelegramSessionBindingStore(telegramBindingsKv),
+  });
 
   const bindUpdateTelegramMeta = (sessionId: string, meta: Parameters<typeof updateTelegramMeta>[2]) =>
     updateTelegramMeta(workspace.todosDir, sessionId, meta);
@@ -210,7 +216,10 @@ async function main(): Promise<void> {
         /* best-effort ack while the model turn runs */
       }
 
-      await withTurnMutex(async () => {
+      const ref = telegramConversationRef(ctx);
+      if (!ref) throw new Error("No Telegram conversation ref for model turn");
+
+      await telegramSessions.withConversation(ref, async () => {
         const { tools, guardToolCall } = await createTurnToolSet();
         activeTurnId = String(updateId);
 
@@ -277,7 +286,7 @@ async function main(): Promise<void> {
   }
 
   const telegram = createTelegramManager({
-    session: agent.sessions,
+    sessions: telegramSessions,
     onAdminStart: async (ctx) => {
       const bootstrap = await readBootstrapIfPresent(workspace.path);
       if (bootstrap && ctx.message) {
@@ -290,7 +299,6 @@ async function main(): Promise<void> {
         );
         return;
       }
-      await ctx.reply(`Hello, admin!\n\n${SESSION_HELP}`);
     },
     userQuestions,
     permissionPrompts,
@@ -316,7 +324,8 @@ async function main(): Promise<void> {
             "telegram.album.size": payload.items.length,
             "telegram.has_images": true,
             "telegram.image_count": payload.items.length,
-            "session.id": agent.sessions.current.id,
+            "telegram.chat_id": payload.context.chatId,
+            ...(payload.context.threadId !== undefined ? { "telegram.thread_id": payload.context.threadId } : {}),
           });
 
           const images = await prepareTelegramImages(lmstudio.client, payload.items);
@@ -366,6 +375,7 @@ async function main(): Promise<void> {
     await telegram.bot.stop();
     await subagents.shutdown();
     subagentKv.close();
+    telegramBindingsKv.close();
     workspace[Symbol.dispose]();
   });
 
@@ -435,7 +445,10 @@ async function main(): Promise<void> {
           }
 
           if (message.text?.trim()) {
-            mediaGroupBuffer.flushPendingForChat(ctx.chat.id);
+            mediaGroupBuffer.flushPendingForConversation({
+              chatId: ctx.chat.id,
+              ...(message.message_thread_id !== undefined ? { threadId: message.message_thread_id } : {}),
+            });
           }
 
           let userInput: UserTurnInput | null;
@@ -461,7 +474,8 @@ async function main(): Promise<void> {
           span.setAttributes({
             "telegram.update_id": ctx.update.update_id,
             "message.length": userInput.text.length,
-            "session.id": agent.sessions.current.id,
+            "telegram.chat_id": ctx.chat.id,
+            ...(message.message_thread_id !== undefined ? { "telegram.thread_id": message.message_thread_id } : {}),
             ...(imageCount > 0 ? { "telegram.has_images": true, "telegram.image_count": imageCount } : {}),
           });
 

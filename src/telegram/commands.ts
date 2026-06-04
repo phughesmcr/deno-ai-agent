@@ -1,13 +1,13 @@
-import { type AgentSessions, copyTodosForSession, type SavedSessionSummary, type SessionStatus } from "../agent/mod.ts";
+import { copyTodosForSession, type SavedSessionSummary, type SessionStatus } from "../agent/mod.ts";
+import type { TelegramSessionBinding } from "./session-binding-store.ts";
 
 /** One-line help text for supported session commands. */
 export const SESSION_HELP =
-  "Sessions: /new - fresh chat | /save - write to disk | /load <id|name> - restore | /resume <id|name> - alias for load | /rename <name> - label session | /fork - branch copy | /list - saved sessions | /session - status | /stats - tokens | /compact [instructions] - summarize history | /todos - task list";
+  "Sessions: /topic <name> - create forum topic | /topics - known topic sessions | /new - fresh chat | /save - write to disk | /load <id|name> - restore | /resume <id|name> - alias for load | /rename <name> - label session | /fork - branch copy | /list - saved sessions | /session - status | /stats - tokens | /compact [instructions] - summarize history | /todos - task list";
 
-interface CommandSession {
-  readonly current: { id: string; name?: string };
+export interface CommandSession {
   status(options?: { refresh?: boolean }): Promise<SessionStatus>;
-  readonly new: () => SessionStatus;
+  newSession(): Promise<SessionStatus>;
   save(): Promise<SessionStatus>;
   load(ref: string): Promise<SessionStatus>;
   rename(name: string): Promise<SessionStatus>;
@@ -16,6 +16,7 @@ interface CommandSession {
   compact(
     options?: { instructions?: string },
   ): Promise<{ compacted: boolean; beforeTokens: number; afterTokens: number }>;
+  listBindings?(): Promise<TelegramSessionBinding[]>;
 }
 
 function formatSessionLabel(status: Pick<SessionStatus, "id" | "name">): string {
@@ -45,6 +46,17 @@ function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
+function formatThreadLabel(binding: TelegramSessionBinding): string {
+  if (binding.topicName) {
+    return binding.threadId === undefined ? binding.topicName : `${binding.topicName} #${binding.threadId}`;
+  }
+  return binding.threadId === undefined ? "main" : `topic #${binding.threadId}`;
+}
+
+function formatBindingLine(binding: TelegramSessionBinding): string {
+  return `${formatThreadLabel(binding)} -> ${binding.sessionId}`;
+}
+
 /**
  * Command behavior independent of Grammy.
  * @internal
@@ -53,7 +65,7 @@ export class TelegramCommandHandler {
   private readonly _session: CommandSession;
   private readonly _todosDir?: string;
 
-  constructor(session: AgentSessions, todosDir?: string) {
+  constructor(session: CommandSession, todosDir?: string) {
     this._session = session;
     this._todosDir = todosDir;
   }
@@ -62,13 +74,17 @@ export class TelegramCommandHandler {
     return SESSION_HELP;
   }
 
-  newSession(): string {
-    const status = this._session.new();
-    return `New session.\nID: ${status.id}\n\nUse /save to persist.`;
+  async newSession(): Promise<string> {
+    const status = await this._session.newSession();
+    return `New session bound to this Telegram conversation.\nID: ${status.id}`;
   }
 
   async session(): Promise<string> {
     return formatSessionStatus(await this._session.status());
+  }
+
+  async sessionStatus(): Promise<SessionStatus> {
+    return await this._session.status();
   }
 
   async stats(): Promise<string> {
@@ -95,7 +111,7 @@ export class TelegramCommandHandler {
       if (this._todosDir) {
         await copyTodosForSession(this._todosDir, from.id, to.id);
       }
-      return `Forked.\nFrom: ${from.id}\nTo: ${to.id}\n\nUse /save on the new branch when ready.`;
+      return `Forked and rebound this Telegram conversation.\nFrom: ${from.id}\nTo: ${to.id}`;
     } catch (error) {
       return `Fork failed: ${errorMessage(error)}`;
     }
@@ -134,8 +150,15 @@ export class TelegramCommandHandler {
   async list(): Promise<string> {
     const sessions = await this._session.list();
     if (sessions.length === 0) return "No saved sessions. /save writes the current chat.";
-    const current = this._session.current.id;
+    const current = (await this._session.status()).id;
     const lines = sessions.map((summary) => formatListLine(summary, current));
     return `Saved sessions:\n${lines.join("\n")}`;
+  }
+
+  async topics(): Promise<string> {
+    if (!this._session.listBindings) return "Topic sessions are not configured.";
+    const bindings = await this._session.listBindings();
+    if (bindings.length === 0) return "No known topic sessions for this chat.";
+    return `Known topic sessions:\n${bindings.map(formatBindingLine).join("\n")}`;
   }
 }
