@@ -1,7 +1,10 @@
 import { type Tool, tool } from "@lmstudio/sdk";
 import { z } from "zod/v3";
 
-import type { AskUserQuestionPort } from "./user-question-port.ts";
+import { UserQuestionDeclinedError } from "./user-interaction.ts";
+import { cursorQuestionsToAnswers, type UserInteractionPort } from "./user-question-port.ts";
+
+export { UserQuestionAbortedError, UserQuestionDeclinedError } from "./user-interaction.ts";
 
 /** One selectable option in a user question. */
 export interface QuestionOption {
@@ -21,28 +24,6 @@ export interface Question {
 export interface AskUserQuestionParams {
   questions: Question[];
   metadata?: { source?: string };
-}
-
-/**
- * User tapped Cancel on the question keyboard.
- * @internal
- */
-export class UserQuestionDeclinedError extends Error {
-  constructor() {
-    super("User declined to answer the questions.");
-    this.name = "UserQuestionDeclinedError";
-  }
-}
-
-/**
- * Turn aborted while waiting for an answer.
- * @internal
- */
-export class UserQuestionAbortedError extends Error {
-  constructor(message = "Question flow aborted") {
-    super(message);
-    this.name = "UserQuestionAbortedError";
-  }
 }
 
 const TOOL_DESCRIPTION = `Use this tool when you need to ask the user questions during execution. This allows you to:
@@ -152,7 +133,7 @@ export function formatAnswers(questions: Question[], answers: Record<string, str
  * LM Studio tool that asks the user structured questions via the configured port.
  * @internal
  */
-export function createAskUserQuestionTool(port: AskUserQuestionPort): Tool {
+export function createAskUserQuestionTool(port: UserInteractionPort): Tool {
   return tool({
     name: "ask_user_question",
     description: TOOL_DESCRIPTION,
@@ -177,7 +158,12 @@ export function createAskUserQuestionTool(port: AskUserQuestionPort): Tool {
         return "Cannot ask user questions: no interactive channel configured.";
       }
       try {
-        const answers = await port.ask(params);
+        const result = await port.interact({
+          mode: "cursor_questions",
+          questions: params.questions,
+          metadata: params.metadata,
+        });
+        const answers = cursorQuestionsToAnswers(result, params.questions.length);
         return formatAnswers(params.questions, answers);
       } catch (error) {
         if (error instanceof UserQuestionDeclinedError) {

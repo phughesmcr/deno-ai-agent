@@ -1,7 +1,7 @@
 import type { Tool } from "@lmstudio/sdk";
 
 import { createToolContext, type ToolContext } from "../../src/agent/tools/context.ts";
-import type { AskUserQuestionPort } from "../../src/agent/tools/user-question-port.ts";
+import type { UserInteractionPort } from "../../src/agent/tools/user-question-port.ts";
 
 export async function createTestWorkspace(): Promise<{ dir: string; ctx: ToolContext; cleanup: () => Promise<void> }> {
   const dir = await Deno.makeTempDir({ prefix: "silas-tools-" });
@@ -49,13 +49,13 @@ export async function runToolImplementation(
 /** Mock port that immediately resolves with preset answers. */
 export function createMockAskUserQuestionPort(
   answers: Record<string, string>,
-): AskUserQuestionPort {
+): UserInteractionPort {
   return {
     isAvailable: () => true,
     isPending: () => false,
     setTurnContext: () => {},
     clearTurnContext: () => {},
-    ask: () => Promise.resolve(answers),
+    interact: () => Promise.resolve({ action: "accept", content: answers }),
   };
 }
 

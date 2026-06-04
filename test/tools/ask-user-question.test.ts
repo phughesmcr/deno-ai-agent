@@ -3,19 +3,22 @@ import { assertEquals } from "jsr:@std/assert@1";
 import {
   createAskUserQuestionTool,
   formatAnswers,
-  UserQuestionDeclinedError,
   validateAskUserQuestionParams,
 } from "../../src/agent/tools/ask-user-question.ts";
-import type { AskUserQuestionPort } from "../../src/agent/tools/user-question-port.ts";
+import type { UserInteractionPort } from "../../src/agent/tools/user-question-port.ts";
 import { runTool, runToolImplementationThrows } from "./helpers.ts";
 
-function mockPort(answers: Record<string, string>): AskUserQuestionPort {
+function mockPort(answers: Record<string, string>): UserInteractionPort {
   return {
     isAvailable: () => true,
     isPending: () => false,
     setTurnContext: () => {},
     clearTurnContext: () => {},
-    ask: () => Promise.resolve(answers),
+    interact: () =>
+      Promise.resolve({
+        action: "accept" as const,
+        content: answers,
+      }),
   };
 }
 
@@ -76,7 +79,7 @@ Deno.test("ask_user_question tool returns unavailable message", async () => {
     isPending: () => false,
     setTurnContext: () => {},
     clearTurnContext: () => {},
-    ask: () => Promise.resolve({}),
+    interact: () => Promise.resolve({ action: "accept", content: {} }),
   });
   const result = await runTool(tool, {
     questions: [{
@@ -97,7 +100,7 @@ Deno.test("ask_user_question tool returns decline message", async () => {
     isPending: () => false,
     setTurnContext: () => {},
     clearTurnContext: () => {},
-    ask: () => Promise.reject(new UserQuestionDeclinedError()),
+    interact: () => Promise.resolve({ action: "decline" }),
   });
   const result = await runTool(tool, {
     questions: [{

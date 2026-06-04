@@ -10,7 +10,8 @@ export type ApprovalOperation =
   | "todo"
   | "session"
   | "shell"
-  | "network";
+  | "network"
+  | "mcp";
 
 /** Coarse risk label shown to the approving user. */
 export type ApprovalRisk = "low" | "medium" | "high";

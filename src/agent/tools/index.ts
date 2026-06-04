@@ -29,12 +29,8 @@ export {
   formatAnswers,
   type Question,
   type QuestionOption,
-  UserQuestionAbortedError,
-  UserQuestionDeclinedError,
   validateAskUserQuestionParams,
 } from "./ask-user-question.ts";
-export { createToolContext, normalizeRoot } from "./context.ts";
-export type { ToolContext, ToolContextOptions } from "./context.ts";
 export {
   approvalRequestForToolCall,
   createToolCallGuard,
@@ -43,7 +39,9 @@ export {
   type ToolCallGuard,
   type ToolCallGuardController,
 } from "./authorization.ts";
-export { preprocessSystemPrompt } from "./prompt.ts";
+export { createToolContext, normalizeRoot } from "./context.ts";
+export type { ToolContext, ToolContextOptions } from "./context.ts";
+export { preprocessSystemPrompt, setMcpSystemPromptAppendix } from "./prompt.ts";
 export { getShellCommand } from "./shell-command.ts";
 export { createSubagentTool } from "./subagent.ts";
 export type { SubagentAction, SubagentToolParams, SubagentToolResponse } from "./subagent.ts";
@@ -69,9 +67,17 @@ export {
 } from "./todo-write.ts";
 export { createTypeScriptReplTool } from "./typescript-repl.ts";
 export {
+  type UserInteractionRequest,
+  type UserInteractionResult,
+  UserQuestionAbortedError,
+  UserQuestionDeclinedError,
+} from "./user-interaction.ts";
+export {
   type AskUserQuestionPort,
   createUnavailableAskUserQuestionPort,
+  createUnavailableUserInteractionPort,
   type TurnTarget,
+  type UserInteractionPort,
 } from "./user-question-port.ts";
 export { createWebFetchTool, type WebFetchToolOptions } from "./web-fetch.ts";
 
@@ -121,6 +127,8 @@ export interface ModelToolDeps {
     getSessionId: () => string;
   };
   subagents: SubagentPort;
+  /** Optional MCP tools (main agent turns only). */
+  mcp?: { getTools(): Tool[] };
 }
 
 /** Full tool set for normal model turns, including the central approval guard. */
@@ -131,7 +139,7 @@ export interface ModelToolSet {
 
 /** Returns all coding tools for the given workspace root. */
 export function getModelTools(deps: ModelToolDeps): Tool[] {
-  return [
+  const core = [
     createReadTool(deps.workspace),
     createWriteTool(deps.workspace),
     createEditTool(deps.workspace),
@@ -146,6 +154,8 @@ export function getModelTools(deps: ModelToolDeps): Tool[] {
     createAskUserQuestionTool(deps.userQuestions),
     createSubagentTool(deps.subagents),
   ].map(withRecoverableToolErrors);
+  const mcp = deps.mcp?.getTools() ?? [];
+  return [...core, ...mcp];
 }
 
 /** Returns normal-turn tools plus the guard that owns app-layer tool approvals. */

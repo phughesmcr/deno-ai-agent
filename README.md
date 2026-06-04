@@ -161,6 +161,12 @@ Most file tools are scoped to `WORKSPACE_PATH` (e.g. `.silas/`); `read` can also
 
 The `subagent` tool tracks subagents per current session with in-memory Deno KV. Subagents can only use `read`, `grep`, `find`, `ls`, and `skill`; they cannot mutate files, run shell commands, ask the user, manage todos, or spawn nested subagents. Jobs survive only for the current bot process.
 
+### MCP servers
+
+Configure remote and local MCP servers in `{WORKSPACE_PATH}/mcp.json` (admin-trusted: `command` spawns subprocesses). Silas connects at startup (fail-open per server), exposes tools as `mcp__<serverId>__<toolName>`, and requires Telegram approval (`mcp` operation, high risk). Defaults: max 40 MCP tools total, 20 per server; omitted tools are listed in the system prompt only.
+
+Supported transports: **Streamable HTTP** (`url`) and **stdio** (`command` + `args`, Deno-native transport). MCP **form** and **URL** elicitation map to the same Telegram flows as `ask_user_question` (including review and URL open/consent). Meta-tools per server: `mcp_get_prompt`, `mcp_read_resource`. Subagents do not receive MCP tools.
+
 ### Session commands (admin)
 
 

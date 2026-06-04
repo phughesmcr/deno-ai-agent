@@ -74,6 +74,7 @@ Deno.test("broker grant facades emit read, run, and net grant messages", async (
   attachControlConnection(fake.conn);
   try {
     await grantBrokerReadPath("/tmp/config.toml");
+    await grantBrokerRunValues([null], undefined, "once");
     await grantBrokerRunValues(["/bin/sh", "/bin/sh", "/usr/bin/env"]);
     await grantBrokerNetUrl(new URL("https://example.com/docs"), "once");
     await grantBrokerNetUrl(new URL("http://example.org:8080/docs"), "once");
@@ -85,6 +86,7 @@ Deno.test("broker grant facades emit read, run, and net grant messages", async (
   assertEquals(messages, [
     { type: "grant", permission: "read", value: "/tmp/config.toml", scope: "session" },
     { type: "grant", permission: "read", value: '"/tmp/config.toml"', scope: "session" },
+    { type: "grant", permission: "run", value: null, scope: "once" },
     { type: "grant", permission: "run", value: "/bin/sh", scope: "session" },
     { type: "grant", permission: "run", value: "/usr/bin/env", scope: "session" },
     { type: "grant", permission: "net", value: "example.com:443", scope: "once" },

@@ -1,3 +1,4 @@
+import { isMcpToolName, parseMcpToolName } from "../../mcp/naming.ts";
 import {
   type ApprovalGate,
   type ApprovalOperation,
@@ -304,8 +305,19 @@ export async function approvalRequestForToolCall(
     case "subagent":
       return null;
 
-    default:
+    default: {
+      if (isMcpToolName(toolCallRequest.name)) {
+        const parsed = parseMcpToolName(toolCallRequest.name);
+        const target = parsed ? `${parsed.serverId}/${parsed.toolName}` : toolCallRequest.name;
+        return requestForOperation(ctx, {
+          operation: "mcp",
+          target,
+          risk: "high",
+          summary: "MCP remote tool call",
+        });
+      }
       throw new Error(`No authorization policy for tool: ${toolCallRequest.name}`);
+    }
   }
 }
 

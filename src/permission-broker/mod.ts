@@ -5,7 +5,13 @@ export {
 } from "./control-client.ts";
 export { type BrokerGrantScope, brokerNetValueForUrl, grantBrokerNetUrl } from "./grant-net.ts";
 export { grantBrokerReadPath } from "./grant-read.ts";
-export { grantBrokerRunForCommands, grantBrokerRunValues, resolveExecutableOnPath } from "./grant-run.ts";
+export {
+  brokerRunGrantValuesForCommands,
+  grantBrokerRunForCommands,
+  grantBrokerRunOnceForAnyCommand,
+  grantBrokerRunValues,
+  resolveExecutableOnPath,
+} from "./grant-run.ts";
 export { grantBrokerWritePath } from "./grant-write.ts";
 export type {
   PermissionCallbackDispatch,

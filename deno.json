@@ -125,7 +125,14 @@
     "grammy": "npm:grammy@^1.43.0",
     "@grammyjs/runner": "npm:@grammyjs/runner@^2.0.3",
     "grammy-questions": "npm:grammy-questions@0.1.9",
-    "zod": "npm:zod@^4.4.3"
+    "zod": "npm:zod@^4.4.3",
+    "@modelcontextprotocol/sdk/client": "npm:@modelcontextprotocol/sdk@^1.29.0/client",
+    "@modelcontextprotocol/sdk/client/stdio": "npm:@modelcontextprotocol/sdk@^1.29.0/client/stdio.js",
+    "@modelcontextprotocol/sdk/client/streamableHttp": "npm:@modelcontextprotocol/sdk@^1.29.0/client/streamableHttp.js",
+    "@modelcontextprotocol/sdk/types": "npm:@modelcontextprotocol/sdk@^1.29.0/types.js",
+    "@modelcontextprotocol/sdk/shared/transport": "npm:@modelcontextprotocol/sdk@^1.29.0/shared/transport.js",
+    "@modelcontextprotocol/sdk/shared/stdio": "npm:@modelcontextprotocol/sdk@^1.29.0/shared/stdio.js",
+    "ajv": "npm:ajv@^8.17.1"
   },
   "unstable": [
     "kv"

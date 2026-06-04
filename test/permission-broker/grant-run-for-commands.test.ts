@@ -1,6 +1,10 @@
 import { assertEquals } from "jsr:@std/assert@1";
 
-import { grantBrokerRunForCommands, resolveExecutableOnPath } from "../../src/permission-broker/mod.ts";
+import {
+  brokerRunGrantValuesForCommands,
+  grantBrokerRunForCommands,
+  resolveExecutableOnPath,
+} from "../../src/permission-broker/mod.ts";
 
 Deno.test("resolveExecutableOnPath resolves an absolute executable path", async () => {
   const dir = await Deno.makeTempDir({ prefix: "silas-exec-" });
@@ -21,4 +25,11 @@ Deno.test("resolveExecutableOnPath returns undefined for missing commands", asyn
 Deno.test("grantBrokerRunForCommands is a no-op without a control connection", async () => {
   await grantBrokerRunForCommands(["rg", "fd", "which"]);
   assertEquals(true, true);
+});
+
+Deno.test("brokerRunGrantValuesForCommands includes PATH candidates without filesystem probing", () => {
+  assertEquals(
+    brokerRunGrantValuesForCommands(["bun"], "/opt/homebrew/bin:/usr/bin"),
+    ["bun", "/opt/homebrew/bin/bun", "/usr/bin/bun"],
+  );
 });

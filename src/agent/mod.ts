@@ -1,3 +1,4 @@
+export { McpRegistry, type McpRegistryOptions } from "../mcp/mod.ts";
 export { recordActDuration } from "./act-telemetry.ts";
 export { createSummaryCompactor, type SummaryCompactionInput, type SummaryCompactor } from "./context/compactor.ts";
 export {
@@ -68,6 +69,7 @@ export {
   type QuestionOption,
   readTodoFile,
   readTodosForSession,
+  setMcpSystemPromptAppendix,
   type SubagentAction,
   type SubagentToolParams,
   type SubagentToolResponse,
@@ -88,6 +90,9 @@ export {
   type ToolName,
   type TurnTarget,
   updateTelegramMeta,
+  type UserInteractionPort,
+  type UserInteractionRequest,
+  type UserInteractionResult,
   UserQuestionAbortedError,
   UserQuestionDeclinedError,
   validateAskUserQuestionParams,

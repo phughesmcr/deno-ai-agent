@@ -1,6 +1,6 @@
 import type { Tool } from "@lmstudio/sdk";
 
-import { UserQuestionAbortedError, UserQuestionDeclinedError } from "./ask-user-question.ts";
+import { UserQuestionAbortedError, UserQuestionDeclinedError } from "./user-interaction.ts";
 
 type ToolWithImplementation = Tool & {
   implementation: (params: Record<string, unknown>, toolCtx: unknown) => Promise<string>;

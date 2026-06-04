@@ -27,6 +27,13 @@ Use \`subagent\` to spawn asynchronous read-only subagent jobs for research. Sub
 File and shell tools have **no** runtime confirmation gate within the workspace.
 `;
 
+let mcpSystemPromptAppendix = "";
+
+/** Sets MCP catalog text appended during {@link preprocessSystemPrompt}. */
+export function setMcpSystemPromptAppendix(appendix: string): void {
+  mcpSystemPromptAppendix = appendix;
+}
+
 /**
  * Substitutes template tool names and injects workspace path for the system prompt.
  */
@@ -55,6 +62,8 @@ export function preprocessSystemPrompt(raw: string, workspacePath: string): stri
 
   const prepend = Deno.env.get("PREPEND_SYSTEM_PROMPT");
   if (prepend) result = prepend + result;
+
+  if (mcpSystemPromptAppendix) result += mcpSystemPromptAppendix;
 
   return result;
 }

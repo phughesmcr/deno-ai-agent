@@ -7,10 +7,12 @@ import {
   createToolContext,
   createWorkspace,
   getModelToolSet,
+  McpRegistry,
   normalizeUserTurnInput,
   readBootstrapIfPresent,
   recordActDuration,
   runTurn,
+  setMcpSystemPromptAppendix,
   SubagentManager,
   updateTelegramMeta,
   type UserTurnInput,
@@ -100,6 +102,28 @@ async function main(): Promise<void> {
   const lmstudio = await createLMStudioManager({ signal: controller.signal, maxContextLength });
   logInfo(`LM Studio model loaded (${config.MODEL}).`);
   const agent = await createAgent({ workspace, lmstudio, maxContextLength, signal: controller.signal });
+  logInfo("Agent session ready.");
+
+  const mcpRegistry = new McpRegistry({
+    workspacePath: workspace.path,
+    userInteraction: userQuestions,
+    elicitationEnabled: true,
+  });
+  logInfo("Connecting MCP servers...");
+  await mcpRegistry.connectAll();
+  if (mcpRegistry.connectionErrors.length > 0) {
+    logInfo(`MCP registry ready with ${mcpRegistry.connectionErrors.length} connection error(s).`);
+  } else {
+    logInfo("MCP registry ready.");
+  }
+  if (mcpRegistry.connectionErrors.length > 0) {
+    for (const err of mcpRegistry.connectionErrors) {
+      logError("mcp.connection_error", { serverId: err.serverId, message: err.message });
+    }
+  }
+  setMcpSystemPromptAppendix(mcpRegistry.systemPromptAppendix);
+  await agent.session.applySystemPrompt(await workspace.reloadSystemPrompt());
+
   const subagentKv = await Deno.openKv(":memory:");
 
   const bindUpdateTelegramMeta = (sessionId: string, meta: Parameters<typeof updateTelegramMeta>[2]) =>
@@ -124,6 +148,8 @@ async function main(): Promise<void> {
     { tools: Tool[]; guardToolCall: ReturnType<typeof getModelToolSet>["guardToolCall"] }
   > => {
     await skills.refresh();
+    await mcpRegistry.refreshTools();
+    setMcpSystemPromptAppendix(mcpRegistry.systemPromptAppendix);
     return getModelToolSet({
       workspace: toolContext,
       approvalGate: approvals,
@@ -139,6 +165,7 @@ async function main(): Promise<void> {
         getSessionId: () => agent.session.id,
       },
       subagents,
+      mcp: mcpRegistry,
     });
   };
 
@@ -334,6 +361,7 @@ async function main(): Promise<void> {
 
   registerShutdown(controller, async () => {
     mediaGroupBuffer.dispose();
+    await mcpRegistry.closeAll();
     await telegramRunner?.stop();
     await telegram.bot.stop();
     await subagents.shutdown();
