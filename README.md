@@ -81,6 +81,8 @@ Copy `.env.example` to `.env` and fill in values.
 
 ### Permission Broker
 
+Developer guide (architecture, protocols, policy, modules): [`src/permission-broker/README.md`](src/permission-broker/README.md).
+
 `deno task start` is broker-backed by default. It starts a sidecar permission broker, then runs Silas with `DENO_PERMISSION_BROKER_PATH` so Deno permission requests are handled by the daemon policy and Telegram prompts.
 
 **One terminal (default):**
