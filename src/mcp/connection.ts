@@ -9,6 +9,7 @@ import type { ResolvedMcpServerConfig } from "./config.ts";
 import { MCP_CONNECT_TIMEOUT_MS, withTimeout } from "./connect-timeout.ts";
 import { formatCallToolResult, MCP_ELICITATION_UNAVAILABLE, MCP_URL_ELICITATION_REQUIRED_CODE } from "./content.ts";
 import { registerElicitationHandler } from "./elicitation-handler.ts";
+import { grantMcpHttpBrokerAccess } from "./grant-http.ts";
 import { grantMcpStdioBrokerAccess } from "./grant-stdio.ts";
 import { attachMcpNotificationHandlers } from "./notifications.ts";
 import { ElicitationGate } from "./parallel.ts";
@@ -83,6 +84,22 @@ export class McpConnection {
         cwd: this._config.cwd,
         env: stdioChildEnv(this._config.env),
       });
+
+    if (this._config.transport === "http") {
+      logInfo(`MCP server ${this._config.id}: granting HTTP broker access...`);
+      const grantController = new AbortController();
+      try {
+        await withTimeout(
+          grantMcpHttpBrokerAccess(this._config, grantController.signal),
+          MCP_CONNECT_TIMEOUT_MS,
+          `MCP HTTP broker grant (${this._config.id})`,
+        );
+      } catch (error) {
+        grantController.abort();
+        throw error;
+      }
+      logInfo(`MCP server ${this._config.id}: HTTP broker access granted.`);
+    }
 
     if (this._config.transport === "stdio") {
       logInfo(`MCP server ${this._config.id}: granting stdio broker access...`);

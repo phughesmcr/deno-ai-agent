@@ -12,6 +12,10 @@ export function brokerNetValueForUrl(url: URL): string {
  * Pre-grants broker `net` for an approved HTTP(S) URL origin.
  * @internal
  */
-export async function grantBrokerNetUrl(url: URL, scope: BrokerGrantScope = "session"): Promise<void> {
-  await sendControlGrant("net", brokerNetValueForUrl(url), undefined, scope);
+export async function grantBrokerNetUrl(
+  url: URL,
+  scope?: BrokerGrantScope,
+  signal?: AbortSignal,
+): Promise<void> {
+  await sendControlGrant("net", brokerNetValueForUrl(url), signal, scope ?? "session");
 }
