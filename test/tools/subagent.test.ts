@@ -2,7 +2,7 @@ import { assert, assertEquals, assertStringIncludes } from "jsr:@std/assert@1";
 
 import type { SubagentActRequest, SubagentActResult } from "../../src/agent/model-act.ts";
 import { createSkillManager } from "../../src/agent/skills/mod.ts";
-import { createReadOnlySubagentTools, SubagentManager, type SubagentRecord } from "../../src/agent/subagents.ts";
+import { createReadOnlySubagentTools, SubagentJobService, type SubagentRecord } from "../../src/agent/subagents.ts";
 import { createToolContext, type ToolContext } from "../../src/agent/tools/context.ts";
 import { createSubagentTool, type SubagentAction } from "../../src/agent/tools/subagent.ts";
 import { runTool } from "./helpers.ts";
@@ -105,14 +105,33 @@ async function waitForSubagent(
   return await waitForSubagent(tool, subagentId, status, deadline);
 }
 
+async function waitForServiceSubagent(
+  service: SubagentJobService,
+  subagentId: string,
+  status: SubagentRecord["status"],
+  deadline = performance.now() + 1_000,
+): Promise<SubagentRecord> {
+  const subagent = await service.status(subagentId);
+  if (subagent?.status === status) return subagent;
+  if (performance.now() > deadline) {
+    throw new Error(`Timed out waiting for ${subagentId} to become ${status}; last status was ${subagent?.status}`);
+  }
+  await delay(5);
+  return await waitForServiceSubagent(service, subagentId, status, deadline);
+}
+
 async function withSubagents(
   fn: (spec: {
     ctx: ToolContext;
     model: FakeModel;
-    manager: SubagentManager;
+    service: SubagentJobService;
     tool: unknown;
     setSessionId: (id: string) => void;
   }) => Promise<void>,
+  options: {
+    clock?: () => Date;
+    createId?: () => string;
+  } = {},
 ): Promise<void> {
   const dir = await Deno.makeTempDir({ prefix: "deno-ai-agent-subagents-" });
   const kv = await Deno.openKv(":memory:");
@@ -124,25 +143,26 @@ async function withSubagents(
       turnId: "subagent-test",
     });
     const skills = await createSkillManager({ root: dir });
-    const manager = new SubagentManager({
+    const service = new SubagentJobService({
       kv,
       model,
       workspace: ctx,
       skills,
       getSessionId: () => sessionId,
+      ...options,
     });
     try {
       await fn({
         ctx,
         model,
-        manager,
-        tool: createSubagentTool(manager),
+        service,
+        tool: createSubagentTool(service),
         setSessionId: (id) => {
           sessionId = id;
         },
       });
     } finally {
-      await manager.shutdown();
+      await service.shutdown();
     }
   } finally {
     kv.close();
@@ -206,7 +226,7 @@ Deno.test("subagent lifecycle records completed and failed jobs", async () => {
   });
 });
 
-Deno.test("SubagentManager runs one job at a time and leaves later jobs queued", async () => {
+Deno.test("SubagentJobService runs one job at a time and leaves later jobs queued", async () => {
   await withSubagents(async ({ model, tool }) => {
     const releaseFirst = deferred<void>();
     const firstStarted = deferred<void>();
@@ -284,7 +304,7 @@ Deno.test("subagent list only returns jobs for the current session", async () =>
   });
 });
 
-Deno.test("SubagentManager passes system prompt, task, signal, and read-only tools to model act", async () => {
+Deno.test("SubagentJobService passes system prompt, task, signal, and read-only tools to model act", async () => {
   await withSubagents(async ({ model, tool }) => {
     model.behaviors.push(model.reply("done"));
     const spawned = requireSubagent(parseJson(await runTool(tool, { action: "spawn", task: "Inspect files" })));
@@ -324,4 +344,49 @@ Deno.test("createReadOnlySubagentTools exposes only read-only child tools", asyn
       await Deno.remove(outside, { recursive: true });
     }
   });
+});
+
+Deno.test("SubagentJobService status and result return the same stored record", async () => {
+  await withSubagents(async ({ service }) => {
+    const spawned = await service.spawn({ task: "Inspect shared read path" });
+    await waitForServiceSubagent(service, spawned.id, "completed");
+
+    const status = await service.status(spawned.id);
+    const result = await service.result(spawned.id);
+
+    assertEquals(status, result);
+  });
+});
+
+Deno.test("SubagentJobService async disposal cancels queued work and aborts active work", async () => {
+  await withSubagents(async ({ model, service }) => {
+    const started = deferred<void>();
+    model.behaviors.push(model.waitUntilAbort(started));
+    model.behaviors.push(model.reply("should not run"));
+
+    const active = await service.spawn({ task: "Active" });
+    await started.promise;
+    const queued = await service.spawn({ task: "Queued" });
+
+    await service[Symbol.asyncDispose]();
+
+    assertEquals((await service.status(active.id))?.status, "cancelled");
+    assertEquals((await service.status(queued.id))?.status, "cancelled");
+    assertEquals(model.runCalls.length, 1);
+  });
+});
+
+Deno.test("SubagentJobService uses deterministic clock and id dependencies", async () => {
+  await withSubagents(
+    async ({ service }) => {
+      const spawned = await service.spawn({ task: "Use deterministic dependencies" });
+
+      assertEquals(spawned.id, "fixed-subagent-id");
+      assertEquals(spawned.createdAt, "2026-01-02T03:04:05.000Z");
+    },
+    {
+      clock: () => new Date("2026-01-02T03:04:05.000Z"),
+      createId: () => "fixed-subagent-id",
+    },
+  );
 });

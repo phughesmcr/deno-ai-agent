@@ -59,7 +59,7 @@ export const readOnlySubagentToolDefinitions: readonly AgentToolDefinition[] = [
 const definitionByName = new Map(localToolDefinitions.map((definition) => [definition.name, definition]));
 
 function unavailableSubagentPort(): SubagentPort {
-  const unavailable = (): Promise<never> => Promise.reject(new Error("Subagent manager is not configured."));
+  const unavailable = (): Promise<never> => Promise.reject(new Error("Subagent job service is not configured."));
   return {
     spawn: unavailable,
     status: unavailable,

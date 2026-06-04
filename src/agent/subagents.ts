@@ -54,8 +54,8 @@ export interface SubagentPort {
   cancel(agentId: string): Promise<SubagentRecord | undefined>;
 }
 
-/** Options for {@link SubagentManager}. */
-export interface SubagentManagerOptions {
+/** Options for {@link SubagentJobService}. */
+export interface SubagentJobServiceOptions {
   /** Deno KV store used for process-local records. */
   kv: Deno.Kv;
   /** Model-act adapter capable of running read-only subagents. */
@@ -66,11 +66,31 @@ export interface SubagentManagerOptions {
   skills: SkillManager;
   /** Returns the current parent session id. */
   getSessionId: () => string;
+  /** Deterministic clock for tests. */
+  clock?: () => Date;
+  /** Deterministic id factory for tests. */
+  createId?: () => string;
 }
 
 interface SubagentRef {
   sessionId: string;
   agentId: string;
+}
+
+interface SubagentJobStore {
+  create(record: SubagentRecord): Promise<void>;
+  get(sessionId: string, agentId: string): Promise<SubagentRecord | undefined>;
+  list(sessionId: string): Promise<SubagentRecord[]>;
+  put(record: SubagentRecord): Promise<void>;
+}
+
+interface SubagentRunner {
+  run(request: {
+    sessionId: string;
+    agentId: string;
+    task: string;
+    signal: AbortSignal;
+  }): Promise<{ text: string }>;
 }
 
 const SUBAGENT_SYSTEM_PROMPT = [
@@ -80,10 +100,6 @@ const SUBAGENT_SYSTEM_PROMPT = [
   "Do not modify files, run shell commands, ask the user questions, manage todos, or spawn other agents.",
   "Return a final answer with relevant file paths and line references where useful.",
 ].join("\n");
-
-function nowIso(): string {
-  return new Date().toISOString();
-}
 
 function defaultTitle(task: string): string {
   const normalized = task.replace(/\s+/g, " ").trim();
@@ -106,7 +122,7 @@ function errorMessage(error: unknown): string {
 }
 
 function unavailable(): Promise<never> {
-  return Promise.reject(new Error("Subagent manager is not configured for this process."));
+  return Promise.reject(new Error("Subagent job service is not configured for this process."));
 }
 
 /** Port for tests and non-runtime tool construction where no model is available. */
@@ -125,61 +141,24 @@ export function createReadOnlySubagentTools(workspace: ToolContext, skills: Skil
   return createReadOnlySubagentToolsFromDefinitions(workspace, skills);
 }
 
-/**
- * Async, process-local subagent job manager backed by session-scoped Deno KV records.
- * Active controllers and queue state are intentionally in memory only.
- */
-export class SubagentManager implements SubagentPort {
+/** Deno KV-backed persistence for session-scoped subagent records. */
+class DenoKvSubagentJobStore implements SubagentJobStore {
   private readonly _kv: Deno.Kv;
-  private readonly _model: Pick<AgentModelActPort, "runSubagent">;
-  private readonly _workspace: ToolContext;
-  private readonly _skills: SkillManager;
-  private readonly _getSessionId: () => string;
 
-  private _queue: SubagentRef[] = [];
-  private _activeControllers = new Map<string, AbortController>();
-  private _running = false;
-  private _currentRun: Promise<void> | undefined;
-  private _closed = false;
-
-  /** Creates a session-scoped subagent manager over a Deno KV store. */
-  constructor(options: SubagentManagerOptions) {
-    this._kv = options.kv;
-    this._model = options.model;
-    this._workspace = options.workspace;
-    this._skills = options.skills;
-    this._getSessionId = options.getSessionId;
+  constructor(kv: Deno.Kv) {
+    this._kv = kv;
   }
 
-  /** Creates a queued subagent job and schedules it for async execution. */
-  async spawn(spec: SubagentSpawnSpec): Promise<SubagentRecord> {
-    if (this._closed) throw new Error("Subagent manager is shutting down.");
-
-    const task = spec.task.trim();
-    const sessionId = this._getSessionId();
-    const record: SubagentRecord = {
-      id: crypto.randomUUID(),
-      sessionId,
-      title: spec.title?.trim() || defaultTitle(task),
-      task,
-      status: "queued",
-      createdAt: nowIso(),
-    };
-
-    await this._put(record);
-    this._queue.push({ sessionId, agentId: record.id });
-    this._scheduleNext();
-    return record;
+  async create(record: SubagentRecord): Promise<void> {
+    await this.put(record);
   }
 
-  /** Returns a subagent in the current session by id. */
-  status(agentId: string): Promise<SubagentRecord | undefined> {
-    return this._get(this._getSessionId(), agentId);
+  async get(sessionId: string, agentId: string): Promise<SubagentRecord | undefined> {
+    const entry = await this._kv.get<SubagentRecord>(this._key(sessionId, agentId));
+    return entry.value ?? undefined;
   }
 
-  /** Lists subagents in the current session ordered by creation time. */
-  async list(): Promise<SubagentRecord[]> {
-    const sessionId = this._getSessionId();
+  async list(sessionId: string): Promise<SubagentRecord[]> {
     const records: SubagentRecord[] = [];
     const iterator = this._kv.list<SubagentRecord>({ prefix: ["subagents", sessionId] });
     for await (const entry of iterator) {
@@ -188,15 +167,117 @@ export class SubagentManager implements SubagentPort {
     return records.toSorted((a, b) => a.createdAt.localeCompare(b.createdAt));
   }
 
+  async put(record: SubagentRecord): Promise<void> {
+    await this._kv.set(this._key(record.sessionId, record.id), record);
+  }
+
+  private _key(sessionId: string, agentId: string): Deno.KvKey {
+    return ["subagents", sessionId, agentId];
+  }
+}
+
+/** Runs one read-only subagent model act with the restricted child tool set. */
+class ReadOnlySubagentRunner implements SubagentRunner {
+  private readonly _model: Pick<AgentModelActPort, "runSubagent">;
+  private readonly _workspace: ToolContext;
+  private readonly _skills: SkillManager;
+
+  constructor(options: {
+    model: Pick<AgentModelActPort, "runSubagent">;
+    workspace: ToolContext;
+    skills: SkillManager;
+  }) {
+    this._model = options.model;
+    this._workspace = options.workspace;
+    this._skills = options.skills;
+  }
+
+  async run(request: {
+    sessionId: string;
+    agentId: string;
+    task: string;
+    signal: AbortSignal;
+  }): Promise<{ text: string }> {
+    await this._skills.refresh();
+    return await this._model.runSubagent({
+      systemPrompt: SUBAGENT_SYSTEM_PROMPT,
+      task: request.task,
+      tools: createReadOnlySubagentTools(this._workspace, this._skills),
+      signal: request.signal,
+    });
+  }
+}
+
+/**
+ * Async, process-local subagent job service backed by session-scoped Deno KV records.
+ * Active controllers and queue state are intentionally in memory only.
+ */
+export class SubagentJobService implements SubagentPort, AsyncDisposable {
+  private readonly _store: SubagentJobStore;
+  private readonly _runner: SubagentRunner;
+  private readonly _getSessionId: () => string;
+  private readonly _clock: () => Date;
+  private readonly _createId: () => string;
+
+  private _queue: SubagentRef[] = [];
+  private _activeControllers = new Map<string, AbortController>();
+  private _running = false;
+  private _currentRun: Promise<void> | undefined;
+  private _closed = false;
+
+  /** Creates a session-scoped subagent job service over a Deno KV store. */
+  constructor(options: SubagentJobServiceOptions) {
+    this._store = new DenoKvSubagentJobStore(options.kv);
+    this._runner = new ReadOnlySubagentRunner({
+      model: options.model,
+      workspace: options.workspace,
+      skills: options.skills,
+    });
+    this._getSessionId = options.getSessionId;
+    this._clock = options.clock ?? (() => new Date());
+    this._createId = options.createId ?? (() => crypto.randomUUID());
+  }
+
+  /** Creates a queued subagent job and schedules it for async execution. */
+  async spawn(spec: SubagentSpawnSpec): Promise<SubagentRecord> {
+    if (this._closed) throw new Error("Subagent job service is shutting down.");
+
+    const task = spec.task.trim();
+    const sessionId = this._getSessionId();
+    const record: SubagentRecord = {
+      id: this._createId(),
+      sessionId,
+      title: spec.title?.trim() || defaultTitle(task),
+      task,
+      status: "queued",
+      createdAt: this._nowIso(),
+    };
+
+    await this._store.create(record);
+    this._queue.push({ sessionId, agentId: record.id });
+    this._scheduleNext();
+    return record;
+  }
+
+  /** Returns a subagent in the current session by id. */
+  status(agentId: string): Promise<SubagentRecord | undefined> {
+    return this._getCurrentSessionRecord(agentId);
+  }
+
+  /** Lists subagents in the current session ordered by creation time. */
+  list(): Promise<SubagentRecord[]> {
+    return this._store.list(this._getSessionId());
+  }
+
   /** Returns a subagent record, including terminal result or error when present. */
   result(agentId: string): Promise<SubagentRecord | undefined> {
-    return this.status(agentId);
+    return this._getCurrentSessionRecord(agentId);
   }
 
   /** Cancels a queued or running job; terminal jobs are returned unchanged. */
   async cancel(agentId: string): Promise<SubagentRecord | undefined> {
     const sessionId = this._getSessionId();
-    const record = await this._get(sessionId, agentId);
+    const record = await this._store.get(sessionId, agentId);
     if (!record) return undefined;
     if (isTerminal(record.status)) return record;
 
@@ -211,6 +292,11 @@ export class SubagentManager implements SubagentPort {
 
   /** Aborts active work and prevents queued work from starting. */
   async shutdown(): Promise<void> {
+    await this[Symbol.asyncDispose]();
+  }
+
+  /** Aborts active work and prevents queued work from starting. */
+  async [Symbol.asyncDispose](): Promise<void> {
     this._closed = true;
     const queued = this._queue;
     this._queue = [];
@@ -220,7 +306,7 @@ export class SubagentManager implements SubagentPort {
     }
 
     await Promise.all(queued.map(async (ref) => {
-      const record = await this._get(ref.sessionId, ref.agentId);
+      const record = await this._store.get(ref.sessionId, ref.agentId);
       if (record && record.status === "queued") {
         await this._markCancelled(ref, record);
       }
@@ -246,42 +332,47 @@ export class SubagentManager implements SubagentPort {
   }
 
   private async _runQueuedJob(ref: SubagentRef): Promise<void> {
-    const record = await this._get(ref.sessionId, ref.agentId);
+    const record = await this._store.get(ref.sessionId, ref.agentId);
     if (!record || record.status !== "queued") return;
 
     const runningRecord: SubagentRecord = {
       ...record,
       status: "running",
-      startedAt: nowIso(),
+      startedAt: this._nowIso(),
     };
-    await this._put(runningRecord);
+    await this._store.put(runningRecord);
 
     const controller = new AbortController();
     this._activeControllers.set(this._refKey(ref), controller);
 
     try {
-      const result = await this._runModel(record.task, controller.signal);
-      const latest = await this._get(ref.sessionId, ref.agentId) ?? runningRecord;
+      const result = await this._runner.run({
+        sessionId: ref.sessionId,
+        agentId: ref.agentId,
+        task: record.task,
+        signal: controller.signal,
+      });
+      const latest = await this._store.get(ref.sessionId, ref.agentId) ?? runningRecord;
       if (latest.status === "cancelled" || controller.signal.aborted) {
         await this._markCancelled(ref, latest);
         return;
       }
-      await this._put({
+      await this._store.put({
         ...latest,
         status: "completed",
-        finishedAt: nowIso(),
-        result,
+        finishedAt: this._nowIso(),
+        result: result.text,
       });
     } catch (error) {
-      const latest = await this._get(ref.sessionId, ref.agentId) ?? runningRecord;
+      const latest = await this._store.get(ref.sessionId, ref.agentId) ?? runningRecord;
       if (latest.status === "cancelled" || isAbortError(error, controller.signal)) {
         await this._markCancelled(ref, latest);
         return;
       }
-      await this._put({
+      await this._store.put({
         ...latest,
         status: "failed",
-        finishedAt: nowIso(),
+        finishedAt: this._nowIso(),
         error: errorMessage(error),
       });
     } finally {
@@ -289,43 +380,28 @@ export class SubagentManager implements SubagentPort {
     }
   }
 
-  private async _runModel(task: string, signal: AbortSignal): Promise<string> {
-    await this._skills.refresh();
-    const result = await this._model.runSubagent({
-      systemPrompt: SUBAGENT_SYSTEM_PROMPT,
-      task,
-      tools: createReadOnlySubagentTools(this._workspace, this._skills),
-      signal,
-    });
-    return result.text;
-  }
-
   private async _markCancelled(ref: SubagentRef, fallback: SubagentRecord): Promise<SubagentRecord> {
-    const current = await this._get(ref.sessionId, ref.agentId) ?? fallback;
+    const current = await this._store.get(ref.sessionId, ref.agentId) ?? fallback;
     if (isTerminal(current.status)) return current;
     const cancelled: SubagentRecord = {
       ...current,
       status: "cancelled",
-      finishedAt: current.finishedAt ?? nowIso(),
+      finishedAt: current.finishedAt ?? this._nowIso(),
       error: current.error ?? "Subagent job was cancelled.",
     };
-    await this._put(cancelled);
+    await this._store.put(cancelled);
     return cancelled;
   }
 
-  private _get(sessionId: string, agentId: string): Promise<SubagentRecord | undefined> {
-    return this._kv.get<SubagentRecord>(this._key(sessionId, agentId)).then((entry) => entry.value ?? undefined);
-  }
-
-  private _put(record: SubagentRecord): Promise<Deno.KvCommitResult> {
-    return this._kv.set(this._key(record.sessionId, record.id), record);
-  }
-
-  private _key(sessionId: string, agentId: string): Deno.KvKey {
-    return ["subagents", sessionId, agentId];
+  private _getCurrentSessionRecord(agentId: string): Promise<SubagentRecord | undefined> {
+    return this._store.get(this._getSessionId(), agentId);
   }
 
   private _refKey(ref: SubagentRef): string {
     return `${ref.sessionId}:${ref.agentId}`;
+  }
+
+  private _nowIso(): string {
+    return this._clock().toISOString();
   }
 }

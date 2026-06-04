@@ -13,7 +13,7 @@ import {
   recordActDuration,
   runTurn,
   setMcpSystemPromptAppendix,
-  SubagentManager,
+  SubagentJobService,
   updateTelegramMeta,
   type UserTurnInput,
 } from "./src/agent/mod.ts";
@@ -137,7 +137,7 @@ async function main(): Promise<void> {
     signal: () => activeTurns.actSignal ?? controller.signal,
   });
   const skills = await createSkillManager({ root: workspace.path });
-  const subagents = new SubagentManager({
+  const subagents = new SubagentJobService({
     kv: subagentKv,
     model: agent.modelAct,
     workspace: toolContext,

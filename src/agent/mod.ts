@@ -49,8 +49,8 @@ export {
 export {
   createReadOnlySubagentTools,
   createUnavailableSubagentPort,
-  SubagentManager,
-  type SubagentManagerOptions,
+  SubagentJobService,
+  type SubagentJobServiceOptions,
   type SubagentPort,
   type SubagentRecord,
   type SubagentSpawnSpec,
