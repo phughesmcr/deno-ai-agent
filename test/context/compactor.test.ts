@@ -2,6 +2,7 @@ import { type Chat, ChatMessage, type ChatMessageData, type LLM, type Tool } fro
 import { assertEquals, assertStringIncludes } from "jsr:@std/assert@1";
 
 import { createSummaryCompactor } from "../../src/agent/context/compactor.ts";
+import { withEnv } from "../_env.ts";
 
 type ChatMessageWithRaw = ChatMessage & {
   getRaw(): ChatMessageData;
@@ -13,10 +14,11 @@ interface FakeActOptions {
 
 class FakeSummaryModel {
   readonly actCalls: Chat[] = [];
+  replyText = "short summary";
 
   act(chat: Chat, _tools: Tool[], options: FakeActOptions): Promise<void> {
     this.actCalls.push(chat);
-    options.onMessage?.(ChatMessage.create("assistant", "short summary"));
+    options.onMessage?.(ChatMessage.create("assistant", this.replyText));
     return Promise.resolve();
   }
 }
@@ -103,4 +105,38 @@ Deno.test("createSummaryCompactor serializes image attachment metadata", async (
 
   const summaryInput = model.actCalls[0]?.getMessagesArray().at(-1)?.toString() ?? "";
   assertStringIncludes(summaryInput, "attachments: 1 image(s): photo.jpg");
+});
+
+Deno.test("createSummaryCompactor strips reasoning from summary when KEEP_THINKING=false", async () => {
+  await withEnv({ KEEP_THINKING: "false" }, async () => {
+    const model = new FakeSummaryModel();
+    model.replyText = "<think>x</think>Goal\n- item";
+    const compact = createSummaryCompactor(model as unknown as LLM);
+
+    const summary = await compact({
+      systemPrompt: "system prompt",
+      messages: [rawMessage("user", "fold me")],
+      details: { readFiles: [], modifiedFiles: [] },
+    });
+
+    assertStringIncludes(summary, "Goal");
+    assertEquals(summary.includes("<think>"), false);
+    assertEquals(summary.includes("</think>"), false);
+  });
+});
+
+Deno.test("createSummaryCompactor keeps reasoning in summary when KEEP_THINKING=true", async () => {
+  await withEnv({ KEEP_THINKING: "true" }, async () => {
+    const model = new FakeSummaryModel();
+    model.replyText = "<think>x</think>Goal\n- item";
+    const compact = createSummaryCompactor(model as unknown as LLM);
+
+    const summary = await compact({
+      systemPrompt: "system prompt",
+      messages: [rawMessage("user", "fold me")],
+      details: { readFiles: [], modifiedFiles: [] },
+    });
+
+    assertStringIncludes(summary, "<think>x</think>Goal");
+  });
 });

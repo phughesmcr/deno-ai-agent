@@ -35,7 +35,8 @@ function replyChunks(raw: ModelReplyText): readonly string[] {
   return typeof raw === "string" ? [raw] : raw;
 }
 
-function formatMarkdownReply(raw: ModelReplyText): string {
+/** @internal */
+export function formatMarkdownReply(raw: ModelReplyText): string {
   return replyChunks(raw).map(stripThinking).filter(Boolean).join("\n\n");
 }
 

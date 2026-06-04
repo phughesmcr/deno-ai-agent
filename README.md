@@ -44,6 +44,16 @@ Send a **photo** or image **document** (JPEG, PNG, WebP) with an optional captio
 
 ## Environment variables
 
+### Reasoning
+
+| Variable | Description |
+| -------- | ----------- |
+| `REASONING_ENABLED` | When `false`, reasoning delimiters are not parsed for strip/format helpers (default: `true`) |
+| `REASONING_ACT_PARSING` | When `true`, pass `reasoningParsing` to LM Studio `model.act()` (default: `false`). Set `true` for Qwen/DeepSeek; leave `false` for Gemma and other models that error on reasoning Jinja |
+| `MAX_PREDICTION_ROUNDS` | Tool-loop rounds for `model.act()` (default: `30`, or `1` when `MODEL` contains `gemma`). Required for multi-tool agents on Qwen; Gemma’s LM Studio template fails when this is greater than `1` |
+| `REASONING_START` | Opening tag before model reasoning text (default: `<think>`) |
+| `REASONING_END` | Closing tag before the user-visible reply (default: `</think>`) |
+| `KEEP_THINKING` | When `false`, strip reasoning from session JSONL, compaction checkpoints, and subagent results before save (default: `true`). Persistence strip uses `REASONING_*` when enabled. Main-turn Telegram replies use raw model text and are not affected by this flag. |
 
 | Variable                        | Description                                                                            |
 | ------------------------------- | -------------------------------------------------------------------------------------- |

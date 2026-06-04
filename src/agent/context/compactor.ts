@@ -1,7 +1,8 @@
 import { Chat, type ChatMessageData, type LLM, type ToolCallRequest } from "@lmstudio/sdk";
 
+import { getActMaxPredictionRounds } from "../../shared/act-config.ts";
 import { getActDraftModel } from "../../shared/draft-model.ts";
-import { getActReasoningParsing } from "../../shared/reasoning.ts";
+import { actReasoningParsingOption, persistedModelText } from "../../shared/reasoning.ts";
 import { imageFileParts } from "./message-materialize.ts";
 import type { SessionFileDetails } from "./session-store.ts";
 
@@ -181,17 +182,18 @@ export function createSummaryCompactor(
 
     await model.act(summaryChat, [], {
       ...(getActDraftModel() ?? {}),
-      reasoningParsing: getActReasoningParsing(),
+      ...actReasoningParsingOption(),
       allowParallelToolExecution: true,
       contextOverflowPolicy: "truncateMiddle",
       maxTokens: 4096,
-      maxPredictionRounds: 10,
+      maxPredictionRounds: getActMaxPredictionRounds(),
       onMessage: (msg) => {
-        summary = msg.getText();
+        const text = msg.getText();
+        if (text) summary = persistedModelText(text);
       },
       signal,
     });
 
-    return appendPracticalSections(summary, input.details, skillBlocks);
+    return appendPracticalSections(persistedModelText(summary), input.details, skillBlocks);
   };
 }

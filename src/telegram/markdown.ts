@@ -1,4 +1,4 @@
-import { getReasoningConfig } from "../shared/reasoning.ts";
+import { getReasoningConfig, stripReasoningFromText } from "../shared/reasoning.ts";
 
 /** Escapes text for Telegram MarkdownV2 parse mode. */
 export function escapeMarkdownV2(text: string): string {
@@ -20,12 +20,7 @@ function formatThinking(thinking: string, start: string, end: string): string {
 
 /** Removes model thinking blocks; returns plain user-visible text (no MarkdownV2). */
 export function plainReply(message: string): string {
-  const { enabled, start, end } = getReasoningConfig();
-  if (!enabled) return message.trim();
-
-  const closeIndex = message.indexOf(end);
-  if (closeIndex === -1) return stripReasoningTags(message, start, end);
-  return message.slice(closeIndex + end.length).trim();
+  return stripReasoningFromText(message);
 }
 
 /** Strips model thinking blocks and formats the reply for MarkdownV2. */

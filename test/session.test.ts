@@ -5,6 +5,7 @@ import { assertStringIncludes } from "jsr:@std/assert@1/string-includes";
 import type { SummaryCompactor } from "../src/agent/context/compactor.ts";
 import { SessionStore } from "../src/agent/context/session-store.ts";
 import { type ModelActObserver, SessionManager } from "../src/agent/context/session.ts";
+import { withEnv } from "./_env.ts";
 
 type ChatMessageWithRaw = ChatMessage & {
   getRaw(): ChatMessageData;
@@ -245,6 +246,28 @@ Deno.test("SessionManager keeps tool results in context without returning them a
       ["user", "after tool"],
     ]);
     assertStringIncludes(call.chat.getMessagesArray()[2]?.toString() ?? "", '<skill_content name="docs">');
+  });
+});
+
+Deno.test("SessionManager strips thinking from session but not replyTexts when KEEP_THINKING=false", async () => {
+  await withEnv({ KEEP_THINKING: "false" }, async () => {
+    await withSession(async ({ session, model }) => {
+      const raw = "<think>secret</think>visible";
+      model.replies = [raw];
+
+      const result = await session.runTurn("hello", { tools: [], signal: new AbortController().signal });
+      assertEquals(result.replyTexts, [raw]);
+
+      await session.runTurn("follow-up", { tools: [], signal: new AbortController().signal });
+      const call = model.actCalls[1];
+      assert(call);
+      assertEquals(snapshot(call.chat), [
+        ["system", "current system prompt"],
+        ["user", "hello"],
+        ["assistant", "visible"],
+        ["user", "follow-up"],
+      ]);
+    });
   });
 });
 

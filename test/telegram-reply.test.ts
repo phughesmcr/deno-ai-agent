@@ -1,6 +1,9 @@
 import { assertEquals } from "jsr:@std/assert@1/equals";
 import { assertRejects } from "jsr:@std/assert@1/rejects";
+import { getReasoningConfig } from "../src/shared/reasoning.ts";
+import { stripThinking } from "../src/telegram/markdown.ts";
 import {
+  formatMarkdownReply,
   sendModelTextReply,
   type TelegramReplyOptions,
   type TelegramReplySender,
@@ -28,6 +31,11 @@ function telegramError(message: string, code: number): Error & { error_code: num
   return error;
 }
 
+Deno.test("stripThinking uses reasoning config for telegram replies", () => {
+  assertEquals(getReasoningConfig().enabled, true);
+  assertEquals(stripThinking("<think>a</think>First"), "**>a||\n\nFirst");
+});
+
 Deno.test("sendModelTextReply sends MarkdownV2 with reply parameters", async () => {
   const sender = new FakeSender();
 
@@ -47,8 +55,12 @@ Deno.test("sendModelTextReply sends MarkdownV2 with reply parameters", async () 
 
 Deno.test("sendModelTextReply formats thinking per reply chunk", async () => {
   const sender = new FakeSender();
+  const chunks = ["<think>a</think>First", "<think>b</think>Second"] as const;
 
-  await sendModelTextReply(sender, ["<redacted_thinking>a</redacted_thinking>First", "<redacted_thinking>b</redacted_thinking>Second"], 42, 99);
+  assertEquals(getReasoningConfig().enabled, true);
+  assertEquals(formatMarkdownReply(chunks), "**>a||\n\nFirst\n\n**>b||\n\nSecond");
+
+  await sendModelTextReply(sender, chunks, 42, 99);
 
   assertEquals(sender.calls, [
     {
@@ -66,7 +78,7 @@ Deno.test("sendModelTextReply falls back to plain text on Telegram 400", async (
   const sender = new FakeSender();
   sender.failures = [telegramError("bad markdown", 400)];
 
-  await sendModelTextReply(sender, "<redacted_thinking>secret</redacted_thinking>Hello *world*", 7, 11);
+  await sendModelTextReply(sender, "<think>secret</think>Hello *world*", 7, 11);
 
   assertEquals(sender.calls, [
     {
@@ -91,7 +103,7 @@ Deno.test("sendModelTextReply plain fallback strips thinking per reply chunk", a
   const sender = new FakeSender();
   sender.failures = [telegramError("bad markdown", 400)];
 
-  await sendModelTextReply(sender, ["<redacted_thinking>a</redacted_thinking>First", "<redacted_thinking>b</redacted_thinking>Second"], 7, 11);
+  await sendModelTextReply(sender, ["<think>a</think>First", "<think>b</think>Second"], 7, 11);
 
   assertEquals(sender.calls, [
     {

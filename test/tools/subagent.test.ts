@@ -1,11 +1,12 @@
 import { type Chat, ChatMessage, type LLM, type Tool } from "@lmstudio/sdk";
 import { assert, assertEquals, assertStringIncludes } from "jsr:@std/assert@1";
 
-import { createAutoApprovalGate } from "../../src/shared/approval.ts";
 import { createSkillManager } from "../../src/agent/skills/mod.ts";
 import { createReadOnlySubagentTools, SubagentManager, type SubagentRecord } from "../../src/agent/subagents.ts";
-import { createSubagentTool, type SubagentAction } from "../../src/agent/tools/subagent.ts";
 import { createToolContext, type ToolContext } from "../../src/agent/tools/context.ts";
+import { createSubagentTool, type SubagentAction } from "../../src/agent/tools/subagent.ts";
+import { createAutoApprovalGate } from "../../src/shared/approval.ts";
+import { withEnv } from "../_env.ts";
 import { runTool } from "./helpers.ts";
 
 interface FakeActOptions {
@@ -301,6 +302,22 @@ Deno.test("subagent list only returns jobs for the current session", async () =>
     setSessionId(firstSessionId);
     const firstList = requireSubagents(parseJson(await runTool(tool, { action: "list" })));
     assertEquals(firstList.map((subagent) => subagent.id), [first.id]);
+  });
+});
+
+Deno.test("subagent result strips reasoning when KEEP_THINKING=false", async () => {
+  await withEnv({ KEEP_THINKING: "false" }, async () => {
+    await withSubagents(async ({ model, tool }) => {
+      model.behaviors.push(model.reply("<think>t</think>done"));
+      const spawned = requireSubagent(parseJson(await runTool(tool, { action: "spawn", task: "Strip thinking" })));
+      const completed = await waitForSubagent(tool, spawned.id, "completed");
+      assertEquals(completed.result, "done");
+
+      const fetched = requireSubagent(parseJson(
+        await runTool(tool, { action: "result", subagent_id: completed.id }),
+      ));
+      assertEquals(fetched.result, "done");
+    });
   });
 });
 

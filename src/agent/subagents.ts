@@ -1,7 +1,8 @@
 import { Chat, type Tool } from "@lmstudio/sdk";
 
+import { getActMaxPredictionRounds } from "../shared/act-config.ts";
 import { getActDraftModel } from "../shared/draft-model.ts";
-import { type ActReasoningParsing, getActReasoningParsing } from "../shared/reasoning.ts";
+import { type ActReasoningParsing, actReasoningParsingOption, persistedModelText } from "../shared/reasoning.ts";
 import type { SkillManager } from "./skills/mod.ts";
 import type { ToolContext } from "./tools/context.ts";
 import { createFindTool } from "./tools/find.ts";
@@ -343,15 +344,15 @@ export class SubagentManager implements SubagentPort {
     let result = "";
     await this.#model.act(chat, createReadOnlySubagentTools(this.#workspace, this.#skills), {
       ...(getActDraftModel() ?? {}),
+      ...actReasoningParsingOption(),
       allowParallelToolExecution: true,
       contextOverflowPolicy: "truncateMiddle",
       maxTokens: 4096,
-      maxPredictionRounds: 30,
-      reasoningParsing: getActReasoningParsing(),
+      maxPredictionRounds: getActMaxPredictionRounds(),
       onMessage: (message) => {
         if (message.getRole() !== "assistant") return;
         const text = message.getText();
-        if (text) result = text;
+        if (text) result = persistedModelText(text);
       },
       signal,
     });

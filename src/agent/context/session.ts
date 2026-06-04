@@ -8,13 +8,15 @@ import {
   type ToolCallRequest,
 } from "@lmstudio/sdk";
 
+import { getActMaxPredictionRounds } from "../../shared/act-config.ts";
 import { getActDraftModel } from "../../shared/draft-model.ts";
 import { logDebug } from "../../shared/log.ts";
 import { traceSpan } from "../../shared/otel.ts";
-import { getActReasoningParsing } from "../../shared/reasoning.ts";
+import { actReasoningParsingOption } from "../../shared/reasoning.ts";
 import { normalizeUserTurnInput, type UserTurnInput } from "../user-turn.ts";
 import type { SummaryCompactor } from "./compactor.ts";
 import { materializeMessageForChat } from "./message-materialize.ts";
+import { chatMessageForPersistence } from "./persisted-message.ts";
 import {
   isValidSessionName,
   type SessionCompactionEntry,
@@ -361,14 +363,15 @@ export class SessionManager {
 
     await this.#model.act(this.#snapshot(), tools, {
       ...(getActDraftModel() ?? {}),
+      ...actReasoningParsingOption(),
       allowParallelToolExecution: true,
       contextOverflowPolicy: "stopAtLimit",
       maxTokens: 4096,
-      maxPredictionRounds: 30,
-      reasoningParsing: getActReasoningParsing(),
+      maxPredictionRounds: getActMaxPredictionRounds(),
       onMessage: (msg) => {
         observer?.onMessage();
-        const { message, persisted } = this.#appendAssistant(msg);
+        const toPersist = chatMessageForPersistence(msg);
+        const { message, persisted } = this.#appendAssistant(toPersist);
         persistWrites.push(persisted);
         turnTokenCounts.push(this.#model.countTokens(message.toString()));
         if (msg.getRole() === "assistant") {
