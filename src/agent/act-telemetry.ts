@@ -7,7 +7,7 @@ const tracer = trace.getTracer(SERVICE_NAME, SERVICE_VERSION);
 const meter = metrics.getMeter(SERVICE_NAME, SERVICE_VERSION);
 
 const lmstudioActDurationMs = meter.createHistogram("lmstudio.act.duration", {
-  description: "Duration of model.act",
+  description: "Duration of model act",
   unit: "ms",
 });
 
@@ -37,12 +37,12 @@ export function tokenBucket(count: number): string {
   return "gte_128k";
 }
 
-/** Records `model.act` duration when inference ran. */
+/** Records model act duration when inference ran. */
 export function recordActDuration(ms: number, outcome: "error" | "ok"): void {
   if (ms > 0) lmstudioActDurationMs.record(ms, { outcome });
 }
 
-/** Creates telemetry hooks for the session-owned `model.act()` lifecycle. */
+/** Creates telemetry hooks for the session-owned model act lifecycle. */
 export function createModelActObserver(): ModelActObserver {
   const parentSpan = trace.getActiveSpan();
   if (!parentSpan) return noopModelActObserver;

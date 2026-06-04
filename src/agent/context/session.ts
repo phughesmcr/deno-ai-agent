@@ -1,23 +1,10 @@
-import {
-  Chat,
-  ChatMessage,
-  type ChatMessageData,
-  type LLM,
-  type LMStudioClient,
-  type Tool,
-  type ToolCallRequest,
-} from "@lmstudio/sdk";
+import { ChatMessage, type ChatMessageData, type Tool, type ToolCallRequest } from "@lmstudio/sdk";
 
-import { getActMaxPredictionRounds } from "../../shared/act-config.ts";
-import { getActDraftModel } from "../../shared/draft-model.ts";
 import { logDebug } from "../../shared/log.ts";
 import { traceSpan } from "../../shared/otel.ts";
-import { actReasoningParsingOption } from "../../shared/reasoning.ts";
 import type { ToolCallGuard } from "../tools/authorization.ts";
 import { normalizeUserTurnInput, type UserTurnInput } from "../user-turn.ts";
 import type { SummaryCompactionInput } from "./compactor.ts";
-import { materializeMessageForChat } from "./message-materialize.ts";
-import { chatMessageForPersistence } from "./persisted-message.ts";
 import {
   isValidSessionName,
   type SessionCompactionEntry,
@@ -66,10 +53,6 @@ function addUnique(target: string[], value: unknown): void {
 
 function toolRequests(message: ChatMessageData): ToolCallRequest[] {
   return message.content.flatMap((part) => part.type === "toolCallRequest" ? [part.toolCallRequest] : []);
-}
-
-function isUserVisibleAssistantReply(message: ChatMessageData): boolean {
-  return message.role === "assistant" && toolRequests(message).length === 0;
 }
 
 function collectFileDetails(entries: SessionEntry[]): SessionFileDetails {
@@ -176,7 +159,7 @@ export interface SessionTurnResult {
   totalTokens: number;
 }
 
-/** Telemetry hooks for the LM Studio `model.act()` lifecycle. */
+/** Telemetry hooks for the LM Studio model act lifecycle. */
 export interface ModelActObserver {
   /** Records an assistant message event. */
   onMessage(): void;
@@ -306,11 +289,6 @@ interface PersistentAgentSessionsOptions {
   maxContextLength: number;
   reserveTokens?: number;
   keepRecentTokens?: number;
-}
-
-interface LmStudioModelTurnPortOptions {
-  client: LMStudioClient;
-  model: LLM;
 }
 
 const DEFAULT_RESERVE_TOKEN_RATIO = 0.25;
@@ -790,89 +768,5 @@ export class PersistentAgentSessions implements AgentSessions {
       textLength,
       ...(imageCount > 0 ? { imageCount } : {}),
     });
-  }
-}
-
-/**
- * Production LM Studio model adapter for session turns.
- * @internal
- */
-export class LmStudioModelTurnPort implements ModelTurnPort {
-  private readonly _client: LMStudioClient;
-  private readonly _model: LLM;
-
-  /** Creates a production LM Studio model turn adapter. */
-  constructor(options: LmStudioModelTurnPortOptions) {
-    this._client = options.client;
-    this._model = options.model;
-  }
-
-  /** Runs `model.act()` and normalizes SDK callback output for persistence. */
-  async run(request: ModelTurnRequest): Promise<ModelTurnOutput> {
-    const chat = Chat.empty();
-    if (request.systemPrompt) chat.replaceSystemPrompt(request.systemPrompt);
-    for (const message of request.messages) {
-      chat.append(materializeMessageForChat(this._client, message));
-    }
-
-    const persistedMessages: ChatMessageData[] = [];
-    const replyTexts: string[] = [];
-    const actStarted = performance.now();
-    let firstTokenMs: number | undefined;
-
-    await this._model.act(chat, request.tools, {
-      ...(getActDraftModel() ?? {}),
-      ...actReasoningParsingOption(),
-      allowParallelToolExecution: true,
-      guardToolCall: request.guardToolCall,
-      contextOverflowPolicy: "rollingWindow",
-      maxTokens: 4096,
-      maxPredictionRounds: getActMaxPredictionRounds(),
-      onMessage: (message) => {
-        request.observer?.onMessage();
-        const raw = messageToData(message);
-        const toPersist = chatMessageForPersistence(message);
-        persistedMessages.push(messageToData(toPersist));
-        if (isUserVisibleAssistantReply(raw)) {
-          const text = message.getText();
-          if (text) replyTexts.push(text);
-        }
-      },
-      onFirstToken: (roundIndex) => {
-        const ms = performance.now() - actStarted;
-        if (firstTokenMs === undefined) firstTokenMs = ms;
-        request.observer?.onFirstToken(roundIndex, ms);
-      },
-      onRoundStart: (roundIndex) => request.observer?.onRoundStart(roundIndex),
-      onRoundEnd: (roundIndex) => request.observer?.onRoundEnd(roundIndex),
-      onToolCallRequestDequeued: (roundIndex, callId) => {
-        request.observer?.onToolCallRequestDequeued(roundIndex, callId);
-      },
-      onToolCallRequestEnd: (roundIndex, callId, info) => {
-        request.observer?.onToolCallRequestEnd(roundIndex, callId, info.toolCallRequest.name, info.isQueued);
-      },
-      onToolCallRequestFailure: (_roundIndex, callId, error) => {
-        request.observer?.onToolCallRequestFailure(callId, error.message);
-      },
-      onToolCallRequestFinalized: (_roundIndex, callId, info) => {
-        request.observer?.onToolCallRequestFinalized(callId, info.toolCallRequest.name);
-      },
-      onToolCallRequestNameReceived: (_roundIndex, callId, name) => {
-        request.observer?.onToolCallRequestNameReceived(callId, name);
-      },
-      onToolCallRequestStart: (roundIndex, callId, info) => {
-        request.observer?.onToolCallRequestStart(roundIndex, callId, info.toolCallId);
-      },
-      signal: request.signal,
-    });
-
-    return { persistedMessages, replyTexts, firstTokenMs };
-  }
-
-  /** Counts tokens using LM Studio chat message materialization. */
-  async countTokens(messages: ChatMessageData[]): Promise<number[]> {
-    return await Promise.all(
-      messages.map((message) => this._model.countTokens(materializeMessageForChat(this._client, message).toString())),
-    );
   }
 }

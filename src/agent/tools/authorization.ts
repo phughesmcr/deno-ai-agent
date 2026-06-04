@@ -15,7 +15,7 @@ export interface ToolCallGuardController {
   allowAndOverrideParameters(newParameters: Record<string, unknown>): void;
 }
 
-/** App-level guard function passed to `model.act()`. */
+/** App-level guard function passed to the model act boundary. */
 export type ToolCallGuard = (
   roundIndex: number,
   callId: number,

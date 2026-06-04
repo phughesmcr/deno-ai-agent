@@ -1,49 +1,30 @@
-import { type Chat, ChatMessage, type LLM, type Tool } from "@lmstudio/sdk";
 import { assert, assertEquals, assertStringIncludes } from "jsr:@std/assert@1";
 
+import type { SubagentActRequest, SubagentActResult } from "../../src/agent/model-act.ts";
 import { createSkillManager } from "../../src/agent/skills/mod.ts";
 import { createReadOnlySubagentTools, SubagentManager, type SubagentRecord } from "../../src/agent/subagents.ts";
 import { createToolContext, type ToolContext } from "../../src/agent/tools/context.ts";
 import { createSubagentTool, type SubagentAction } from "../../src/agent/tools/subagent.ts";
-import { withEnv } from "../_env.ts";
 import { runTool } from "./helpers.ts";
 
-interface FakeActOptions {
-  onMessage?: (message: ChatMessage) => void;
-  signal?: AbortSignal;
-}
-
-interface FakeActCall {
-  chat: Chat;
-  tools: Tool[];
-}
-
-type FakeBehavior = (chat: Chat, tools: Tool[], options: FakeActOptions) => Promise<void>;
+type FakeBehavior = (request: SubagentActRequest) => Promise<SubagentActResult>;
 
 class FakeModel {
-  readonly actCalls: FakeActCall[] = [];
+  readonly runCalls: SubagentActRequest[] = [];
   readonly behaviors: FakeBehavior[] = [];
 
-  act(chat: Chat, tools: Tool[], options: FakeActOptions): Promise<void> {
-    this.actCalls.push({ chat, tools });
+  runSubagent(request: SubagentActRequest): Promise<SubagentActResult> {
+    this.runCalls.push(request);
     const behavior = this.behaviors.shift() ?? this.reply("default result");
-    return behavior(chat, tools, options);
+    return behavior(request);
   }
 
   reply(text: string): FakeBehavior {
-    return (_chat, _tools, options) => {
-      options.onMessage?.(ChatMessage.create("assistant", text));
-      return Promise.resolve();
-    };
+    return () => Promise.resolve({ text });
   }
 
   replies(texts: string[]): FakeBehavior {
-    return (_chat, _tools, options) => {
-      for (const text of texts) {
-        options.onMessage?.(ChatMessage.create("assistant", text));
-      }
-      return Promise.resolve();
-    };
+    return () => Promise.resolve({ text: texts.at(-1) ?? "" });
   }
 
   fail(message: string): FakeBehavior {
@@ -51,13 +32,13 @@ class FakeModel {
   }
 
   waitUntilAbort(started: PromiseResolver<void>): FakeBehavior {
-    return (_chat, _tools, options) => {
+    return (request) => {
       started.resolve();
       return new Promise((resolve, reject) => {
         const abort = (): void => reject(new DOMException("Aborted", "AbortError"));
-        if (options.signal?.aborted) abort();
-        options.signal?.addEventListener("abort", abort, { once: true });
-        options.signal?.addEventListener("abort", () => resolve(), { once: true });
+        if (request.signal.aborted) abort();
+        request.signal.addEventListener("abort", abort, { once: true });
+        request.signal.addEventListener("abort", () => resolve({ text: "" }), { once: true });
       });
     };
   }
@@ -145,7 +126,7 @@ async function withSubagents(
     const skills = await createSkillManager({ root: dir });
     const manager = new SubagentManager({
       kv,
-      model: model as unknown as LLM,
+      model,
       workspace: ctx,
       skills,
       getSessionId: () => sessionId,
@@ -229,10 +210,10 @@ Deno.test("SubagentManager runs one job at a time and leaves later jobs queued",
   await withSubagents(async ({ model, tool }) => {
     const releaseFirst = deferred<void>();
     const firstStarted = deferred<void>();
-    model.behaviors.push(async (_chat, _tools, options) => {
+    model.behaviors.push(async () => {
       firstStarted.resolve();
       await releaseFirst.promise;
-      options.onMessage?.(ChatMessage.create("assistant", "first done"));
+      return { text: "first done" };
     });
     model.behaviors.push(model.reply("second done"));
 
@@ -303,19 +284,19 @@ Deno.test("subagent list only returns jobs for the current session", async () =>
   });
 });
 
-Deno.test("subagent result strips reasoning when KEEP_THINKING=false", async () => {
-  await withEnv({ KEEP_THINKING: "false" }, async () => {
-    await withSubagents(async ({ model, tool }) => {
-      model.behaviors.push(model.reply("<think>t</think>done"));
-      const spawned = requireSubagent(parseJson(await runTool(tool, { action: "spawn", task: "Strip thinking" })));
-      const completed = await waitForSubagent(tool, spawned.id, "completed");
-      assertEquals(completed.result, "done");
+Deno.test("SubagentManager passes system prompt, task, signal, and read-only tools to model act", async () => {
+  await withSubagents(async ({ model, tool }) => {
+    model.behaviors.push(model.reply("done"));
+    const spawned = requireSubagent(parseJson(await runTool(tool, { action: "spawn", task: "Inspect files" })));
+    const completed = await waitForSubagent(tool, spawned.id, "completed");
+    const call = model.runCalls[0];
 
-      const fetched = requireSubagent(parseJson(
-        await runTool(tool, { action: "result", subagent_id: completed.id }),
-      ));
-      assertEquals(fetched.result, "done");
-    });
+    assert(call);
+    assertEquals(completed.result, "done");
+    assertStringIncludes(call.systemPrompt, "read-only research subagent");
+    assertEquals(call.task, "Inspect files");
+    assertEquals(call.signal.aborted, false);
+    assertEquals(call.tools.map((item) => item.name).toSorted(), ["find", "grep", "ls", "read", "skill"]);
   });
 });
 

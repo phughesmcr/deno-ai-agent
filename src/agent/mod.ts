@@ -1,6 +1,11 @@
 export { McpRegistry, type McpRegistryOptions } from "../mcp/mod.ts";
 export { recordActDuration } from "./act-telemetry.ts";
-export { createSummaryCompactor, type SummaryCompactionInput, type SummaryCompactor } from "./context/compactor.ts";
+export {
+  type PreparedSummaryCompaction,
+  prepareSummaryCompaction,
+  type SummaryCompactionInput,
+  type SummaryCompactor,
+} from "./context/compactor.ts";
 export {
   FORMAT_VERSION,
   type SessionCompactionEntry,
@@ -14,7 +19,6 @@ export {
 export {
   type AgentSessions,
   type ContextSummaryPort,
-  LmStudioModelTurnPort,
   type ModelActObserver,
   type ModelTurnOutput,
   type ModelTurnPort,
@@ -27,6 +31,12 @@ export {
   type SessionTurnResult,
 } from "./context/session.ts";
 export { createLMStudioManager, type LMStudioManager } from "./lmstudio.ts";
+export {
+  type AgentModelActPort,
+  LmStudioAgentModelAct,
+  type SubagentActRequest,
+  type SubagentActResult,
+} from "./model-act.ts";
 export { type Agent, createAgent, type CreateAgentOptions, runTurn, type TurnResult } from "./runtime.ts";
 export {
   createSkillManager,
@@ -39,11 +49,8 @@ export {
 export {
   createReadOnlySubagentTools,
   createUnavailableSubagentPort,
-  type SubagentActMessage,
-  type SubagentActOptions,
   SubagentManager,
   type SubagentManagerOptions,
-  type SubagentModel,
   type SubagentPort,
   type SubagentRecord,
   type SubagentSpawnSpec,

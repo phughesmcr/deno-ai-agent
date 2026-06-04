@@ -1,8 +1,6 @@
-import { Chat, type Tool } from "@lmstudio/sdk";
+import type { Tool } from "@lmstudio/sdk";
 
-import { getActMaxPredictionRounds } from "../shared/act-config.ts";
-import { getActDraftModel } from "../shared/draft-model.ts";
-import { type ActReasoningParsing, actReasoningParsingOption, persistedModelText } from "../shared/reasoning.ts";
+import type { AgentModelActPort } from "./model-act.ts";
 import type { SkillManager } from "./skills/mod.ts";
 import type { ToolContext } from "./tools/context.ts";
 import { createReadOnlySubagentToolsFromDefinitions } from "./tools/registry.ts";
@@ -56,44 +54,12 @@ export interface SubagentPort {
   cancel(agentId: string): Promise<SubagentRecord | undefined>;
 }
 
-/** Minimal message shape observed from LM Studio `act()` callbacks. */
-export interface SubagentActMessage {
-  /** Message role, such as `assistant` or `tool`. */
-  getRole(): string;
-  /** Plain text content for assistant messages. */
-  getText(): string;
-}
-
-/** Minimal options accepted by the subagent model adapter. */
-export interface SubagentActOptions {
-  /** Whether to allow parallel tool execution. */
-  allowParallelToolExecution?: boolean;
-  /** What to do when the context overflows. */
-  contextOverflowPolicy?: "truncateMiddle" | "stopAtLimit" | "rollingWindow";
-  /** Maximum number of tokens to generate. */
-  maxTokens?: number;
-  /** Maximum number of prediction rounds to allow. */
-  maxPredictionRounds?: number;
-  /** LM Studio reasoning delimiter parsing (see `getActReasoningParsing`). */
-  reasoningParsing?: ActReasoningParsing;
-  /** Called for each emitted message. */
-  onMessage?: (message: SubagentActMessage) => void;
-  /** Abort signal for cancellation. */
-  signal?: AbortSignal;
-}
-
-/** Minimal structural model interface needed to run a subagent chat. */
-export interface SubagentModel {
-  /** Runs one model act over a chat-like object and model tools. */
-  act(chat: unknown, tools: Tool[], options: SubagentActOptions): Promise<unknown>;
-}
-
 /** Options for {@link SubagentManager}. */
 export interface SubagentManagerOptions {
   /** Deno KV store used for process-local records. */
   kv: Deno.Kv;
-  /** LM Studio model or compatible chat model. */
-  model: SubagentModel;
+  /** Model-act adapter capable of running read-only subagents. */
+  model: Pick<AgentModelActPort, "runSubagent">;
   /** Workspace used by read-only child tools. */
   workspace: ToolContext;
   /** Skill catalog shared with the parent process. */
@@ -164,33 +130,33 @@ export function createReadOnlySubagentTools(workspace: ToolContext, skills: Skil
  * Active controllers and queue state are intentionally in memory only.
  */
 export class SubagentManager implements SubagentPort {
-  readonly #kv: Deno.Kv;
-  readonly #model: SubagentModel;
-  readonly #workspace: ToolContext;
-  readonly #skills: SkillManager;
-  readonly #getSessionId: () => string;
+  private readonly _kv: Deno.Kv;
+  private readonly _model: Pick<AgentModelActPort, "runSubagent">;
+  private readonly _workspace: ToolContext;
+  private readonly _skills: SkillManager;
+  private readonly _getSessionId: () => string;
 
-  #queue: SubagentRef[] = [];
-  #activeControllers = new Map<string, AbortController>();
-  #running = false;
-  #currentRun: Promise<void> | undefined;
-  #closed = false;
+  private _queue: SubagentRef[] = [];
+  private _activeControllers = new Map<string, AbortController>();
+  private _running = false;
+  private _currentRun: Promise<void> | undefined;
+  private _closed = false;
 
   /** Creates a session-scoped subagent manager over a Deno KV store. */
   constructor(options: SubagentManagerOptions) {
-    this.#kv = options.kv;
-    this.#model = options.model;
-    this.#workspace = options.workspace;
-    this.#skills = options.skills;
-    this.#getSessionId = options.getSessionId;
+    this._kv = options.kv;
+    this._model = options.model;
+    this._workspace = options.workspace;
+    this._skills = options.skills;
+    this._getSessionId = options.getSessionId;
   }
 
   /** Creates a queued subagent job and schedules it for async execution. */
   async spawn(spec: SubagentSpawnSpec): Promise<SubagentRecord> {
-    if (this.#closed) throw new Error("Subagent manager is shutting down.");
+    if (this._closed) throw new Error("Subagent manager is shutting down.");
 
     const task = spec.task.trim();
-    const sessionId = this.#getSessionId();
+    const sessionId = this._getSessionId();
     const record: SubagentRecord = {
       id: crypto.randomUUID(),
       sessionId,
@@ -200,22 +166,22 @@ export class SubagentManager implements SubagentPort {
       createdAt: nowIso(),
     };
 
-    await this.#put(record);
-    this.#queue.push({ sessionId, agentId: record.id });
-    this.#scheduleNext();
+    await this._put(record);
+    this._queue.push({ sessionId, agentId: record.id });
+    this._scheduleNext();
     return record;
   }
 
   /** Returns a subagent in the current session by id. */
   status(agentId: string): Promise<SubagentRecord | undefined> {
-    return this.#get(this.#getSessionId(), agentId);
+    return this._get(this._getSessionId(), agentId);
   }
 
   /** Lists subagents in the current session ordered by creation time. */
   async list(): Promise<SubagentRecord[]> {
-    const sessionId = this.#getSessionId();
+    const sessionId = this._getSessionId();
     const records: SubagentRecord[] = [];
-    const iterator = this.#kv.list<SubagentRecord>({ prefix: ["subagents", sessionId] });
+    const iterator = this._kv.list<SubagentRecord>({ prefix: ["subagents", sessionId] });
     for await (const entry of iterator) {
       records.push(entry.value);
     }
@@ -229,58 +195,58 @@ export class SubagentManager implements SubagentPort {
 
   /** Cancels a queued or running job; terminal jobs are returned unchanged. */
   async cancel(agentId: string): Promise<SubagentRecord | undefined> {
-    const sessionId = this.#getSessionId();
-    const record = await this.#get(sessionId, agentId);
+    const sessionId = this._getSessionId();
+    const record = await this._get(sessionId, agentId);
     if (!record) return undefined;
     if (isTerminal(record.status)) return record;
 
     const ref = { sessionId, agentId };
     if (record.status === "queued") {
-      this.#queue = this.#queue.filter((item) => this.#refKey(item) !== this.#refKey(ref));
+      this._queue = this._queue.filter((item) => this._refKey(item) !== this._refKey(ref));
     }
 
-    this.#activeControllers.get(this.#refKey(ref))?.abort();
-    return await this.#markCancelled(ref, record);
+    this._activeControllers.get(this._refKey(ref))?.abort();
+    return await this._markCancelled(ref, record);
   }
 
   /** Aborts active work and prevents queued work from starting. */
   async shutdown(): Promise<void> {
-    this.#closed = true;
-    const queued = this.#queue;
-    this.#queue = [];
+    this._closed = true;
+    const queued = this._queue;
+    this._queue = [];
 
-    for (const controller of this.#activeControllers.values()) {
+    for (const controller of this._activeControllers.values()) {
       controller.abort();
     }
 
     await Promise.all(queued.map(async (ref) => {
-      const record = await this.#get(ref.sessionId, ref.agentId);
+      const record = await this._get(ref.sessionId, ref.agentId);
       if (record && record.status === "queued") {
-        await this.#markCancelled(ref, record);
+        await this._markCancelled(ref, record);
       }
     }));
 
-    await this.#currentRun?.catch(() => {});
+    await this._currentRun?.catch(() => {});
   }
 
-  #scheduleNext(): void {
-    if (this.#closed || this.#running) return;
-    const next = this.#queue.shift();
+  private _scheduleNext(): void {
+    if (this._closed || this._running) return;
+    const next = this._queue.shift();
     if (!next) return;
 
-    this.#running = true;
-    const run = this.#runQueuedJob(next)
+    this._running = true;
+    const run = this._runQueuedJob(next)
       .catch(() => {})
       .finally(() => {
-        this.#running = false;
-        this.#currentRun = undefined;
-        this.#scheduleNext();
+        this._running = false;
+        this._currentRun = undefined;
+        this._scheduleNext();
       });
-    this.#currentRun = run;
+    this._currentRun = run;
   }
 
-  async #runQueuedJob(ref: SubagentRef): Promise<void> {
-    const record = await this.#get(ref.sessionId, ref.agentId);
+  private async _runQueuedJob(ref: SubagentRef): Promise<void> {
+    const record = await this._get(ref.sessionId, ref.agentId);
     if (!record || record.status !== "queued") return;
 
     const runningRecord: SubagentRecord = {
@@ -288,68 +254,54 @@ export class SubagentManager implements SubagentPort {
       status: "running",
       startedAt: nowIso(),
     };
-    await this.#put(runningRecord);
+    await this._put(runningRecord);
 
     const controller = new AbortController();
-    this.#activeControllers.set(this.#refKey(ref), controller);
+    this._activeControllers.set(this._refKey(ref), controller);
 
     try {
-      const result = await this.#runModel(record.task, controller.signal);
-      const latest = await this.#get(ref.sessionId, ref.agentId) ?? runningRecord;
+      const result = await this._runModel(record.task, controller.signal);
+      const latest = await this._get(ref.sessionId, ref.agentId) ?? runningRecord;
       if (latest.status === "cancelled" || controller.signal.aborted) {
-        await this.#markCancelled(ref, latest);
+        await this._markCancelled(ref, latest);
         return;
       }
-      await this.#put({
+      await this._put({
         ...latest,
         status: "completed",
         finishedAt: nowIso(),
         result,
       });
     } catch (error) {
-      const latest = await this.#get(ref.sessionId, ref.agentId) ?? runningRecord;
+      const latest = await this._get(ref.sessionId, ref.agentId) ?? runningRecord;
       if (latest.status === "cancelled" || isAbortError(error, controller.signal)) {
-        await this.#markCancelled(ref, latest);
+        await this._markCancelled(ref, latest);
         return;
       }
-      await this.#put({
+      await this._put({
         ...latest,
         status: "failed",
         finishedAt: nowIso(),
         error: errorMessage(error),
       });
     } finally {
-      this.#activeControllers.delete(this.#refKey(ref));
+      this._activeControllers.delete(this._refKey(ref));
     }
   }
 
-  async #runModel(task: string, signal: AbortSignal): Promise<string> {
-    await this.#skills.refresh();
-
-    const chat = Chat.empty();
-    chat.replaceSystemPrompt(SUBAGENT_SYSTEM_PROMPT);
-    chat.append("user", task);
-
-    let result = "";
-    await this.#model.act(chat, createReadOnlySubagentTools(this.#workspace, this.#skills), {
-      ...(getActDraftModel() ?? {}),
-      ...actReasoningParsingOption(),
-      allowParallelToolExecution: true,
-      contextOverflowPolicy: "truncateMiddle",
-      maxTokens: 4096,
-      maxPredictionRounds: getActMaxPredictionRounds(),
-      onMessage: (message) => {
-        if (message.getRole() !== "assistant") return;
-        const text = message.getText();
-        if (text) result = persistedModelText(text);
-      },
+  private async _runModel(task: string, signal: AbortSignal): Promise<string> {
+    await this._skills.refresh();
+    const result = await this._model.runSubagent({
+      systemPrompt: SUBAGENT_SYSTEM_PROMPT,
+      task,
+      tools: createReadOnlySubagentTools(this._workspace, this._skills),
       signal,
     });
-    return result;
+    return result.text;
   }
 
-  async #markCancelled(ref: SubagentRef, fallback: SubagentRecord): Promise<SubagentRecord> {
-    const current = await this.#get(ref.sessionId, ref.agentId) ?? fallback;
+  private async _markCancelled(ref: SubagentRef, fallback: SubagentRecord): Promise<SubagentRecord> {
+    const current = await this._get(ref.sessionId, ref.agentId) ?? fallback;
     if (isTerminal(current.status)) return current;
     const cancelled: SubagentRecord = {
       ...current,
@@ -357,23 +309,23 @@ export class SubagentManager implements SubagentPort {
       finishedAt: current.finishedAt ?? nowIso(),
       error: current.error ?? "Subagent job was cancelled.",
     };
-    await this.#put(cancelled);
+    await this._put(cancelled);
     return cancelled;
   }
 
-  #get(sessionId: string, agentId: string): Promise<SubagentRecord | undefined> {
-    return this.#kv.get<SubagentRecord>(this.#key(sessionId, agentId)).then((entry) => entry.value ?? undefined);
+  private _get(sessionId: string, agentId: string): Promise<SubagentRecord | undefined> {
+    return this._kv.get<SubagentRecord>(this._key(sessionId, agentId)).then((entry) => entry.value ?? undefined);
   }
 
-  #put(record: SubagentRecord): Promise<Deno.KvCommitResult> {
-    return this.#kv.set(this.#key(record.sessionId, record.id), record);
+  private _put(record: SubagentRecord): Promise<Deno.KvCommitResult> {
+    return this._kv.set(this._key(record.sessionId, record.id), record);
   }
 
-  #key(sessionId: string, agentId: string): Deno.KvKey {
+  private _key(sessionId: string, agentId: string): Deno.KvKey {
     return ["subagents", sessionId, agentId];
   }
 
-  #refKey(ref: SubagentRef): string {
+  private _refKey(ref: SubagentRef): string {
     return `${ref.sessionId}:${ref.agentId}`;
   }
 }

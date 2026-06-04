@@ -1,89 +1,20 @@
-import { type Chat, ChatMessage, type ChatMessageData, type LLM, type LMStudioClient, type Tool } from "@lmstudio/sdk";
+import { ChatMessage, type ChatMessageData, type Tool } from "@lmstudio/sdk";
 import { assert } from "jsr:@std/assert@1/assert";
 import { assertEquals } from "jsr:@std/assert@1/equals";
 import type { SummaryCompactionInput } from "../src/agent/context/compactor.ts";
 import { SessionStore } from "../src/agent/context/session-store.ts";
 import {
   type ContextSummaryPort,
-  LmStudioModelTurnPort,
   type ModelActObserver,
   type ModelTurnOutput,
   type ModelTurnPort,
   type ModelTurnRequest,
   PersistentAgentSessions,
 } from "../src/agent/context/session.ts";
-import { withEnv } from "./_env.ts";
 
 type ChatMessageWithRaw = ChatMessage & {
   getRaw(): ChatMessageData;
 };
-
-interface FakeActOptions {
-  guardToolCall?: unknown;
-  contextOverflowPolicy?: "truncateMiddle" | "stopAtLimit" | "rollingWindow";
-  allowParallelToolExecution?: boolean;
-  maxTokens?: number;
-  maxPredictionRounds?: number;
-  signal?: AbortSignal;
-  onMessage?: (message: ChatMessage) => void;
-  onFirstToken?: (roundIndex: number) => void;
-  onRoundStart?: (roundIndex: number) => void;
-  onRoundEnd?: (roundIndex: number) => void;
-  onToolCallRequestStart?: (roundIndex: number, callId: number, info: { toolCallId?: string }) => void;
-  onToolCallRequestNameReceived?: (roundIndex: number, callId: number, name: string) => void;
-  onToolCallRequestEnd?: (
-    roundIndex: number,
-    callId: number,
-    info: { toolCallRequest: { name: string }; isQueued: boolean },
-  ) => void;
-  onToolCallRequestFailure?: (roundIndex: number, callId: number, error: Error) => void;
-  onToolCallRequestFinalized?: (
-    roundIndex: number,
-    callId: number,
-    info: { toolCallRequest: { name: string } },
-  ) => void;
-  onToolCallRequestDequeued?: (roundIndex: number, callId: number) => void;
-}
-
-interface FakeActCall {
-  chat: Chat;
-  tools: Tool[];
-  options: FakeActOptions;
-}
-
-class FakeSdkModel {
-  replies = ["reply"];
-  messages?: ChatMessage[];
-  emitToolEvents = false;
-  readonly actCalls: FakeActCall[] = [];
-  readonly countTokenInputs: string[] = [];
-
-  act(chat: Chat, tools: Tool[], options: FakeActOptions): Promise<void> {
-    this.actCalls.push({ chat, tools, options });
-    options.onRoundStart?.(0);
-    options.onFirstToken?.(0);
-
-    if (this.emitToolEvents) {
-      options.onToolCallRequestStart?.(0, 7, { toolCallId: "tool-1" });
-      options.onToolCallRequestNameReceived?.(0, 7, "read");
-      options.onToolCallRequestEnd?.(0, 7, { toolCallRequest: { name: "read" }, isQueued: true });
-      options.onToolCallRequestDequeued?.(0, 7);
-      options.onToolCallRequestFailure?.(0, 8, new Error("tool failed"));
-      options.onToolCallRequestFinalized?.(0, 7, { toolCallRequest: { name: "read" } });
-    }
-
-    const messages = this.messages ?? this.replies.map((reply) => ChatMessage.create("assistant", reply));
-    for (const message of messages) options.onMessage?.(message);
-    options.onRoundEnd?.(0);
-    return Promise.resolve();
-  }
-
-  countTokens(text: string): Promise<number> {
-    this.countTokenInputs.push(text);
-    if (text.startsWith("assistant:")) return Promise.resolve(5);
-    return Promise.resolve(2);
-  }
-}
 
 class FakeModelTurnPort implements ModelTurnPort {
   readonly calls: ModelTurnRequest[] = [];
@@ -131,24 +62,6 @@ function toolResultMessage(text: string): ChatMessageData {
   } as ChatMessageData;
 }
 
-function assistantToolRequestMessage(text: string): ChatMessageData {
-  return {
-    role: "assistant",
-    content: [
-      { type: "text", text },
-      {
-        type: "toolCallRequest",
-        toolCallRequest: {
-          id: "tool-call-1",
-          type: "function",
-          name: "read",
-          arguments: { path: "README.md" },
-        },
-      },
-    ],
-  } as ChatMessageData;
-}
-
 function imageMessage(text: string): ChatMessageData {
   return {
     role: "user",
@@ -170,20 +83,6 @@ function defaultTokenCount(message: ChatMessageData): number {
 
 function rolesAndText(messages: ChatMessageData[]): [string, string][] {
   return messages.map((message) => [message.role, textOf(message)]);
-}
-
-function snapshot(chat: Chat): [string, string][] {
-  return chat.getMessagesArray().map((message) => [message.getRole(), message.getText()]);
-}
-
-function fakeLmClient(): LMStudioClient {
-  return {
-    files: {
-      createFileHandleFromChatMessagePartFileData(): never {
-        throw new Error("file unavailable in test");
-      },
-    },
-  } as unknown as LMStudioClient;
 }
 
 function recordingObserver(events: string[]): ModelActObserver {
@@ -501,85 +400,4 @@ Deno.test("PersistentAgentSessions debug append logs metadata without message te
       { role: "assistant", textLength: "assistant secret".length },
     ]);
   });
-});
-
-Deno.test("LmStudioModelTurnPort assembles act options, forwards callbacks, and extracts visible replies", async () => {
-  const sdkModel = new FakeSdkModel();
-  sdkModel.emitToolEvents = true;
-  sdkModel.messages = [
-    ChatMessage.from(assistantToolRequestMessage("I will call a tool first.")),
-    ChatMessage.from(toolResultMessage("tool result")),
-    ChatMessage.create("assistant", "final answer"),
-  ];
-  const port = new LmStudioModelTurnPort({ client: fakeLmClient(), model: sdkModel as unknown as LLM });
-  const events: string[] = [];
-  const tools = [{ name: "fake-tool" }] as unknown as Tool[];
-  const signal = new AbortController().signal;
-  const guardToolCall = () => {};
-
-  const output = await port.run({
-    systemPrompt: "current system prompt",
-    messages: [rawMessage("user", "use a tool")],
-    tools,
-    guardToolCall,
-    signal,
-    observer: recordingObserver(events),
-  });
-
-  const call = sdkModel.actCalls[0];
-  assert(call);
-  assertEquals(call.tools, tools);
-  assertEquals(call.options.guardToolCall, guardToolCall);
-  assertEquals(call.options.signal, signal);
-  assertEquals(call.options.contextOverflowPolicy, "rollingWindow");
-  assertEquals(call.options.allowParallelToolExecution, true);
-  assertEquals(snapshot(call.chat), [
-    ["system", "current system prompt"],
-    ["user", "use a tool"],
-  ]);
-  assertEquals(output.replyTexts, ["final answer"]);
-  assertEquals(output.persistedMessages.map((message) => message.role), ["assistant", "tool", "assistant"]);
-  assertEquals(events, [
-    "round-start:0",
-    "first:0:number",
-    "tool-start:0:7:tool-1",
-    "tool-name:7:read",
-    "tool-end:0:7:read:true",
-    "tool-dequeued:0:7",
-    "tool-failure:8:tool failed",
-    "tool-finalized:7:read",
-    "message",
-    "message",
-    "message",
-    "round-end:0",
-  ]);
-});
-
-Deno.test("LmStudioModelTurnPort strips thinking from persistence but not raw replyTexts when KEEP_THINKING=false", async () => {
-  await withEnv({ KEEP_THINKING: "false" }, async () => {
-    const sdkModel = new FakeSdkModel();
-    const raw = "<think>secret</think>visible";
-    sdkModel.replies = [raw];
-    const port = new LmStudioModelTurnPort({ client: fakeLmClient(), model: sdkModel as unknown as LLM });
-
-    const output = await port.run({
-      systemPrompt: "current system prompt",
-      messages: [rawMessage("user", "hello")],
-      tools: [],
-      signal: new AbortController().signal,
-    });
-
-    assertEquals(output.replyTexts, [raw]);
-    assertEquals(rolesAndText(output.persistedMessages), [["assistant", "visible"]]);
-  });
-});
-
-Deno.test("LmStudioModelTurnPort counts tokens through materialized chat messages", async () => {
-  const sdkModel = new FakeSdkModel();
-  const port = new LmStudioModelTurnPort({ client: fakeLmClient(), model: sdkModel as unknown as LLM });
-
-  const counts = await port.countTokens([rawMessage("system", "prompt"), rawMessage("assistant", "reply")]);
-
-  assertEquals(counts, [2, 5]);
-  assertEquals(sdkModel.countTokenInputs, ["system: prompt", "assistant: reply"]);
 });

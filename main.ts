@@ -139,7 +139,7 @@ async function main(): Promise<void> {
   const skills = await createSkillManager({ root: workspace.path });
   const subagents = new SubagentManager({
     kv: subagentKv,
-    model: lmstudio.model,
+    model: agent.modelAct,
     workspace: toolContext,
     skills,
     getSessionId: () => agent.sessions.current.id,

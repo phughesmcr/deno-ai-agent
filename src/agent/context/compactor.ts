@@ -1,8 +1,6 @@
-import { Chat, type ChatMessageData, type LLM, type ToolCallRequest } from "@lmstudio/sdk";
+import type { ChatMessageData, ToolCallRequest } from "@lmstudio/sdk";
 
-import { getActMaxPredictionRounds } from "../../shared/act-config.ts";
-import { getActDraftModel } from "../../shared/draft-model.ts";
-import { actReasoningParsingOption, persistedModelText } from "../../shared/reasoning.ts";
+import { persistedModelText } from "../../shared/reasoning.ts";
 import { imageFileParts } from "./message-materialize.ts";
 import type { SessionFileDetails } from "./session-store.ts";
 
@@ -54,6 +52,16 @@ export interface SummaryCompactionInput {
 
 /** Function that generates a structured checkpoint summary. */
 export type SummaryCompactor = (input: SummaryCompactionInput) => Promise<string>;
+
+/** Prepared summary prompt plus final summary formatter. */
+export interface PreparedSummaryCompaction {
+  /** System prompt to apply for summary generation. */
+  systemPrompt: string;
+  /** User prompt containing transcript and compaction instructions. */
+  prompt: string;
+  /** Applies persistence policy and appends practical context sections. */
+  finish(summaryText: string): string;
+}
 
 interface SkillContentBlock {
   content: string;
@@ -149,51 +157,35 @@ function appendPracticalSections(summary: string, details: SessionFileDetails, s
 }
 
 /**
- * Builds a structured checkpoint summary from explicit message data.
+ * Prepares structured checkpoint summary input from explicit message data.
  * @internal
  */
-export function createSummaryCompactor(
-  model: LLM,
-  signal?: AbortSignal,
+export function prepareSummaryCompaction(
+  input: SummaryCompactionInput,
   toolResultLimit = DEFAULT_TOOL_RESULT_LIMIT,
-): SummaryCompactor {
-  return async (input: SummaryCompactionInput): Promise<string> => {
-    const transcript = input.messages
-      .map((message, index) => serializeMessage(message, index, toolResultLimit))
-      .join("\n\n");
-    const previous = input.previousSummary?.trim();
-    const instructions = input.instructions?.trim();
-    const skillBlocks = extractLatestSkillContent(input.messages);
+): PreparedSummaryCompaction {
+  const transcript = input.messages
+    .map((message, index) => serializeMessage(message, index, toolResultLimit))
+    .join("\n\n");
+  const previous = input.previousSummary?.trim();
+  const instructions = input.instructions?.trim();
+  const skillBlocks = extractLatestSkillContent(input.messages);
 
-    const prompt = [
-      SUMMARY_PROMPT,
-      instructions ? `\nAdditional user compaction instructions:\n${instructions}` : "",
-      previous ? `\nPrevious checkpoint summary:\n${previous}` : "",
-      `\nCurrent file details:\nreadFiles=${JSON.stringify(input.details.readFiles)}\nmodifiedFiles=${
-        JSON.stringify(input.details.modifiedFiles)
-      }`,
-      `\nConversation messages to fold into the checkpoint:\n${transcript}`,
-    ].join("\n");
+  const prompt = [
+    SUMMARY_PROMPT,
+    instructions ? `\nAdditional user compaction instructions:\n${instructions}` : "",
+    previous ? `\nPrevious checkpoint summary:\n${previous}` : "",
+    `\nCurrent file details:\nreadFiles=${JSON.stringify(input.details.readFiles)}\nmodifiedFiles=${
+      JSON.stringify(input.details.modifiedFiles)
+    }`,
+    `\nConversation messages to fold into the checkpoint:\n${transcript}`,
+  ].join("\n");
 
-    let summary = "";
-    const summaryChat = Chat.empty();
-    if (input.systemPrompt) summaryChat.replaceSystemPrompt(input.systemPrompt);
-    summaryChat.append("user", prompt);
-
-    await model.act(summaryChat, [], {
-      ...(getActDraftModel() ?? {}),
-      ...actReasoningParsingOption(),
-      allowParallelToolExecution: true,
-      contextOverflowPolicy: "truncateMiddle",
-      maxTokens: 4096,
-      maxPredictionRounds: getActMaxPredictionRounds(),
-      onMessage: (msg) => {
-        const text = msg.getText();
-        if (text) summary = persistedModelText(text);
-      },
-      signal,
-    });
-
-    return appendPracticalSections(persistedModelText(summary), input.details, skillBlocks);
+  return {
+    systemPrompt: input.systemPrompt,
+    prompt,
+    finish(summaryText: string): string {
+      return appendPracticalSections(persistedModelText(summaryText), input.details, skillBlocks);
+    },
   };
 }

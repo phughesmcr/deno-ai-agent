@@ -2,15 +2,10 @@ import type { Tool } from "@lmstudio/sdk";
 
 import { traceSpan } from "../shared/otel.ts";
 import { createModelActObserver, tokenBucket } from "./act-telemetry.ts";
-import { createSummaryCompactor } from "./context/compactor.ts";
 import { SessionStore } from "./context/session-store.ts";
-import {
-  type AgentSessions,
-  LmStudioModelTurnPort,
-  PersistentAgentSessions,
-  type SessionTurnResult,
-} from "./context/session.ts";
+import { type AgentSessions, PersistentAgentSessions, type SessionTurnResult } from "./context/session.ts";
 import type { LMStudioManager } from "./lmstudio.ts";
+import { type AgentModelActPort, LmStudioAgentModelAct } from "./model-act.ts";
 import type { ToolCallGuard } from "./tools/authorization.ts";
 import { normalizeUserTurnInput, type UserTurnInput } from "./user-turn.ts";
 import type { Workspace } from "./workspace.ts";
@@ -19,6 +14,8 @@ import type { Workspace } from "./workspace.ts";
 export interface Agent {
   /** Conversation sessions facade. */
   readonly sessions: AgentSessions;
+  /** Central model-act boundary for turns, summaries, and subagents. */
+  readonly modelAct: AgentModelActPort;
   /** LM Studio client and model. */
   readonly lmstudio: LMStudioManager;
 }
@@ -40,18 +37,17 @@ export async function createAgent(spec: CreateAgentOptions): Promise<Agent> {
   const { workspace, lmstudio, maxContextLength, signal } = spec;
 
   const store = new SessionStore(workspace.sessionsDir);
-  const model = new LmStudioModelTurnPort({
+  const modelAct = new LmStudioAgentModelAct({
     client: lmstudio.client,
     model: lmstudio.model,
+    signal,
   });
   const sessions = new PersistentAgentSessions({
-    model,
+    model: modelAct,
     store,
     systemPrompt: workspace.systemPrompt,
     maxContextLength,
-    summary: {
-      summarize: createSummaryCompactor(lmstudio.model, signal),
-    },
+    summary: modelAct,
   });
 
   await sessions.status({ refresh: true });
@@ -63,7 +59,7 @@ export async function createAgent(spec: CreateAgentOptions): Promise<Agent> {
     }
   });
 
-  return { sessions, lmstudio };
+  return { sessions, modelAct, lmstudio };
 }
 
 /** Result of a single user turn through the model. */
