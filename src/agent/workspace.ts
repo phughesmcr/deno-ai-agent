@@ -8,14 +8,14 @@ import { preprocessSystemPrompt } from "./tools/prompt.ts";
  */
 export type FsSubscriber = (event: Deno.FsEvent) => void | Promise<void>;
 
-/** Workspace directory, system prompt, and session storage path. */
+/** Workspace directory, system prompt, and durable storage paths. */
 export interface Workspace {
   /** Absolute path to the workspace directory. */
   readonly path: string;
   /** Directory containing `{id}.json` session files. */
   readonly sessionsDir: string;
-  /** Directory containing `{id}.json` todo list files. */
-  readonly todosDir: string;
+  /** Persistent Deno KV database path for non-log application state. */
+  readonly kvPath: string;
   /** Contents of `SYSTEM.md` in the workspace. */
   readonly systemPrompt: string;
   /** Re-reads `SYSTEM.md` from disk. */
@@ -66,8 +66,7 @@ export async function createWorkspace(rootDir: URL): Promise<Workspace> {
   const sessionsDir = `${path}/sessions`;
   await Deno.mkdir(sessionsDir, { recursive: true });
 
-  const todosDir = `${path}/todos`;
-  await Deno.mkdir(todosDir, { recursive: true });
+  const kvPath = `${path}/silas.kv`;
 
   const subscribers = new Set<FsSubscriber>();
   const subscribeToFsEvents = (onWatchEvent: FsSubscriber): () => void => {
@@ -92,7 +91,7 @@ export async function createWorkspace(rootDir: URL): Promise<Workspace> {
   return {
     path,
     sessionsDir,
-    todosDir,
+    kvPath,
     get systemPrompt() {
       return systemPrompt;
     },

@@ -40,6 +40,22 @@ Deno.test("TelegramSessionBindingStore rebinds while preserving createdAt", asyn
   });
 });
 
+Deno.test("TelegramSessionBindingStore concurrent rebinds preserve the first createdAt", async () => {
+  await withKv(async (store) => {
+    const bindings = await Promise.all(
+      Array.from(
+        { length: 16 },
+        (_, index) => store.bind({ chatId: 1, threadId: 10 }, { sessionId: `session-${index}` }),
+      ),
+    );
+    const final = await store.get({ chatId: 1, threadId: 10 });
+
+    assertExists(final);
+    assertEquals(new Set(bindings.map((binding) => binding.createdAt)).size, 1);
+    assertEquals(bindings[0]?.createdAt, final.createdAt);
+  });
+});
+
 Deno.test("TelegramSessionBindingStore lists chat bindings without main/topic collisions", async () => {
   await withKv(async (store) => {
     await store.bind({ chatId: 1 }, { sessionId: "main" });

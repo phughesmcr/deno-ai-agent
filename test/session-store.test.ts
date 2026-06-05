@@ -20,6 +20,17 @@ function messageEntry(text: string): SessionMessageEntry {
   };
 }
 
+function headerLine(id: string, name?: string): string {
+  return `${
+    JSON.stringify({
+      version: FORMAT_VERSION,
+      id,
+      createdAt: "2026-06-03T00:00:00.000Z",
+      ...(name !== undefined ? { name } : {}),
+    })
+  }\n`;
+}
+
 Deno.test("SessionStore writes a v3 JSONL header and appends entries", async () => {
   const dir = await Deno.makeTempDir({ prefix: "deno-ai-agent-sessions-" });
   try {
@@ -230,6 +241,82 @@ Deno.test("SessionStore rejects corrupt JSONL lines with a line number", async (
     const store = new SessionStore(dir);
     await assertRejects(() => store.read(id), Error, "Invalid session JSONL at line 2");
   } finally {
+    await Deno.remove(dir, { recursive: true });
+  }
+});
+
+Deno.test("SessionStore syncs KV catalog from JSONL headers for list and name resolution", async () => {
+  const dir = await Deno.makeTempDir({ prefix: "deno-ai-agent-sessions-catalog-" });
+  const kv = await Deno.openKv(":memory:");
+  try {
+    const first = "00000000-0000-4000-8000-000000000001";
+    const second = "00000000-0000-4000-8000-000000000002";
+    await Deno.writeTextFile(`${dir}/${first}.jsonl`, headerLine(first, "alpha"));
+    await Deno.writeTextFile(`${dir}/${second}.jsonl`, headerLine(second));
+
+    const store = new SessionStore(dir, kv);
+    await store.syncCatalog();
+
+    assertEquals((await store.listHeaders()).map((header) => header.id), [first, second]);
+    assertEquals(await store.resolveId("alpha"), first);
+    assertEquals((await kv.get(["sessions", "name", "alpha"])).value, first);
+  } finally {
+    kv.close();
+    await Deno.remove(dir, { recursive: true });
+  }
+});
+
+Deno.test("SessionStore updates KV name index on rename", async () => {
+  const dir = await Deno.makeTempDir({ prefix: "deno-ai-agent-sessions-catalog-rename-" });
+  const kv = await Deno.openKv(":memory:");
+  try {
+    const id = crypto.randomUUID();
+    const store = new SessionStore(dir, kv);
+    await store.create(id, { name: "old-name" });
+    await store.setName(id, "new-name");
+
+    assertEquals(await store.resolveId("new-name"), id);
+    await assertRejects(() => store.resolveId("old-name"), Error, 'No saved session named "old-name"');
+    assertEquals((await kv.get(["sessions", "name", "old-name"])).value, null);
+  } finally {
+    kv.close();
+    await Deno.remove(dir, { recursive: true });
+  }
+});
+
+Deno.test("SessionStore repairs stale KV name pointers from JSONL fallback", async () => {
+  const dir = await Deno.makeTempDir({ prefix: "deno-ai-agent-sessions-catalog-repair-" });
+  const kv = await Deno.openKv(":memory:");
+  try {
+    const stale = "00000000-0000-4000-8000-000000000001";
+    const actual = "00000000-0000-4000-8000-000000000002";
+    await Deno.writeTextFile(`${dir}/${stale}.jsonl`, headerLine(stale, "old"));
+    const store = new SessionStore(dir, kv);
+    await store.syncCatalog();
+    await Deno.writeTextFile(`${dir}/${actual}.jsonl`, headerLine(actual, "target"));
+    await kv.set(["sessions", "name", "target"], stale);
+
+    assertEquals(await store.resolveId("target"), actual);
+    assertEquals((await kv.get(["sessions", "name", "target"])).value, actual);
+  } finally {
+    kv.close();
+    await Deno.remove(dir, { recursive: true });
+  }
+});
+
+Deno.test("SessionStore catalog sync rejects duplicate names", async () => {
+  const dir = await Deno.makeTempDir({ prefix: "deno-ai-agent-sessions-catalog-dup-" });
+  const kv = await Deno.openKv(":memory:");
+  try {
+    const first = "00000000-0000-4000-8000-000000000001";
+    const second = "00000000-0000-4000-8000-000000000002";
+    await Deno.writeTextFile(`${dir}/${first}.jsonl`, headerLine(first, "dup"));
+    await Deno.writeTextFile(`${dir}/${second}.jsonl`, headerLine(second, "dup"));
+
+    const store = new SessionStore(dir, kv);
+    await assertRejects(() => store.syncCatalog(), Error, "Session name already in use");
+  } finally {
+    kv.close();
     await Deno.remove(dir, { recursive: true });
   }
 });

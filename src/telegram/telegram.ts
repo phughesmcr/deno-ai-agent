@@ -1,7 +1,7 @@
 import { Bot, type Context, GrammyError, HttpError } from "grammy";
 
 import { questions, type QuestionsFlavor } from "grammy-questions";
-import type { AskUserQuestionPort, TodoTelegramMeta } from "../agent/mod.ts";
+import type { AskUserQuestionPort, TodoStore } from "../agent/mod.ts";
 import type { PermissionCallbackDispatch } from "../permission-broker/mod.ts";
 import { loadTelegramConfig, logDebug } from "../shared/mod.ts";
 import { installConcurrentUpdates } from "./bot-runner.ts";
@@ -90,8 +90,7 @@ export function createTelegramManager({
   permissionPrompts,
   approvals,
   turnAbort,
-  todosDir,
-  updateTelegramMeta,
+  todoStore,
 }: {
   sessions: TelegramSessionCoordinator;
   onAdminStart: (ctx: TelegramContext) => Promise<void>;
@@ -99,8 +98,7 @@ export function createTelegramManager({
   permissionPrompts?: TelegramPermissionPromptPort;
   approvals?: TelegramApprovalPort;
   turnAbort?: TelegramTurnAbortPort;
-  todosDir?: string;
-  updateTelegramMeta?: (sessionId: string, meta: TodoTelegramMeta) => Promise<void>;
+  todoStore?: TodoStore;
 }): TelegramManager {
   const { token, adminId } = getEnv();
 
@@ -111,7 +109,7 @@ export function createTelegramManager({
     if (!ref) return undefined;
     return new TelegramCommandHandler(
       sessions.forConversation(ref, { createdBy: ctx.from?.id }),
-      todosDir,
+      todoStore,
     );
   }
 
@@ -320,7 +318,7 @@ export function createTelegramManager({
 
   bot.command("todos", async (ctx: TelegramContext) => {
     if (blockIfInteractionPending(ctx)) return;
-    if (!todosDir || !updateTelegramMeta) {
+    if (!todoStore) {
       await replyInConversation(ctx, "Todo list is not configured.");
       return;
     }
@@ -331,7 +329,7 @@ export function createTelegramManager({
     }
     try {
       const status = await commands.sessionStatus();
-      await showTodosForSession(ctx, status.id, todosDir, updateTelegramMeta);
+      await showTodosForSession(ctx, status.id, todoStore);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       await replyInConversation(ctx, `Failed to show todos: ${message}`);

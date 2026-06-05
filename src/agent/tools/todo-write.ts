@@ -3,10 +3,9 @@ import { z } from "zod/v3";
 
 import type { ApprovalRequest } from "../../shared/approval.ts";
 import { logDebug } from "../../shared/log.ts";
-import { requestForOperation, todoFileDisplayPath } from "./approval-support.ts";
+import { requestForOperation, todoKvDisplayPath } from "./approval-support.ts";
 import type { ToolContext } from "./context.ts";
 import { type AgentToolDefinition, type AgentToolDeps, toolFromDefinition } from "./definitions.ts";
-import { withFileMutationQueue } from "./file-mutation-queue.ts";
 import type { TodoDisplayPort } from "./todo-display-port.ts";
 
 export type TodoStatus = "pending" | "in_progress" | "completed";
@@ -31,11 +30,21 @@ export interface TodoChanges {
   completed: TodoItem[];
 }
 
-/** On-disk todo file shape. */
+/** Persisted todo state shape. */
 export interface TodoFile {
   sessionId: string;
   todos: TodoItem[];
   telegram?: TodoTelegramMeta;
+}
+
+/** Session-scoped todo persistence boundary. */
+export interface TodoStore {
+  read(sessionId: string): Promise<TodoFile>;
+  write(file: TodoFile): Promise<void>;
+  updateTodos(sessionId: string, todos: TodoItem[]): Promise<{ changes: TodoChanges; telegram?: TodoTelegramMeta }>;
+  updateTelegramMeta(sessionId: string, meta: TodoTelegramMeta): Promise<void>;
+  copy(fromId: string, toId: string): Promise<void>;
+  label(sessionId: string): string;
 }
 
 /** Parameters for the todo_write tool. */
@@ -46,10 +55,9 @@ export interface TodoWriteParams {
 /** Dependencies for the todo_write tool. */
 export interface TodoWriteDeps {
   getSessionId: () => string;
-  todosDir: string;
+  store: TodoStore;
   workspace?: ToolContext;
   display?: TodoDisplayPort;
-  updateTelegramMeta?: (sessionId: string, meta: TodoTelegramMeta) => Promise<void>;
 }
 
 const SESSION_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
@@ -89,9 +97,28 @@ function assertValidSessionId(id: string): void {
   if (!SESSION_ID_PATTERN.test(id)) throw new Error("Invalid session id");
 }
 
-function todoFilePath(todosDir: string, sessionId: string): string {
+function todoKey(sessionId: string): Deno.KvKey {
   assertValidSessionId(sessionId);
-  return `${todosDir}/${sessionId}.json`;
+  return ["todos", sessionId];
+}
+
+function parseTodoFile(value: unknown, sessionId: string): TodoFile {
+  try {
+    const parsed = todoFileSchema.parse(value);
+    if (parsed.sessionId !== sessionId) {
+      throw new Error(`Todo state id mismatch: expected ${sessionId}, got ${parsed.sessionId}`);
+    }
+    return {
+      sessionId,
+      todos: parsed.todos,
+      telegram: parsed.telegram,
+    };
+  } catch (error) {
+    if (error instanceof z.ZodError || error instanceof Error) {
+      throw new Error(`Invalid todo state for session ${sessionId}: ${error.message}`);
+    }
+    throw error;
+  }
 }
 
 /** Compare old and new todo lists to detect created and completed items. */
@@ -147,117 +174,136 @@ export function validateTodoWriteParams(params: TodoWriteParams): string | null 
   return null;
 }
 
-async function readTodoFileRaw(todosDir: string, sessionId: string): Promise<TodoFile> {
-  const path = todoFilePath(todosDir, sessionId);
-  try {
-    const content = await Deno.readTextFile(path);
-    const parsed = todoFileSchema.parse(JSON.parse(content));
-    return {
-      sessionId,
-      todos: parsed.todos,
-      telegram: parsed.telegram,
-    };
-  } catch (error) {
-    if (error instanceof Deno.errors.NotFound) {
-      return { sessionId, todos: [] };
+/** Deno KV-backed todo persistence for one workspace. */
+export class DenoKvTodoStore implements TodoStore {
+  private readonly _kv: Deno.Kv;
+
+  constructor(kv: Deno.Kv) {
+    this._kv = kv;
+  }
+
+  async read(sessionId: string): Promise<TodoFile> {
+    const entry = await this._kv.get<unknown>(todoKey(sessionId));
+    if (entry.value === null) return { sessionId, todos: [] };
+    return parseTodoFile(entry.value, sessionId);
+  }
+
+  async write(file: TodoFile): Promise<void> {
+    assertValidSessionId(file.sessionId);
+    await this._update(file.sessionId, (existing) => ({
+      file: {
+        sessionId: file.sessionId,
+        todos: file.todos,
+        telegram: file.telegram ?? existing.telegram,
+      },
+      result: undefined,
+    }));
+  }
+
+  async updateTodos(
+    sessionId: string,
+    todos: TodoItem[],
+  ): Promise<{ changes: TodoChanges; telegram?: TodoTelegramMeta }> {
+    return await this._update(sessionId, (existing) => {
+      const changes = detectTodoChanges(existing.todos, todos);
+      return {
+        file: {
+          sessionId,
+          todos,
+          telegram: existing.telegram,
+        },
+        result: {
+          changes,
+          telegram: existing.telegram,
+        },
+      };
+    });
+  }
+
+  async updateTelegramMeta(sessionId: string, meta: TodoTelegramMeta): Promise<void> {
+    await this._update(sessionId, (existing) => ({
+      file: {
+        ...existing,
+        sessionId,
+        telegram: meta,
+      },
+      result: undefined,
+    }));
+  }
+
+  async copy(fromId: string, toId: string): Promise<void> {
+    assertValidSessionId(fromId);
+    assertValidSessionId(toId);
+    const sourceEntry = await this._kv.get<unknown>(todoKey(fromId));
+    if (sourceEntry.value === null) return;
+    const source = parseTodoFile(sourceEntry.value, fromId);
+    await this._update(toId, () => ({
+      file: {
+        sessionId: toId,
+        todos: source.todos,
+        telegram: undefined,
+      },
+      result: undefined,
+    }));
+  }
+
+  label(sessionId: string): string {
+    assertValidSessionId(sessionId);
+    return todoKvDisplayPath(sessionId);
+  }
+
+  private async _update<T>(
+    sessionId: string,
+    update: (existing: TodoFile) => { file: TodoFile; result: T } | Promise<{ file: TodoFile; result: T }>,
+  ): Promise<T> {
+    const key = todoKey(sessionId);
+    while (true) {
+      const entry = await this._kv.get<unknown>(key);
+      const existing = entry.value === null ? { sessionId, todos: [] } : parseTodoFile(entry.value, sessionId);
+      const { file, result } = await update(existing);
+      const next: TodoFile = {
+        sessionId,
+        todos: file.todos,
+        telegram: file.telegram,
+      };
+      const commit = await this._kv.atomic().check(entry).set(key, next).commit();
+      if (commit.ok) return result;
     }
-    if (error instanceof SyntaxError || error instanceof z.ZodError) {
-      throw new Error(`Invalid todo file for session ${sessionId}: ${error.message}`);
-    }
-    throw error;
   }
 }
 
-/** Reads the todo file for a session. */
-export function readTodoFile(todosDir: string, sessionId: string): Promise<TodoFile> {
-  return withFileMutationQueue(todoFilePath(todosDir, sessionId), () => readTodoFileRaw(todosDir, sessionId));
+/** Reads the todo state for a session. */
+export function readTodoFile(store: TodoStore, sessionId: string): Promise<TodoFile> {
+  return store.read(sessionId);
 }
 
-async function writeTodoFileRaw(todosDir: string, file: TodoFile): Promise<void> {
-  const path = todoFilePath(todosDir, file.sessionId);
-  await Deno.mkdir(todosDir, { recursive: true });
-  const tempPath = `${path}.tmp`;
-  await Deno.writeTextFile(tempPath, JSON.stringify(file, null, 2));
-  await Deno.rename(tempPath, path);
+/** Writes todos, preserving optional telegram metadata when omitted. */
+export function writeTodoFile(store: TodoStore, file: TodoFile): Promise<void> {
+  return store.write(file);
 }
 
-async function updateTodoFileRaw<T>(
-  todosDir: string,
-  sessionId: string,
-  update: (existing: TodoFile) => { file: TodoFile; result: T } | Promise<{ file: TodoFile; result: T }>,
-): Promise<T> {
-  return await withFileMutationQueue(todoFilePath(todosDir, sessionId), async () => {
-    const existing = await readTodoFileRaw(todosDir, sessionId);
-    const { file, result } = await update(existing);
-    await writeTodoFileRaw(todosDir, {
-      sessionId,
-      todos: file.todos,
-      telegram: file.telegram,
-    });
-    return result;
-  });
-}
-
-/** Writes todos to disk, preserving optional telegram metadata when omitted. */
-export function writeTodoFile(todosDir: string, file: TodoFile): Promise<void> {
-  return updateTodoFileRaw(todosDir, file.sessionId, (existing) => ({
-    file: {
-      sessionId: file.sessionId,
-      todos: file.todos,
-      telegram: file.telegram ?? existing.telegram,
-    },
-    result: undefined,
-  }));
-}
-
-/** Merges telegram metadata into the session todo file without changing todos. */
+/** Merges telegram metadata into the session todo state without changing todos. */
 export function updateTelegramMeta(
-  todosDir: string,
+  store: TodoStore,
   sessionId: string,
   meta: TodoTelegramMeta,
 ): Promise<void> {
-  return updateTodoFileRaw(todosDir, sessionId, (existing) => ({
-    file: {
-      ...existing,
-      sessionId,
-      telegram: meta,
-    },
-    result: undefined,
-  }));
+  return store.updateTelegramMeta(sessionId, meta);
 }
 
-/** Returns todos for a session (empty array if no file). */
-export async function readTodosForSession(todosDir: string, sessionId: string): Promise<TodoItem[]> {
-  const file = await readTodoFile(todosDir, sessionId);
+/** Returns todos for a session (empty array if no state). */
+export async function readTodosForSession(store: TodoStore, sessionId: string): Promise<TodoItem[]> {
+  const file = await store.read(sessionId);
   return file.todos;
 }
 
-/** Copies a todo file from one session id to another (for /fork). */
-export async function copyTodosForSession(
-  todosDir: string,
+/** Copies todo state from one session id to another (for /fork). */
+export function copyTodosForSession(
+  store: TodoStore,
   fromId: string,
   toId: string,
 ): Promise<void> {
-  assertValidSessionId(fromId);
-  assertValidSessionId(toId);
-  const fromPath = todoFilePath(todosDir, fromId);
-  let source: TodoFile;
-  try {
-    await withFileMutationQueue(fromPath, async () => {
-      source = await readTodoFileRaw(todosDir, fromId);
-    });
-  } catch (error) {
-    if (error instanceof Deno.errors.NotFound) return;
-    throw error;
-  }
-  await updateTodoFileRaw(todosDir, toId, () => ({
-    file: {
-      sessionId: toId,
-      todos: source.todos,
-      telegram: undefined,
-    },
-    result: undefined,
-  }));
+  return store.copy(fromId, toId);
 }
 
 /** Formats the LLM-facing tool result with system-reminder blocks (Qwen-aligned). */
@@ -346,11 +392,11 @@ export const todoWriteToolDefinition: AgentToolDefinition<typeof todoWriteParame
   name: "todo_write",
   description: TODO_WRITE_DESCRIPTION,
   parameters: todoWriteParameters,
-  authorize: async ({ todos }, deps): Promise<ApprovalRequest> => {
+  authorize: ({ todos }, deps): ApprovalRequest => {
     const sessionId = deps.todos.getSessionId();
     return requestForOperation(deps.workspace, {
       operation: "todo",
-      target: await todoFileDisplayPath(deps.workspace, deps.todos.todosDir, sessionId),
+      target: deps.todos.store.label(sessionId),
       risk: "medium",
       summary: `write ${todos.length} todo item(s)`,
     });
@@ -370,20 +416,7 @@ async function runTodoWrite(params: TodoWriteParams, deps: TodoWriteDeps): Promi
   let updateResult: { changes: TodoChanges; telegram?: TodoTelegramMeta };
 
   try {
-    updateResult = await updateTodoFileRaw(deps.todosDir, sessionId, (existingFile) => {
-      const changes = detectTodoChanges(existingFile.todos, params.todos);
-      return {
-        file: {
-          sessionId,
-          todos: params.todos,
-          telegram: existingFile.telegram,
-        },
-        result: {
-          changes,
-          telegram: existingFile.telegram,
-        },
-      };
-    });
+    updateResult = await deps.store.updateTodos(sessionId, params.todos);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     logDebug("todo_write.persist_error", { sessionId, message });

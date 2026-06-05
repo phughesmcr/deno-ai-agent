@@ -32,7 +32,16 @@
   "compilerOptions": {
     "allowUnreachableCode": false,
     "allowUnusedLabels": false,
-    "lib": ["esnext", "deno.ns", "deno.unstable", "deno.worker"],
+    "lib": [
+      "esnext",
+      "deno.ns",
+      "deno.unstable",
+      "deno.worker",
+      "webworker",
+      "webworker.asynciterable",
+      "webworker.importscripts",
+      "webworker.iterable"
+    ],
     "module": "esnext",
     "noErrorTruncation": true,
     "noFallthroughCasesInSwitch": true,
@@ -135,6 +144,7 @@
     "ajv": "npm:ajv@^8.17.1"
   },
   "unstable": [
-    "kv"
+    "kv",
+    "cron"
   ]
 }

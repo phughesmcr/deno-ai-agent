@@ -81,7 +81,11 @@ interface SubagentJobStore {
   create(record: SubagentRecord): Promise<void>;
   get(sessionId: string, agentId: string): Promise<SubagentRecord | undefined>;
   list(sessionId: string): Promise<SubagentRecord[]>;
-  put(record: SubagentRecord): Promise<void>;
+  update(
+    ref: SubagentRef,
+    update: (record: SubagentRecord) => SubagentRecord | undefined,
+  ): Promise<SubagentRecord | undefined>;
+  cancelAbandoned(now: string): Promise<void>;
 }
 
 interface SubagentRunner {
@@ -150,7 +154,10 @@ class DenoKvSubagentJobStore implements SubagentJobStore {
   }
 
   async create(record: SubagentRecord): Promise<void> {
-    await this.put(record);
+    const key = this._key(record.sessionId, record.id);
+    const previous = await this._kv.get<SubagentRecord>(key);
+    const result = await this._kv.atomic().check(previous).set(key, record).commit();
+    if (!result.ok) throw new Error(`Subagent job already exists: ${record.id}`);
   }
 
   async get(sessionId: string, agentId: string): Promise<SubagentRecord | undefined> {
@@ -167,8 +174,39 @@ class DenoKvSubagentJobStore implements SubagentJobStore {
     return records.toSorted((a, b) => a.createdAt.localeCompare(b.createdAt));
   }
 
-  async put(record: SubagentRecord): Promise<void> {
-    await this._kv.set(this._key(record.sessionId, record.id), record);
+  async update(
+    ref: SubagentRef,
+    update: (record: SubagentRecord) => SubagentRecord | undefined,
+  ): Promise<SubagentRecord | undefined> {
+    const key = this._key(ref.sessionId, ref.agentId);
+    while (true) {
+      const entry = await this._kv.get<SubagentRecord>(key);
+      if (!entry.value) return undefined;
+      const next = update(entry.value);
+      if (!next) return entry.value;
+      const result = await this._kv.atomic().check(entry).set(key, next).commit();
+      if (result.ok) return next;
+    }
+  }
+
+  async cancelAbandoned(now: string): Promise<void> {
+    const records: SubagentRecord[] = [];
+    for await (const entry of this._kv.list<SubagentRecord>({ prefix: ["subagents"] })) {
+      records.push(entry.value);
+    }
+    await Promise.all(
+      records.map((record) =>
+        this.update({ sessionId: record.sessionId, agentId: record.id }, (current) => {
+          if (current.status !== "queued" && current.status !== "running") return undefined;
+          return {
+            ...current,
+            status: "cancelled",
+            finishedAt: current.finishedAt ?? now,
+            error: current.error ?? "Subagent job was abandoned because Silas restarted before it finished.",
+          };
+        })
+      ),
+    );
   }
 
   private _key(sessionId: string, agentId: string): Deno.KvKey {
@@ -269,6 +307,11 @@ export class SubagentJobService implements SubagentPort, AsyncDisposable {
     return this._store.list(this._getSessionId());
   }
 
+  /** Cancels persisted queued/running jobs left behind by a previous process. */
+  async reconcileAbandonedOnStartup(): Promise<void> {
+    await this._store.cancelAbandoned(this._nowIso());
+  }
+
   /** Returns a subagent record, including terminal result or error when present. */
   result(agentId: string): Promise<SubagentRecord | undefined> {
     return this._getCurrentSessionRecord(agentId);
@@ -340,7 +383,11 @@ export class SubagentJobService implements SubagentPort, AsyncDisposable {
       status: "running",
       startedAt: this._nowIso(),
     };
-    await this._store.put(runningRecord);
+    const running = await this._store.update(ref, (current) => {
+      if (current.status !== "queued") return undefined;
+      return runningRecord;
+    });
+    if (!running || running.status !== "running") return;
 
     const controller = new AbortController();
     this._activeControllers.set(this._refKey(ref), controller);
@@ -352,28 +399,32 @@ export class SubagentJobService implements SubagentPort, AsyncDisposable {
         task: record.task,
         signal: controller.signal,
       });
-      const latest = await this._store.get(ref.sessionId, ref.agentId) ?? runningRecord;
-      if (latest.status === "cancelled" || controller.signal.aborted) {
-        await this._markCancelled(ref, latest);
+      if (controller.signal.aborted) {
+        await this._markCancelled(ref, running);
         return;
       }
-      await this._store.put({
-        ...latest,
-        status: "completed",
-        finishedAt: this._nowIso(),
-        result: result.text,
+      await this._store.update(ref, (latest) => {
+        if (latest.status !== "running") return undefined;
+        return {
+          ...latest,
+          status: "completed",
+          finishedAt: this._nowIso(),
+          result: result.text,
+        };
       });
     } catch (error) {
-      const latest = await this._store.get(ref.sessionId, ref.agentId) ?? runningRecord;
-      if (latest.status === "cancelled" || isAbortError(error, controller.signal)) {
-        await this._markCancelled(ref, latest);
+      if (isAbortError(error, controller.signal)) {
+        await this._markCancelled(ref, running);
         return;
       }
-      await this._store.put({
-        ...latest,
-        status: "failed",
-        finishedAt: this._nowIso(),
-        error: errorMessage(error),
+      await this._store.update(ref, (latest) => {
+        if (latest.status !== "running") return undefined;
+        return {
+          ...latest,
+          status: "failed",
+          finishedAt: this._nowIso(),
+          error: errorMessage(error),
+        };
       });
     } finally {
       this._activeControllers.delete(this._refKey(ref));
@@ -381,16 +432,15 @@ export class SubagentJobService implements SubagentPort, AsyncDisposable {
   }
 
   private async _markCancelled(ref: SubagentRef, fallback: SubagentRecord): Promise<SubagentRecord> {
-    const current = await this._store.get(ref.sessionId, ref.agentId) ?? fallback;
-    if (isTerminal(current.status)) return current;
-    const cancelled: SubagentRecord = {
-      ...current,
-      status: "cancelled",
-      finishedAt: current.finishedAt ?? this._nowIso(),
-      error: current.error ?? "Subagent job was cancelled.",
-    };
-    await this._store.put(cancelled);
-    return cancelled;
+    return await this._store.update(ref, (current) => {
+      if (isTerminal(current.status)) return undefined;
+      return {
+        ...current,
+        status: "cancelled",
+        finishedAt: current.finishedAt ?? this._nowIso(),
+        error: current.error ?? "Subagent job was cancelled.",
+      };
+    }) ?? fallback;
   }
 
   private _getCurrentSessionRecord(agentId: string): Promise<SubagentRecord | undefined> {

@@ -48,16 +48,8 @@ export function webFetchApprovalSummary(url: URL): string {
   return `GET ${url.pathname || "/"}`;
 }
 
-export async function todoFileDisplayPath(ctx: ToolContext, todosDir: string, sessionId: string): Promise<string> {
-  try {
-    const canonicalTodosDir = await Deno.realPath(todosDir);
-    return ctx.fs.displayPath(`${canonicalTodosDir}/${sessionId}.json`);
-  } catch (error) {
-    if (error instanceof Deno.errors.NotFound) {
-      return ctx.fs.displayPath(`${todosDir}/${sessionId}.json`);
-    }
-    throw error;
-  }
+export function todoKvDisplayPath(sessionId: string): string {
+  return `workspace-kv:todos/${sessionId}`;
 }
 
 export async function canonicalDisplayPath(ctx: ToolContext, absolutePath: string): Promise<string> {

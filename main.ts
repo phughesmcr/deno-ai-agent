@@ -6,6 +6,7 @@ import {
   createSkillManager,
   createToolContext,
   createWorkspace,
+  DenoKvTodoStore,
   getModelToolSet,
   McpRegistry,
   normalizeUserTurnInput,
@@ -14,7 +15,6 @@ import {
   runTurn,
   setMcpSystemPromptAppendix,
   SubagentJobService,
-  updateTelegramMeta,
   type UserTurnInput,
 } from "./src/agent/mod.ts";
 import {
@@ -55,14 +55,12 @@ import {
 const PENDING_INTERACTION_HINT =
   "Please resolve the pending Telegram approval or broker permission prompt first (or wait for it to time out).";
 
-function registerShutdown(controller: AbortController, stop: () => Promise<void>): void {
-  const shutdown = (): void => {
-    if (controller.signal.aborted) return;
-    controller.abort();
-    void stop().finally(() => Deno.exit(0));
+function registerShutdown(runShutdown: () => Promise<void>): void {
+  const onShutdownSignal = (): void => {
+    void runShutdown();
   };
-  Deno.addSignalListener("SIGINT", shutdown);
-  Deno.addSignalListener("SIGTERM", shutdown);
+  Deno.addSignalListener("SIGINT", onShutdownSignal);
+  Deno.addSignalListener("SIGTERM", onShutdownSignal);
 }
 
 function isAbortError(error: unknown): boolean {
@@ -99,10 +97,17 @@ async function main(): Promise<void> {
   }
 
   const workspace = await createWorkspace(new URL(".", import.meta.url));
+  const workspaceKv = await Deno.openKv(workspace.kvPath);
   logInfo("Loading LM Studio model...");
   const lmstudio = await createLMStudioManager({ signal: controller.signal, maxContextLength });
   logInfo(`LM Studio model loaded (${config.MODEL}).`);
-  const agent = await createAgent({ workspace, lmstudio, maxContextLength, signal: controller.signal });
+  const agent = await createAgent({
+    workspace,
+    kv: workspaceKv,
+    lmstudio,
+    maxContextLength,
+    signal: controller.signal,
+  });
   logInfo("Agent session ready.");
 
   const mcpRegistry = new McpRegistry({
@@ -125,16 +130,13 @@ async function main(): Promise<void> {
   setMcpSystemPromptAppendix(mcpRegistry.systemPromptAppendix);
   await agent.sessions.applySystemPrompt(await workspace.reloadSystemPrompt());
 
-  const subagentKv = await Deno.openKv(":memory:");
-  const telegramBindingsKv = await Deno.openKv(`${workspace.path}/telegram-bindings.kv`);
   const telegramSessions = new TelegramSessionCoordinator({
     sessions: agent.sessions,
-    bindings: new TelegramSessionBindingStore(telegramBindingsKv),
+    bindings: new TelegramSessionBindingStore(workspaceKv),
   });
 
-  const bindUpdateTelegramMeta = (sessionId: string, meta: Parameters<typeof updateTelegramMeta>[2]) =>
-    updateTelegramMeta(workspace.todosDir, sessionId, meta);
-  const todoDisplay = createTelegramTodoDisplayPort({ updateTelegramMeta: bindUpdateTelegramMeta });
+  const todoStore = new DenoKvTodoStore(workspaceKv);
+  const todoDisplay = createTelegramTodoDisplayPort({ store: todoStore });
   let activeTurnId = "no-active-turn";
   const activeTurns = new ActiveTurnRegistry();
   const toolContext = await createToolContext(workspace.path, {
@@ -144,12 +146,13 @@ async function main(): Promise<void> {
   });
   const skills = await createSkillManager({ root: workspace.path });
   const subagents = new SubagentJobService({
-    kv: subagentKv,
+    kv: workspaceKv,
     model: agent.modelAct,
     workspace: toolContext,
     skills,
     getSessionId: () => agent.sessions.current.id,
   });
+  await subagents.reconcileAbandonedOnStartup();
   const createTurnToolSet = async (): Promise<
     { tools: Tool[]; guardToolCall: ReturnType<typeof getModelToolSet>["guardToolCall"] }
   > => {
@@ -162,9 +165,8 @@ async function main(): Promise<void> {
       userQuestions,
       todos: {
         getSessionId: () => agent.sessions.current.id,
-        todosDir: workspace.todosDir,
+        store: todoStore,
         display: todoDisplay,
-        updateTelegramMeta: bindUpdateTelegramMeta,
       },
       skills: {
         manager: skills,
@@ -304,8 +306,7 @@ async function main(): Promise<void> {
     permissionPrompts,
     approvals,
     turnAbort,
-    todosDir: workspace.todosDir,
-    updateTelegramMeta: bindUpdateTelegramMeta,
+    todoStore,
   });
 
   let telegramRunner: ReturnType<typeof startTelegramBot> | undefined;
@@ -368,16 +369,45 @@ async function main(): Promise<void> {
     }
   });
 
-  registerShutdown(controller, async () => {
-    mediaGroupBuffer.dispose();
-    await mcpRegistry.closeAll();
-    await telegramRunner?.stop();
-    await telegram.bot.stop();
-    await subagents.shutdown();
-    subagentKv.close();
-    telegramBindingsKv.close();
-    workspace[Symbol.dispose]();
-  });
+  let intentionalShutdown = false;
+  let cleanupPromise: Promise<void> | undefined;
+
+  function errorMessage(error: unknown): string {
+    return error instanceof Error ? error.message : String(error);
+  }
+
+  async function cleanupStep(name: string, step: () => void | Promise<void>): Promise<void> {
+    try {
+      await Promise.try(step);
+    } catch (error) {
+      logError("shutdown.cleanup_error", { step: name, message: errorMessage(error) });
+    }
+  }
+
+  function cleanup(): Promise<void> {
+    cleanupPromise ??= (async () => {
+      await cleanupStep("telegram.media_group_buffer.dispose", () => mediaGroupBuffer.dispose());
+      await cleanupStep("mcp.close_all", () => mcpRegistry.closeAll());
+      await cleanupStep("telegram.runner.stop", async () => {
+        if (telegramRunner?.isRunning()) await telegramRunner.stop();
+      });
+      await cleanupStep("telegram.bot.stop", () => telegram.bot.stop());
+      await cleanupStep("subagents.shutdown", () => subagents.shutdown());
+      await cleanupStep("workspace.kv.close", () => workspaceKv.close());
+      await cleanupStep("workspace.dispose", () => workspace[Symbol.dispose]());
+    })();
+    return cleanupPromise;
+  }
+
+  async function shutdownFromSignal(): Promise<void> {
+    if (intentionalShutdown) return;
+    intentionalShutdown = true;
+    controller.abort();
+    await cleanup();
+    Deno.exit(0);
+  }
+
+  registerShutdown(shutdownFromSignal);
 
   telegram.bot.on("message", async (ctx: TelegramContext) => {
     if (ctx.message && isBotCommand(ctx.message) && botCommandName(ctx.message) === "q") {
@@ -523,11 +553,27 @@ async function main(): Promise<void> {
     }
   });
 
+  let runnerError: unknown;
   await traceSpan("telegram.bot.start", async () => {
     telegramRunner = startTelegramBot(telegram.bot);
     logInfo("Silas ready - listening on Telegram.");
-    await telegramRunner.task();
+    const runnerTask = telegramRunner.task();
+    if (!runnerTask) return;
+    try {
+      await runnerTask;
+    } catch (error) {
+      runnerError = error;
+    }
   }, { root: true });
+
+  if (!intentionalShutdown) {
+    logError("telegram.runner.stopped_unexpectedly", {
+      message: runnerError ? errorMessage(runnerError) : "Telegram runner task resolved without shutdown request.",
+    });
+    controller.abort();
+    await cleanup();
+    Deno.exit(1);
+  }
 }
 
 if (import.meta.main) {

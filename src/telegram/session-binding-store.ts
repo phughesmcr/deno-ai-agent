@@ -61,10 +61,13 @@ export class TelegramSessionBindingStore {
 
   /** Creates or replaces the binding for one Telegram conversation. */
   async bind(ref: TelegramConversationRef, options: BindOptions): Promise<TelegramSessionBinding> {
-    const previous = await this.get(ref);
-    const binding = createBinding(ref, options, previous?.createdAt);
-    await this._kv.set(bindingKey(ref), binding);
-    return binding;
+    const key = bindingKey(ref);
+    while (true) {
+      const previous = await this._kv.get<TelegramSessionBinding>(key);
+      const binding = createBinding(ref, options, previous.value?.createdAt);
+      const result = await this._kv.atomic().check(previous).set(key, binding).commit();
+      if (result.ok) return binding;
+    }
   }
 
   /** Atomically creates a binding when absent; returns the existing binding otherwise. */

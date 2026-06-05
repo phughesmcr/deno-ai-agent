@@ -17,7 +17,7 @@ import { readToolDefinition } from "./read.ts";
 import { skillToolDefinition } from "./skill.ts";
 import { subagentToolDefinition } from "./subagent.ts";
 import { createNoopTodoDisplayPort } from "./todo-display-port.ts";
-import { todoWriteToolDefinition } from "./todo-write.ts";
+import { type TodoStore, todoWriteToolDefinition } from "./todo-write.ts";
 import { typescriptReplToolDefinition } from "./typescript-repl.ts";
 import { createUnavailableAskUserQuestionPort } from "./user-question-port.ts";
 import { webFetchToolDefinition } from "./web-fetch.ts";
@@ -66,6 +66,18 @@ function unavailableSubagentPort(): SubagentPort {
     list: unavailable,
     result: unavailable,
     cancel: unavailable,
+  };
+}
+
+function unavailableTodoStore(): TodoStore {
+  const unavailable = (): Promise<never> => Promise.reject(new Error("Todo store is not configured."));
+  return {
+    read: unavailable,
+    write: unavailable,
+    updateTodos: unavailable,
+    updateTelegramMeta: unavailable,
+    copy: unavailable,
+    label: (sessionId) => `workspace-kv:todos/${sessionId}`,
   };
 }
 
@@ -204,7 +216,7 @@ export function createReadOnlySubagentToolsFromDefinitions(
     userQuestions: createUnavailableAskUserQuestionPort(),
     todos: {
       getSessionId: workspace.getSessionId,
-      todosDir: `${workspace.root}/todos`,
+      store: unavailableTodoStore(),
       display: createNoopTodoDisplayPort(),
     },
     skills: {
@@ -226,7 +238,7 @@ export async function getModelToolsForRoot(root: string): Promise<Tool[]> {
     userQuestions: createUnavailableAskUserQuestionPort(),
     todos: {
       getSessionId: () => "00000000-0000-4000-8000-000000000000",
-      todosDir: `${root}/todos`,
+      store: unavailableTodoStore(),
       display: createNoopTodoDisplayPort(),
     },
     skills: {

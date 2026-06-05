@@ -390,3 +390,124 @@ Deno.test("SubagentJobService uses deterministic clock and id dependencies", asy
     },
   );
 });
+
+Deno.test("SubagentJobService records persist across service instances", async () => {
+  const dir = await Deno.makeTempDir({ prefix: "deno-ai-agent-subagents-persist-" });
+  const kv = await Deno.openKv(":memory:");
+  const sessionId = crypto.randomUUID();
+  const model = new FakeModel();
+  try {
+    const ctx = await createToolContext(dir, {
+      sessionId: () => sessionId,
+      turnId: "subagent-test",
+    });
+    const skills = await createSkillManager({ root: dir });
+    const service = new SubagentJobService({
+      kv,
+      model,
+      workspace: ctx,
+      skills,
+      getSessionId: () => sessionId,
+    });
+    model.behaviors.push(model.reply("durable result"));
+    const spawned = await service.spawn({ task: "Persist me" });
+    await waitForServiceSubagent(service, spawned.id, "completed");
+    await service.shutdown();
+
+    const reopened = new SubagentJobService({
+      kv,
+      model,
+      workspace: ctx,
+      skills,
+      getSessionId: () => sessionId,
+    });
+    try {
+      const record = await reopened.status(spawned.id);
+      assertEquals(record?.status, "completed");
+      assertEquals(record?.result, "durable result");
+    } finally {
+      await reopened.shutdown();
+    }
+  } finally {
+    kv.close();
+    await Deno.remove(dir, { recursive: true });
+  }
+});
+
+Deno.test("SubagentJobService startup reconciliation cancels abandoned queued and running jobs", async () => {
+  const dir = await Deno.makeTempDir({ prefix: "deno-ai-agent-subagents-reconcile-" });
+  const kv = await Deno.openKv(":memory:");
+  const sessionId = crypto.randomUUID();
+  const queued: SubagentRecord = {
+    id: "queued-agent",
+    sessionId,
+    title: "Queued",
+    task: "queued",
+    status: "queued",
+    createdAt: "2026-01-02T03:04:05.000Z",
+  };
+  const running: SubagentRecord = {
+    id: "running-agent",
+    sessionId,
+    title: "Running",
+    task: "running",
+    status: "running",
+    createdAt: "2026-01-02T03:04:05.000Z",
+    startedAt: "2026-01-02T03:04:06.000Z",
+  };
+  try {
+    await kv.set(["subagents", sessionId, queued.id], queued);
+    await kv.set(["subagents", sessionId, running.id], running);
+    const ctx = await createToolContext(dir, {
+      sessionId: () => sessionId,
+      turnId: "subagent-test",
+    });
+    const skills = await createSkillManager({ root: dir });
+    const service = new SubagentJobService({
+      kv,
+      model: new FakeModel(),
+      workspace: ctx,
+      skills,
+      getSessionId: () => sessionId,
+      clock: () => new Date("2026-01-02T03:04:07.000Z"),
+    });
+    try {
+      await service.reconcileAbandonedOnStartup();
+
+      const queuedAfter = await service.status(queued.id);
+      const runningAfter = await service.status(running.id);
+      assertEquals(queuedAfter?.status, "cancelled");
+      assertEquals(runningAfter?.status, "cancelled");
+      assertStringIncludes(queuedAfter?.error ?? "", "abandoned because Silas restarted");
+      assertEquals(runningAfter?.finishedAt, "2026-01-02T03:04:07.000Z");
+    } finally {
+      await service.shutdown();
+    }
+  } finally {
+    kv.close();
+    await Deno.remove(dir, { recursive: true });
+  }
+});
+
+Deno.test("SubagentJobService cancellation is not overwritten by late completion", async () => {
+  await withSubagents(async ({ model, service }) => {
+    const started = deferred<void>();
+    const release = deferred<void>();
+    model.behaviors.push(async () => {
+      started.resolve();
+      await release.promise;
+      return { text: "late completion" };
+    });
+
+    const spawned = await service.spawn({ task: "Race cancel and complete" });
+    await started.promise;
+    const cancelled = await service.cancel(spawned.id);
+    assertEquals(cancelled?.status, "cancelled");
+    release.resolve();
+    await delay(20);
+
+    const final = await service.status(spawned.id);
+    assertEquals(final?.status, "cancelled");
+    assertEquals(final?.result, undefined);
+  });
+});

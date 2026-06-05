@@ -10,6 +10,7 @@ import {
 } from "../../src/agent/tools/index.ts";
 import { createToolContext } from "../../src/agent/tools/context.ts";
 import { createNoopTodoDisplayPort } from "../../src/agent/tools/todo-display-port.ts";
+import type { TodoStore } from "../../src/agent/tools/todo-write.ts";
 import { createUnavailableAskUserQuestionPort } from "../../src/agent/tools/user-question-port.ts";
 import {
   type ApprovalDecision,
@@ -18,6 +19,18 @@ import {
   approveDecision,
   denyDecision,
 } from "../../src/shared/approval.ts";
+
+function unavailableTodoStore(): TodoStore {
+  const unavailable = (): Promise<never> => Promise.reject(new Error("Todo store is not configured."));
+  return {
+    read: unavailable,
+    write: unavailable,
+    updateTodos: unavailable,
+    updateTelegramMeta: unavailable,
+    copy: unavailable,
+    label: (sessionId) => `workspace-kv:todos/${sessionId}`,
+  };
+}
 
 function decisionController(toolName: string, args: Record<string, unknown>): {
   controller: ToolCallGuardController;
@@ -51,7 +64,6 @@ async function withAuthDeps(
       sessionId: "session-1",
       turnId: "turn-1",
     });
-    await Deno.mkdir(`${root}/todos`, { recursive: true });
     const skills = await createSkillManager({ root });
     await fn({
       workspace,
@@ -59,7 +71,7 @@ async function withAuthDeps(
       userQuestions: createUnavailableAskUserQuestionPort(),
       todos: {
         getSessionId: () => "00000000-0000-4000-8000-000000000000",
-        todosDir: `${root}/todos`,
+        store: unavailableTodoStore(),
         display: createNoopTodoDisplayPort(),
       },
       skills: {
@@ -143,7 +155,7 @@ Deno.test("registry authorization maps shell network todo and skill summaries", 
       arguments: { todos: [{ id: "a", content: "Do it", status: "pending" }] },
     });
     assertEquals(todo?.operation, "todo");
-    assertEquals(todo?.target, "todos/00000000-0000-4000-8000-000000000000.json");
+    assertEquals(todo?.target, "workspace-kv:todos/00000000-0000-4000-8000-000000000000");
     assertEquals(todo?.summary, "write 1 todo item(s)");
 
     const skill = await authorizeToolCall(deps, {

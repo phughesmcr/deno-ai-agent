@@ -48,6 +48,7 @@ export type { TodoDisplayPort, TodoUpdatePayload } from "./todo-display-port.ts"
 export {
   copyTodosForSession,
   createTodoWriteTool,
+  DenoKvTodoStore,
   detectTodoChanges,
   formatTodoWriteResult,
   readTodoFile,
@@ -56,6 +57,7 @@ export {
   type TodoFile,
   type TodoItem,
   type TodoStatus,
+  type TodoStore,
   type TodoTelegramMeta,
   type TodoWriteDeps,
   type TodoWriteParams,

@@ -1,5 +1,5 @@
 // deno-lint-ignore-file camelcase -- Telegram API field names are snake_case.
-import { readTodoFile, type TodoDisplayPort, type TodoUpdatePayload } from "../agent/mod.ts";
+import { readTodoFile, type TodoDisplayPort, type TodoStore, type TodoUpdatePayload } from "../agent/mod.ts";
 import { logDebug } from "../shared/mod.ts";
 import { formatTodoListMarkdown, formatTodoListPlain } from "./todo-list-format.ts";
 
@@ -106,23 +106,19 @@ async function sendOrEditTodoMessage(
 export async function showTodosForSession(
   ctx: TodoDisplayContext,
   sessionId: string,
-  todosDir: string,
-  onUpdateMeta: (sessionId: string, meta: { chatId: number; threadId?: number; messageId: number }) => Promise<void>,
+  store: TodoStore,
 ): Promise<void> {
-  const file = await readTodoFile(todosDir, sessionId);
+  const file = await readTodoFile(store, sessionId);
   const markdown = formatTodoListMarkdown(file.todos);
   const plain = formatTodoListPlain(file.todos);
   const threadId = ctx.message?.message_thread_id;
   const meta = await sendOrEditTodoMessage(ctx, markdown, plain, file.telegram, threadId);
-  await onUpdateMeta(sessionId, meta);
+  await store.updateTelegramMeta(sessionId, meta);
 }
 
 /** Telegram port for edit-in-place todo display during model.act(). @internal */
 export function createTelegramTodoDisplayPort(deps: {
-  updateTelegramMeta: (
-    sessionId: string,
-    meta: { chatId: number; threadId?: number; messageId: number },
-  ) => Promise<void>;
+  store: TodoStore;
 }): TodoDisplayPort {
   let turn: { ctx: TodoDisplayContext; signal: AbortSignal } | undefined;
   const editChains = new Map<string, Promise<void>>();
@@ -150,7 +146,7 @@ export function createTelegramTodoDisplayPort(deps: {
         if (signal.aborted) return;
         const meta = await sendOrEditTodoMessage(ctx, markdown, plain, payload.telegram, threadId);
         if (signal.aborted) return;
-        await deps.updateTelegramMeta(payload.sessionId, meta);
+        await deps.store.updateTelegramMeta(payload.sessionId, meta);
       };
 
       const previous = editChains.get(payload.sessionId) ?? Promise.resolve();

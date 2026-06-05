@@ -189,21 +189,120 @@ function parseJsonLine(line: string, lineNumber: number): unknown {
   }
 }
 
+function sessionHeaderKey(id: string): Deno.KvKey {
+  return ["sessions", "header", id];
+}
+
+function sessionNameKey(name: string): Deno.KvKey {
+  return ["sessions", "name", name];
+}
+
+function parseCatalogHeader(value: unknown, id: string): SessionHeader {
+  assertSessionHeader(value, id);
+  return value;
+}
+
+class DenoKvSessionCatalog {
+  private readonly _kv: Deno.Kv;
+
+  constructor(kv: Deno.Kv) {
+    this._kv = kv;
+  }
+
+  async rebuild(headers: SessionHeader[]): Promise<void> {
+    const names = new Map<string, string>();
+    for (const header of headers) {
+      if (!header.name) continue;
+      const existing = names.get(header.name);
+      if (existing && existing !== header.id) throw new Error("Session name already in use");
+      names.set(header.name, header.id);
+    }
+
+    for await (const entry of this._kv.list({ prefix: ["sessions", "header"] })) {
+      await this._kv.delete(entry.key);
+    }
+    for await (const entry of this._kv.list({ prefix: ["sessions", "name"] })) {
+      await this._kv.delete(entry.key);
+    }
+
+    for (const header of headers) {
+      await this.putHeader(header);
+    }
+  }
+
+  async putHeader(header: SessionHeader, previousName?: string): Promise<void> {
+    while (true) {
+      const nameEntry = header.name ? await this._kv.get<string>(sessionNameKey(header.name)) : undefined;
+      if (nameEntry?.value && nameEntry.value !== header.id) throw new Error("Session name already in use");
+
+      let atomic = this._kv.atomic().set(sessionHeaderKey(header.id), header);
+      if (previousName && previousName !== header.name) {
+        atomic = atomic.delete(sessionNameKey(previousName));
+      }
+      if (header.name) {
+        atomic = atomic.check(nameEntry!).set(sessionNameKey(header.name), header.id);
+      }
+
+      const result = await atomic.commit();
+      if (result.ok) return;
+    }
+  }
+
+  async deleteHeader(id: string, name?: string): Promise<void> {
+    let atomic = this._kv.atomic().delete(sessionHeaderKey(id));
+    if (name) atomic = atomic.delete(sessionNameKey(name));
+    await atomic.commit();
+  }
+
+  async deleteName(name: string): Promise<void> {
+    await this._kv.delete(sessionNameKey(name));
+  }
+
+  async getIdByName(name: string): Promise<string | undefined> {
+    const entry = await this._kv.get<unknown>(sessionNameKey(name));
+    return typeof entry.value === "string" ? entry.value : undefined;
+  }
+
+  async listHeaders(): Promise<SessionHeader[]> {
+    const headers: SessionHeader[] = [];
+    for await (const entry of this._kv.list<unknown>({ prefix: ["sessions", "header"] })) {
+      const id = entry.key[2];
+      if (typeof id === "string") headers.push(parseCatalogHeader(entry.value, id));
+    }
+    return headers.toSorted((a, b) => a.id.localeCompare(b.id));
+  }
+}
+
 /**
  * Reads and appends `{workspace}/sessions/{id}.jsonl`.
  * @internal
  */
 export class SessionStore {
   private readonly _dir: string;
+  private readonly _catalog: DenoKvSessionCatalog | undefined;
+  private _catalogSynced = false;
 
   /** @param sessionsDir Directory containing `{id}.jsonl` session files. */
-  constructor(sessionsDir: string) {
+  constructor(sessionsDir: string, kv?: Deno.Kv) {
     this._dir = sessionsDir;
+    this._catalog = kv ? new DenoKvSessionCatalog(kv) : undefined;
+  }
+
+  /** Rebuilds the KV catalog from JSONL headers. JSONL remains the source of truth. */
+  async syncCatalog(): Promise<void> {
+    if (!this._catalog) return;
+    const headers: SessionHeader[] = [];
+    for (const id of await this.list()) {
+      headers.push(await this.readHeader(id));
+    }
+    await this._catalog.rebuild(headers);
+    this._catalogSynced = true;
   }
 
   /** Creates an empty v3 session log if it does not already exist. */
   async create(id: string, options?: { name?: string }): Promise<void> {
     assertValidSessionId(id);
+    await this._ensureCatalogSynced();
     if (await this.exists(id)) return;
     const name = options?.name;
     if (name !== undefined) {
@@ -217,6 +316,7 @@ export class SessionStore {
       ...(name !== undefined ? { name } : {}),
     };
     await Deno.writeTextFile(this._path(id), `${serializeHeader(header)}\n`, { createNew: true });
+    await this._catalog?.putHeader(header);
   }
 
   /** Appends one entry to an existing session log. */
@@ -277,12 +377,14 @@ export class SessionStore {
   /** Updates the session name in the JSONL header (rewrites the file). */
   async setName(id: string, name: string | undefined): Promise<void> {
     assertValidSessionId(id);
+    await this._ensureCatalogSynced();
     if (name !== undefined) {
       assertValidSessionName(name);
       await this._assertNameAvailable(name, id);
     }
 
     const log = await this.read(id);
+    const previousName = log.header.name;
     const header: SessionHeader = {
       version: FORMAT_VERSION,
       id: log.header.id,
@@ -295,6 +397,7 @@ export class SessionStore {
     try {
       await Deno.writeTextFile(tempPath, text);
       await Deno.rename(tempPath, this._path(id));
+      await this._catalog?.putHeader(header, previousName);
     } catch (error) {
       await Deno.remove(tempPath).catch(() => undefined);
       throw error;
@@ -303,6 +406,28 @@ export class SessionStore {
 
   /** Returns session ids with the given name, excluding one id when provided. */
   async findIdsByName(name: string, exceptId?: string): Promise<string[]> {
+    await this._ensureCatalogSynced();
+    if (this._catalog) {
+      const id = await this._catalog.getIdByName(name);
+      if (id && id !== exceptId) {
+        try {
+          const header = await this.readHeader(id);
+          if (header.name === name) return [id];
+        } catch (error) {
+          if (!(error instanceof Deno.errors.NotFound)) throw error;
+        }
+        await this._catalog.deleteName(name);
+      }
+      const matches = await this._findIdsByNameFromDisk(name, exceptId);
+      for (const match of matches) {
+        await this._catalog.putHeader(await this.readHeader(match));
+      }
+      return matches;
+    }
+    return await this._findIdsByNameFromDisk(name, exceptId);
+  }
+
+  async _findIdsByNameFromDisk(name: string, exceptId?: string): Promise<string[]> {
     const matches: string[] = [];
     for (const id of await this.list()) {
       if (id === exceptId) continue;
@@ -323,6 +448,23 @@ export class SessionStore {
 
   /** Lists headers for all saved sessions (uuid sort). */
   async listHeaders(): Promise<SessionHeader[]> {
+    await this._ensureCatalogSynced();
+    if (this._catalog) {
+      const headers: SessionHeader[] = [];
+      for (const header of await this._catalog.listHeaders()) {
+        try {
+          const diskHeader = await this.readHeader(header.id);
+          headers.push(diskHeader);
+          if (JSON.stringify(diskHeader) !== JSON.stringify(header)) {
+            await this._catalog.putHeader(diskHeader, header.name);
+          }
+        } catch (error) {
+          if (!(error instanceof Deno.errors.NotFound)) throw error;
+          await this._catalog.deleteHeader(header.id, header.name);
+        }
+      }
+      return headers.toSorted((a, b) => a.id.localeCompare(b.id));
+    }
     const headers: SessionHeader[] = [];
     for (const id of await this.list()) {
       headers.push(await this.readHeader(id));
@@ -375,5 +517,10 @@ export class SessionStore {
 
   _legacyPath(id: string): string {
     return `${this._dir}/${id}.json`;
+  }
+
+  async _ensureCatalogSynced(): Promise<void> {
+    if (!this._catalog || this._catalogSynced) return;
+    await this.syncCatalog();
   }
 }

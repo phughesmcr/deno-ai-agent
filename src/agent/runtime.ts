@@ -24,6 +24,8 @@ export interface Agent {
 export interface CreateAgentOptions {
   /** Workspace directory and system prompt. */
   workspace: Workspace;
+  /** Shared persistent workspace KV for non-log application state. */
+  kv: Deno.Kv;
   /** Connected LM Studio client and model. */
   lmstudio: LMStudioManager;
   /** Model context window size. */
@@ -34,9 +36,10 @@ export interface CreateAgentOptions {
 
 /** Wires workspace, LM Studio chat context, and session persistence. */
 export async function createAgent(spec: CreateAgentOptions): Promise<Agent> {
-  const { workspace, lmstudio, maxContextLength, signal } = spec;
+  const { workspace, kv, lmstudio, maxContextLength, signal } = spec;
 
-  const store = new SessionStore(workspace.sessionsDir);
+  const store = new SessionStore(workspace.sessionsDir, kv);
+  await store.syncCatalog();
   const modelAct = new LmStudioAgentModelAct({
     client: lmstudio.client,
     model: lmstudio.model,

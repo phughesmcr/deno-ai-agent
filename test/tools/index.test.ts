@@ -3,10 +3,23 @@ import { assertEquals } from "jsr:@std/assert@1";
 import { createSkillManager } from "../../src/agent/skills/mod.ts";
 import { allToolNames, getModelTools } from "../../src/agent/tools/index.ts";
 import { createNoopTodoDisplayPort } from "../../src/agent/tools/todo-display-port.ts";
+import type { TodoStore } from "../../src/agent/tools/todo-write.ts";
 import { createUnavailableAskUserQuestionPort } from "../../src/agent/tools/user-question-port.ts";
 import { createAutoApprovalGate } from "../../src/shared/approval.ts";
 import { createUnavailableSubagentPort } from "../../src/agent/subagents.ts";
 import { createTestWorkspace } from "./helpers.ts";
+
+function unavailableTodoStore(): TodoStore {
+  const unavailable = (): Promise<never> => Promise.reject(new Error("Todo store is not configured."));
+  return {
+    read: unavailable,
+    write: unavailable,
+    updateTodos: unavailable,
+    updateTelegramMeta: unavailable,
+    copy: unavailable,
+    label: (sessionId) => `workspace-kv:todos/${sessionId}`,
+  };
+}
 
 Deno.test("getModelTools registers thirteen tools including typescript-repl, skill, todo_write, web-fetch, ask_user_question, and subagent", async () => {
   const { dir, ctx, cleanup } = await createTestWorkspace();
@@ -18,7 +31,7 @@ Deno.test("getModelTools registers thirteen tools including typescript-repl, ski
       userQuestions: createUnavailableAskUserQuestionPort(),
       todos: {
         getSessionId: () => "00000000-0000-4000-8000-000000000000",
-        todosDir: `${dir}/todos`,
+        store: unavailableTodoStore(),
         display: createNoopTodoDisplayPort(),
       },
       skills: {

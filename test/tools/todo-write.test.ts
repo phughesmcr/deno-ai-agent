@@ -5,15 +5,17 @@ import { createNoopTodoDisplayPort } from "../../src/agent/tools/todo-display-po
 import {
   copyTodosForSession,
   createTodoWriteTool,
+  DenoKvTodoStore,
   detectTodoChanges,
   formatTodoWriteResult,
   readTodoFile,
   readTodosForSession,
   type TodoItem,
+  type TodoStore,
   updateTelegramMeta,
   validateTodoWriteParams,
 } from "../../src/agent/tools/todo-write.ts";
-import { createTestWorkspace, runTool } from "./helpers.ts";
+import { runTool } from "./helpers.ts";
 
 const SESSION_ID = "00000000-0000-4000-8000-000000000001";
 const SESSION_ID_2 = "00000000-0000-4000-8000-000000000002";
@@ -23,6 +25,15 @@ function sampleTodos(): TodoItem[] {
     { id: "1", content: "First task", status: "pending" },
     { id: "2", content: "Second task", status: "in_progress" },
   ];
+}
+
+async function withTodoStore(fn: (store: TodoStore, kv: Deno.Kv) => Promise<void>): Promise<void> {
+  const kv = await Deno.openKv(":memory:");
+  try {
+    await fn(new DenoKvTodoStore(kv), kv);
+  } finally {
+    kv.close();
+  }
 }
 
 Deno.test("validateTodoWriteParams rejects invalid todos", () => {
@@ -69,39 +80,29 @@ Deno.test("detectTodoChanges finds created and completed items", () => {
   assertEquals(changes.created.map((t) => t.id), ["c"]);
 });
 
-Deno.test("todo persistence round-trip via mutation queue", async () => {
-  const { dir, cleanup } = await createTestWorkspace();
-  const todosDir = `${dir}/todos`;
-  await Deno.mkdir(todosDir, { recursive: true });
-  try {
+Deno.test("todo persistence round-trip via Deno KV", async () => {
+  await withTodoStore(async (store) => {
     const todos = sampleTodos();
     const tool = createTodoWriteTool({
       getSessionId: () => SESSION_ID,
-      todosDir,
+      store,
       display: createNoopTodoDisplayPort(),
     });
     const result = await runTool(tool, { todos });
     assertStringIncludes(result, "system-reminder");
-    assertEquals(await readTodosForSession(todosDir, SESSION_ID), todos);
-  } finally {
-    await cleanup();
-  }
+    assertEquals(await readTodosForSession(store, SESSION_ID), todos);
+  });
 });
 
-Deno.test("readTodoFile rejects corrupt todo files clearly", async () => {
-  const { dir, cleanup } = await createTestWorkspace();
-  const todosDir = `${dir}/todos`;
-  await Deno.mkdir(todosDir, { recursive: true });
-  try {
-    await Deno.writeTextFile(`${todosDir}/${SESSION_ID}.json`, JSON.stringify({ sessionId: SESSION_ID, todos: "bad" }));
+Deno.test("readTodoFile rejects corrupt todo state clearly", async () => {
+  await withTodoStore(async (store, kv) => {
+    await kv.set(["todos", SESSION_ID], { sessionId: SESSION_ID, todos: "bad" });
     await assertRejects(
-      () => readTodoFile(todosDir, SESSION_ID),
+      () => readTodoFile(store, SESSION_ID),
       Error,
-      `Invalid todo file for session ${SESSION_ID}`,
+      `Invalid todo state for session ${SESSION_ID}`,
     );
-  } finally {
-    await cleanup();
-  }
+  });
 });
 
 Deno.test("formatTodoWriteResult handles empty list", () => {
@@ -111,13 +112,10 @@ Deno.test("formatTodoWriteResult handles empty list", () => {
 });
 
 Deno.test("createTodoWriteTool succeeds when display throws", async () => {
-  const { dir, cleanup } = await createTestWorkspace();
-  const todosDir = `${dir}/todos`;
-  await Deno.mkdir(todosDir, { recursive: true });
-  try {
+  await withTodoStore(async (store) => {
     const tool = createTodoWriteTool({
       getSessionId: () => SESSION_ID,
-      todosDir,
+      store,
       display: {
         isAvailable: () => true,
         setTurnContext: () => {},
@@ -127,21 +125,16 @@ Deno.test("createTodoWriteTool succeeds when display throws", async () => {
     });
     const result = await runTool(tool, { todos: sampleTodos() });
     assertStringIncludes(result, "modified successfully");
-    assertEquals(await readTodosForSession(todosDir, SESSION_ID), sampleTodos());
-  } finally {
-    await cleanup();
-  }
+    assertEquals(await readTodosForSession(store, SESSION_ID), sampleTodos());
+  });
 });
 
 Deno.test("createTodoWriteTool calls display port with changes", async () => {
-  const { dir, cleanup } = await createTestWorkspace();
-  const todosDir = `${dir}/todos`;
-  await Deno.mkdir(todosDir, { recursive: true });
   let called = false;
-  try {
+  await withTodoStore(async (store) => {
     const tool = createTodoWriteTool({
       getSessionId: () => SESSION_ID,
-      todosDir,
+      store,
       display: {
         isAvailable: () => true,
         setTurnContext: () => {},
@@ -155,91 +148,66 @@ Deno.test("createTodoWriteTool calls display port with changes", async () => {
     });
     await runTool(tool, { todos: sampleTodos() });
     assertEquals(called, true);
-  } finally {
-    await cleanup();
-  }
+  });
 });
 
 Deno.test("updateTelegramMeta merges without clobbering todos", async () => {
-  const { dir, cleanup } = await createTestWorkspace();
-  const todosDir = `${dir}/todos`;
-  await Deno.mkdir(todosDir, { recursive: true });
-  try {
+  await withTodoStore(async (store) => {
     const tool = createTodoWriteTool({
       getSessionId: () => SESSION_ID,
-      todosDir,
+      store,
       display: createNoopTodoDisplayPort(),
     });
     await runTool(tool, { todos: sampleTodos() });
-    await updateTelegramMeta(todosDir, SESSION_ID, { chatId: 1, threadId: 0, messageId: 99 });
-    const file = await readTodoFile(todosDir, SESSION_ID);
+    await updateTelegramMeta(store, SESSION_ID, { chatId: 1, threadId: 0, messageId: 99 });
+    const file = await readTodoFile(store, SESSION_ID);
     assertEquals(file.todos, sampleTodos());
     assertEquals(file.telegram, { chatId: 1, threadId: 0, messageId: 99 });
-  } finally {
-    await cleanup();
-  }
+  });
 });
 
-Deno.test("createTodoWriteTool does not clobber concurrent telegram metadata updates", async () => {
-  const { dir, cleanup } = await createTestWorkspace();
-  const todosDir = `${dir}/todos`;
-  await Deno.mkdir(todosDir, { recursive: true });
-  const originalReadTextFile = Deno.readTextFile;
-  try {
-    await updateTelegramMeta(todosDir, SESSION_ID, { chatId: 1, messageId: 1 });
-    const todoPath = `${todosDir}/${SESSION_ID}.json`;
-    let scheduled = false;
-    let concurrentUpdate: Promise<void> | undefined;
-    Deno.readTextFile = ((path: string | URL, options?: Deno.ReadFileOptions) => {
-      const result = originalReadTextFile(path, options);
-      if (!scheduled && String(path) === todoPath) {
-        scheduled = true;
-        result.then(() => {
-          queueMicrotask(() => {
-            concurrentUpdate = updateTelegramMeta(todosDir, SESSION_ID, { chatId: 2, messageId: 2 });
-          });
-        });
-      }
-      return result;
-    }) as typeof Deno.readTextFile;
-
+Deno.test("createTodoWriteTool preserves concurrent telegram metadata updates", async () => {
+  await withTodoStore(async (store) => {
+    await updateTelegramMeta(store, SESSION_ID, { chatId: 1, messageId: 1 });
     const tool = createTodoWriteTool({
       getSessionId: () => SESSION_ID,
-      todosDir,
+      store,
       display: createNoopTodoDisplayPort(),
     });
 
-    await runTool(tool, { todos: sampleTodos() });
-    await concurrentUpdate;
+    await Promise.all([
+      runTool(tool, { todos: sampleTodos() }),
+      updateTelegramMeta(store, SESSION_ID, { chatId: 2, messageId: 2 }),
+    ]);
 
-    const file = await readTodoFile(todosDir, SESSION_ID);
+    const file = await readTodoFile(store, SESSION_ID);
     assertEquals(file.todos, sampleTodos());
-    assertEquals(file.telegram, { chatId: 2, messageId: 2 });
-  } finally {
-    Deno.readTextFile = originalReadTextFile;
-    await cleanup();
-  }
+    assertEquals(file.telegram?.chatId, 2);
+    assertEquals(file.telegram?.messageId, 2);
+  });
 });
 
 Deno.test("copyTodosForSession copies todos without telegram meta", async () => {
-  const { dir, cleanup } = await createTestWorkspace();
-  const todosDir = `${dir}/todos`;
-  await Deno.mkdir(todosDir, { recursive: true });
-  try {
+  await withTodoStore(async (store) => {
     const tool = createTodoWriteTool({
       getSessionId: () => SESSION_ID,
-      todosDir,
+      store,
       display: createNoopTodoDisplayPort(),
     });
     await runTool(tool, { todos: sampleTodos() });
-    await updateTelegramMeta(todosDir, SESSION_ID, { chatId: 1, messageId: 42 });
-    await copyTodosForSession(todosDir, SESSION_ID, SESSION_ID_2);
-    const copied = await readTodoFile(todosDir, SESSION_ID_2);
+    await updateTelegramMeta(store, SESSION_ID, { chatId: 1, messageId: 42 });
+    await copyTodosForSession(store, SESSION_ID, SESSION_ID_2);
+    const copied = await readTodoFile(store, SESSION_ID_2);
     assertEquals(copied.todos, sampleTodos());
     assertEquals(copied.telegram, undefined);
-  } finally {
-    await cleanup();
-  }
+  });
+});
+
+Deno.test("copyTodosForSession is a no-op when the source is missing", async () => {
+  await withTodoStore(async (store) => {
+    await copyTodosForSession(store, SESSION_ID, SESSION_ID_2);
+    assertEquals(await readTodoFile(store, SESSION_ID_2), { sessionId: SESSION_ID_2, todos: [] });
+  });
 });
 
 Deno.test("formatTodoListMarkdown escapes and handles empty state", () => {

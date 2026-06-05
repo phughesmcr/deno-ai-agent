@@ -1,22 +1,47 @@
-import { copyTodosForSession, type SavedSessionSummary, type SessionStatus } from "../agent/mod.ts";
-import type { TelegramSessionBinding } from "./session-binding-store.ts";
+import { copyTodosForSession, type SavedSessionSummary, type SessionStatus, type TodoStore } from "../agent/mod.ts";
 
 /** One-line help text for supported session commands. */
 export const SESSION_HELP =
   "Sessions: /topic <name> - create forum topic | /topics - known topic sessions | /new - fresh chat | /save - write to disk | /load <id|name> - restore | /resume <id|name> - alias for load | /rename <name> - label session | /fork - branch copy | /list - saved sessions | /session - status | /stats - tokens | /compact [instructions] - summarize history | /todos - task list";
 
+/** Telegram topic binding summary shown by `/topics`. */
+export interface TelegramTopicBindingSummary {
+  /** Telegram chat id. */
+  chatId: number;
+  /** Telegram forum topic thread id, when this is not the main chat. */
+  threadId?: number;
+  /** Bound Silas session id. */
+  sessionId: string;
+  /** ISO timestamp for initial binding creation. */
+  createdAt: string;
+  /** ISO timestamp for the latest binding update. */
+  updatedAt: string;
+  /** Telegram forum topic name, when known. */
+  topicName?: string;
+}
+
+/** Session operations required by Telegram command handling. */
 export interface CommandSession {
+  /** Returns current session status; refreshes token counts when requested. */
   status(options?: { refresh?: boolean }): Promise<SessionStatus>;
+  /** Creates a fresh session and binds it to the current Telegram conversation. */
   newSession(): Promise<SessionStatus>;
+  /** Persists the current session. */
   save(): Promise<SessionStatus>;
+  /** Loads a saved session by id or name. */
   load(ref: string): Promise<SessionStatus>;
+  /** Renames the current session. */
   rename(name: string): Promise<SessionStatus>;
+  /** Forks the current session and returns source and target statuses. */
   fork(): Promise<{ from: SessionStatus; to: SessionStatus }>;
+  /** Lists saved sessions. */
   list(): Promise<SavedSessionSummary[]>;
+  /** Compacts session context, optionally with user instructions. */
   compact(
     options?: { instructions?: string },
   ): Promise<{ compacted: boolean; beforeTokens: number; afterTokens: number }>;
-  listBindings?(): Promise<TelegramSessionBinding[]>;
+  /** Lists Telegram topic bindings for the current chat, when configured. */
+  listBindings?(): Promise<TelegramTopicBindingSummary[]>;
 }
 
 function formatSessionLabel(status: Pick<SessionStatus, "id" | "name">): string {
@@ -46,14 +71,14 @@ function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
-function formatThreadLabel(binding: TelegramSessionBinding): string {
+function formatThreadLabel(binding: TelegramTopicBindingSummary): string {
   if (binding.topicName) {
     return binding.threadId === undefined ? binding.topicName : `${binding.topicName} #${binding.threadId}`;
   }
   return binding.threadId === undefined ? "main" : `topic #${binding.threadId}`;
 }
 
-function formatBindingLine(binding: TelegramSessionBinding): string {
+function formatBindingLine(binding: TelegramTopicBindingSummary): string {
   return `${formatThreadLabel(binding)} -> ${binding.sessionId}`;
 }
 
@@ -63,11 +88,11 @@ function formatBindingLine(binding: TelegramSessionBinding): string {
  */
 export class TelegramCommandHandler {
   private readonly _session: CommandSession;
-  private readonly _todosDir?: string;
+  private readonly _todoStore?: TodoStore;
 
-  constructor(session: CommandSession, todosDir?: string) {
+  constructor(session: CommandSession, todoStore?: TodoStore) {
     this._session = session;
-    this._todosDir = todosDir;
+    this._todoStore = todoStore;
   }
 
   help(): string {
@@ -108,8 +133,8 @@ export class TelegramCommandHandler {
   async fork(): Promise<string> {
     try {
       const { from, to } = await this._session.fork();
-      if (this._todosDir) {
-        await copyTodosForSession(this._todosDir, from.id, to.id);
+      if (this._todoStore) {
+        await copyTodosForSession(this._todoStore, from.id, to.id);
       }
       return `Forked and rebound this Telegram conversation.\nFrom: ${from.id}\nTo: ${to.id}`;
     } catch (error) {

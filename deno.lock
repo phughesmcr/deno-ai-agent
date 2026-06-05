@@ -13,6 +13,7 @@
     "jsr:@std/toml@^1.0.3": "1.0.11",
     "jsr:@std/yaml@^1.0.5": "1.1.1",
     "jsr:@std/yaml@^1.1.1": "1.1.1",
+    "npm:@grammyjs/runner@2.0.3": "2.0.3_grammy@1.43.0",
     "npm:@grammyjs/runner@^2.0.3": "2.0.3_grammy@1.43.0",
     "npm:@lmstudio/sdk@*": "1.5.0",
     "npm:@lmstudio/sdk@1.5.0": "1.5.0",
