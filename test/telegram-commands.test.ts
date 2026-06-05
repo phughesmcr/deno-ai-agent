@@ -118,6 +118,7 @@ class FakeSession {
 class FakeCronManager implements CommandCronManager {
   created: string[] = [];
   deleted: string[] = [];
+  createError: Error | undefined;
   listResult = [
     {
       id: "cron-a",
@@ -133,6 +134,7 @@ class FakeCronManager implements CommandCronManager {
 
   create(input: string): Promise<string> {
     this.created.push(input);
+    if (this.createError) return Promise.reject(this.createError);
     return Promise.resolve("Created cron job cron-new.\nNext run: 2026-06-06T08:00:00.000Z");
   }
 
@@ -177,6 +179,19 @@ Deno.test("formatSessionStatus renders name, persistence, messages, and token fi
       "Messages: 8",
       "Tokens: 33 / 100 (33%)",
     ].join("\n"),
+  );
+});
+
+Deno.test("TelegramCommandHandler hides cron extractor validation details", async () => {
+  const cron = new FakeCronManager();
+  cron.createError = new Error(
+    '[{"code":"invalid_type","expected":"number","received":"undefined","path":["schedule","recurrence","hour"]}]',
+  );
+  const { handler } = createHandler(cron, new FakeSession());
+
+  assertEquals(
+    await handler.cron("new at 9am daily, send me an inspirational message"),
+    "Cron creation failed: I couldn't understand that schedule. Try `/cron new daily at 9am, <prompt>` or `/cron new next Tuesday at 9am, <prompt>`.",
   );
 });
 

@@ -1,4 +1,4 @@
-import { assertEquals } from "jsr:@std/assert@1";
+import { assertEquals, assertRejects } from "jsr:@std/assert@1";
 
 import { CronCommandManager } from "../../src/cron/commands.ts";
 import type { CronScheduleExtractor, RawExtractedCronSchedule } from "../../src/cron/schedule.ts";
@@ -87,6 +87,57 @@ Deno.test("CronCommandManager creates a dedicated topic for new recurring jobs",
     assertEquals(jobs[0]?.schedule.kind, "recurring");
     assertEquals(jobs[0]?.nextRunAt, "2026-06-05T16:21:47.000Z");
     assertEquals(text.includes("Topic: Cron: every 2 minutes"), true);
+  });
+});
+
+Deno.test("CronCommandManager parses common daily schedule text without the extractor", async () => {
+  await withStore(async (store) => {
+    const manager = new CronCommandManager({
+      store,
+      ref: { chatId: 123, threadId: 10 },
+      mcpTools: () => [],
+      now: () => new Date("2026-06-05T21:35:07.000Z"),
+      defaultTimezone: () => "Europe/London",
+      createTopic: (name) => {
+        assertEquals(name, "Cron: at 9am daily");
+        return Promise.resolve({ threadId: 99, topicName: name });
+      },
+    });
+
+    const text = await manager.create("at 9am daily, send me an inspirational message to start the day");
+    const jobs = await store.listForChat(123);
+
+    assertEquals(jobs.length, 1);
+    assertEquals(jobs[0]?.prompt, "send me an inspirational message to start the day");
+    assertEquals(jobs[0]?.schedule, {
+      kind: "recurring",
+      scheduleText: "at 9am daily",
+      timezone: "Europe/London",
+      cronExpression: "0 9 * * *",
+      recurrence: { kind: "daily", hour: 9, minute: 0 },
+    });
+    assertEquals(jobs[0]?.nextRunAt, "2026-06-06T08:00:00.000Z");
+    assertEquals(text.includes("Created cron job "), true);
+  });
+});
+
+Deno.test("CronCommandManager rejects bare time schedules with a user-facing message", async () => {
+  await withStore(async (store) => {
+    const manager = new CronCommandManager({
+      store,
+      ref: { chatId: 123, threadId: 10 },
+      mcpTools: () => [],
+      now: () => new Date("2026-06-05T21:35:07.000Z"),
+      defaultTimezone: () => "Europe/London",
+      createTopic: (name) => Promise.resolve({ threadId: 99, topicName: name }),
+    });
+
+    await assertRejects(
+      () => manager.create("at 9am, send me an inspirational message to start the day"),
+      Error,
+      "I found a time but not a date or recurrence.",
+    );
+    assertEquals(await store.listForChat(123), []);
   });
 });
 

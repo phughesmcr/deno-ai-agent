@@ -64,6 +64,8 @@ export interface CronScheduleExtractor {
   extractCronSchedule(request: CronScheduleExtractionRequest): Promise<RawExtractedCronSchedule>;
 }
 
+const bareTimeScheduleMessage =
+  "I found a time but not a date or recurrence. Try `/cron new daily at 9am, <prompt>` or `/cron new next Tuesday at 9am, <prompt>`.";
 const weekdaySchema = z.enum(["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"]);
 const temporal = globalThis.Temporal;
 type TemporalInstant = ReturnType<typeof globalThis.Temporal.Instant.from>;
@@ -183,6 +185,63 @@ function parseTime(time: string): { hour: number; minute: number } {
     throw new Error(`Invalid schedule time: ${time}`);
   }
   return { hour, minute };
+}
+
+function splitScheduleAndPrompt(input: string): { scheduleText: string; prompt: string } | undefined {
+  const commaIndex = input.indexOf(",");
+  if (commaIndex < 0) return undefined;
+  const scheduleText = input.slice(0, commaIndex).trim();
+  const prompt = input.slice(commaIndex + 1).trim();
+  if (!scheduleText || !prompt) return undefined;
+  return { scheduleText, prompt };
+}
+
+function timeFromScheduleText(scheduleText: string): { hour: number; minute: number } | undefined {
+  const match = /\b(?:at\s+)?(?<hour>\d{1,2})(?::(?<minute>\d{2}))?\s*(?<period>am|pm)?\b/i.exec(scheduleText);
+  const groups = match?.groups;
+  if (!groups) return undefined;
+  const rawHour = Number(groups["hour"]);
+  const minute = groups["minute"] === undefined ? 0 : Number(groups["minute"]);
+  const period = groups["period"]?.toLowerCase();
+  if (!Number.isInteger(rawHour) || !Number.isInteger(minute) || minute < 0 || minute > 59) return undefined;
+  if (period === undefined) {
+    if (rawHour < 0 || rawHour > 23) return undefined;
+    return { hour: rawHour, minute };
+  }
+  if (rawHour < 1 || rawHour > 12) return undefined;
+  const hour = period === "am" ? rawHour % 12 : rawHour === 12 ? 12 : rawHour + 12;
+  return { hour, minute };
+}
+
+function isDailyScheduleText(scheduleText: string): boolean {
+  return /\b(daily|every\s+day|each\s+day)\b/i.test(scheduleText);
+}
+
+function isBareTimeScheduleText(scheduleText: string): boolean {
+  return /^\s*at\s+\d{1,2}(?::\d{2})?\s*(?:am|pm)?\s*$/i.test(scheduleText);
+}
+
+/** Parses high-confidence cron phrases without involving an LLM. */
+export function extractKnownCronSchedule(input: string): RawExtractedCronSchedule | undefined {
+  const parts = splitScheduleAndPrompt(input);
+  if (!parts) return undefined;
+  const time = timeFromScheduleText(parts.scheduleText);
+  if (!time) return undefined;
+  if (isDailyScheduleText(parts.scheduleText)) {
+    return {
+      status: "ok",
+      prompt: parts.prompt,
+      scheduleText: parts.scheduleText,
+      schedule: {
+        kind: "recurring",
+        recurrence: { kind: "daily", hour: time.hour, minute: time.minute },
+      },
+    };
+  }
+  if (isBareTimeScheduleText(parts.scheduleText)) {
+    return { status: "unsupported", message: bareTimeScheduleMessage };
+  }
+  return undefined;
 }
 
 function nextWeekdayDate(weekday: Weekday, now: Date, timezone: string): TemporalPlainDate {

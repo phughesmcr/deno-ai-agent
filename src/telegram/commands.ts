@@ -103,6 +103,18 @@ function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
+function cronCreationErrorMessage(error: unknown): string {
+  const message = errorMessage(error);
+  if (
+    message.includes('"code":"invalid_') ||
+    message.includes("invalid_type") ||
+    message.includes("invalid_union_discriminator")
+  ) {
+    return "I couldn't understand that schedule. Try `/cron new daily at 9am, <prompt>` or `/cron new next Tuesday at 9am, <prompt>`.";
+  }
+  return message;
+}
+
 function formatThreadLabel(binding: TelegramTopicBindingSummary): string {
   if (binding.topicName) {
     return binding.threadId === undefined ? binding.topicName : `${binding.topicName} #${binding.threadId}`;
@@ -243,7 +255,7 @@ export class TelegramCommandHandler {
       try {
         return await this._cron.create(payload);
       } catch (error) {
-        return `Cron creation failed: ${errorMessage(error)}`;
+        return `Cron creation failed: ${cronCreationErrorMessage(error)}`;
       }
     }
     if (command === "list") {

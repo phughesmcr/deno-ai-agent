@@ -8,6 +8,7 @@ import type { CronPermissionProfile } from "./permissions.ts";
 import {
   type CronScheduleExtractor,
   defaultCronTimezone,
+  extractKnownCronSchedule,
   normalizeCronSchedule,
   type RawExtractedCronSchedule,
 } from "./schedule.ts";
@@ -120,6 +121,8 @@ export class CronCommandManager implements CommandCronManager {
   }
 
   private async _extract(input: string, now: Date, defaultTimezone: string): Promise<RawExtractedCronSchedule> {
+    const known = extractKnownCronSchedule(input);
+    if (known) return known;
     const extractor = this._scheduleExtractor ?? extractorRequired();
     const first = await extractor.extractCronSchedule({ input, now, defaultTimezone });
     if (first.status !== "needs_clarification") return first;
