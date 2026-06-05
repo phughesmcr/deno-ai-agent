@@ -25,7 +25,7 @@ function optionalPositiveInteger(
   });
 }
 
-const appEnvSchema = z.object({
+const appBaseEnvSchema = z.object({
   TELEGRAM_BOT_TOKEN: z.string().min(1, "TELEGRAM_BOT_TOKEN is not set"),
   TELEGRAM_ADMIN_ID: z.string().min(1, "TELEGRAM_ADMIN_ID is not set").transform((value) => {
     const parsed = Number(value);
@@ -50,6 +50,21 @@ const appEnvSchema = z.object({
   DENO_PERMISSION_BROKER_PATH: z.string().optional(),
   SILAS_PERMISSION_CONTROL_PATH: z.string().optional(),
   PERMISSION_PROMPT_TIMEOUT_MS: optionalPositiveInteger("PERMISSION_PROMPT_TIMEOUT_MS", 120_000),
+  WHISPER_CPP_BIN: z.string().optional(),
+  WHISPER_CPP_MODEL: z.string().optional(),
+  WHISPER_CPP_LANGUAGE: z.string().optional().default("auto"),
+  TELEGRAM_AUDIO_TRANSCRIPTION: optionalBoolean(false),
+});
+
+const appEnvSchema = appBaseEnvSchema.transform((env) => {
+  const audioEnabled = env.TELEGRAM_AUDIO_TRANSCRIPTION || Boolean(env.WHISPER_CPP_BIN);
+  if (audioEnabled && !env.WHISPER_CPP_MODEL) {
+    throw new Error("WHISPER_CPP_MODEL is required when audio transcription is enabled");
+  }
+  return {
+    ...env,
+    TELEGRAM_AUDIO_TRANSCRIPTION: audioEnabled,
+  };
 });
 
 const appEnvKeys = [
@@ -68,9 +83,13 @@ const appEnvKeys = [
   "DENO_PERMISSION_BROKER_PATH",
   "SILAS_PERMISSION_CONTROL_PATH",
   "PERMISSION_PROMPT_TIMEOUT_MS",
+  "WHISPER_CPP_BIN",
+  "WHISPER_CPP_MODEL",
+  "WHISPER_CPP_LANGUAGE",
+  "TELEGRAM_AUDIO_TRANSCRIPTION",
 ] as const;
 
-const telegramEnvSchema = appEnvSchema.pick({
+const telegramEnvSchema = appBaseEnvSchema.pick({
   TELEGRAM_BOT_TOKEN: true,
   TELEGRAM_ADMIN_ID: true,
   TELEGRAM_BOT_ID: true,

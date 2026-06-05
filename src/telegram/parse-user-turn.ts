@@ -2,6 +2,7 @@
 
 import type { LMStudioClient } from "@lmstudio/sdk";
 import type { UserTurnInput } from "../agent/user-turn.ts";
+import { type AudioTranscriber, downloadTelegramMessageAudio, extractAudioFileId } from "./telegram-audio.ts";
 import {
   DEFAULT_IMAGE_PROMPT,
   downloadTelegramMessageImage,
@@ -18,6 +19,7 @@ export async function parseTelegramUserTurn(
   ctx: TelegramContext,
   client: LMStudioClient,
   botToken: string,
+  audioTranscriber?: AudioTranscriber,
 ): Promise<UserTurnInput | null> {
   const message = ctx.message;
   if (!message) return null;
@@ -27,6 +29,7 @@ export async function parseTelegramUserTurn(
   const text = message.text?.trim();
   const caption = message.caption?.trim();
   const fileId = extractImageFileId(message);
+  const audioFileId = extractAudioFileId(message);
 
   if (fileId) {
     const item = await downloadTelegramMessageImage(ctx.api, botToken, message);
@@ -34,6 +37,15 @@ export async function parseTelegramUserTurn(
     return {
       text: caption ?? text ?? DEFAULT_IMAGE_PROMPT,
       images,
+    };
+  }
+
+  if (audioFileId) {
+    if (!audioTranscriber) return null;
+    const item = await downloadTelegramMessageAudio(ctx.api, botToken, message);
+    const transcript = await audioTranscriber.transcribe(item);
+    return {
+      text: caption ? `${caption}\n\n[Transcribed audio]\n${transcript}` : transcript,
     };
   }
 

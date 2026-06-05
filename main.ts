@@ -36,6 +36,7 @@ import {
 import { type ApprovalGate, loadAppConfig, logDebug, logError, logInfo, traceSpan } from "./src/shared/mod.ts";
 import {
   ActiveTurnRegistry,
+  AudioTooLargeError,
   botCommandName,
   createMediaGroupBuffer,
   createTelegramApprovalGate,
@@ -43,6 +44,7 @@ import {
   createTelegramManager,
   createTelegramPermissionPromptPort,
   createTelegramTodoDisplayPort,
+  createWhisperCliTranscriber,
   DEFAULT_IMAGE_PROMPT,
   downloadTelegramMessageImage,
   getTelegramBotToken,
@@ -56,11 +58,14 @@ import {
   replyWithModelText,
   startTelegramBot,
   startTelegramTypingIndicator,
+  telegramAudioDuration,
+  telegramAudioKind,
   type TelegramContext,
   type TelegramConversationRef,
   telegramConversationRef,
   TelegramSessionBindingStore,
   TelegramSessionCoordinator,
+  UnsupportedAudioError,
   UnsupportedImageError,
 } from "./src/telegram/mod.ts";
 import { sendModelTextReply } from "./src/telegram/model-reply.ts";
@@ -86,6 +91,10 @@ function isImageInputError(error: unknown): boolean {
   return error instanceof ImageTooLargeError || error instanceof UnsupportedImageError;
 }
 
+function isAudioInputError(error: unknown): boolean {
+  return error instanceof AudioTooLargeError || error instanceof UnsupportedAudioError;
+}
+
 async function main(): Promise<void> {
   const config = loadAppConfig();
   if (config.DENO_PERMISSION_BROKER_PATH) {
@@ -95,6 +104,13 @@ async function main(): Promise<void> {
   const controller = new AbortController();
   const maxContextLength = config.CONTEXT_LENGTH;
   const botToken = getTelegramBotToken();
+  const audioTranscriber = config.TELEGRAM_AUDIO_TRANSCRIPTION && config.WHISPER_CPP_BIN && config.WHISPER_CPP_MODEL ?
+    createWhisperCliTranscriber({
+      bin: config.WHISPER_CPP_BIN,
+      model: config.WHISPER_CPP_MODEL,
+      language: config.WHISPER_CPP_LANGUAGE,
+    }) :
+    undefined;
 
   const userQuestions = createTelegramAskUserQuestionPort();
   const permissionPrompts = createCronPermissionPromptPort(
@@ -615,9 +631,9 @@ async function main(): Promise<void> {
 
           let userInput: UserTurnInput | null;
           try {
-            userInput = await parseTelegramUserTurn(ctx, lmstudio.client, botToken);
+            userInput = await parseTelegramUserTurn(ctx, lmstudio.client, botToken, audioTranscriber);
           } catch (error) {
-            if (isImageInputError(error)) {
+            if (isImageInputError(error) || isAudioInputError(error)) {
               const text = error instanceof Error ? error.message : String(error);
               await ctx.reply(text, { message_thread_id: message.message_thread_id });
               return;
@@ -633,23 +649,28 @@ async function main(): Promise<void> {
           }
 
           const imageCount = userInput.images?.length ?? 0;
+          const audioKind = telegramAudioKind(message);
+          const audioDuration = telegramAudioDuration(message);
           span.setAttributes({
             "telegram.update_id": ctx.update.update_id,
             "message.length": userInput.text.length,
             "telegram.chat_id": ctx.chat.id,
             ...(message.message_thread_id !== undefined ? { "telegram.thread_id": message.message_thread_id } : {}),
             ...(imageCount > 0 ? { "telegram.has_images": true, "telegram.image_count": imageCount } : {}),
+            ...(audioKind ? { "telegram.has_audio": true, "telegram.audio_kind": audioKind } : {}),
+            ...(audioDuration !== undefined ? { "telegram.audio_duration": audioDuration } : {}),
           });
 
           logDebug("telegram.message.received", {
             updateId: String(ctx.update.update_id),
             length: String(userInput.text.length),
             ...(imageCount > 0 ? { imageCount: String(imageCount) } : {}),
+            ...(audioKind ? { audioKind } : {}),
           });
           logInfo(
             `Telegram message received (${userInput.text.length} chars${
               imageCount > 0 ? `, ${imageCount} image(s)` : ""
-            }).`,
+            }${audioKind ? `, ${audioKind} audio` : ""}).`,
           );
 
           actMs = await executeTelegramTurn(ctx, userInput, message.message_id, ctx.update.update_id);
@@ -665,7 +686,7 @@ async function main(): Promise<void> {
         }
         return;
       }
-      if (isImageInputError(error) && ctx.message) {
+      if ((isImageInputError(error) || isAudioInputError(error)) && ctx.message) {
         const text = error instanceof Error ? error.message : String(error);
         await ctx.reply(text, { message_thread_id: ctx.message.message_thread_id });
         return;

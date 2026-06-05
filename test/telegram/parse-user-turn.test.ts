@@ -4,6 +4,7 @@ import type { Message } from "grammy/types";
 import { assertEquals } from "jsr:@std/assert@1";
 
 import { parseTelegramUserTurn } from "../../src/telegram/parse-user-turn.ts";
+import type { AudioTranscriber } from "../../src/telegram/telegram-audio.ts";
 import { DEFAULT_IMAGE_PROMPT } from "../../src/telegram/telegram-image.ts";
 import type { TelegramContext } from "../../src/telegram/telegram.ts";
 
@@ -31,6 +32,56 @@ Deno.test({
     "token",
   );
   assertEquals(input, { text: "hello" });
+});
+
+Deno.test("parseTelegramUserTurn transcribes audio-only input", async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = () => Promise.resolve(new Response(Uint8Array.of(1, 2, 3)));
+  const transcriber: AudioTranscriber = {
+    transcribe: () => Promise.resolve("transcribed words"),
+  };
+  try {
+    const input = await parseTelegramUserTurn(
+      fakeCtx({ voice: { file_id: "v1", duration: 3 } } as Message),
+      {} as import("@lmstudio/sdk").LMStudioClient,
+      "token",
+      transcriber,
+    );
+    assertEquals(input, { text: "transcribed words" });
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+Deno.test("parseTelegramUserTurn prepends caption for captioned audio", async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = () => Promise.resolve(new Response(Uint8Array.of(1, 2, 3)));
+  const transcriber: AudioTranscriber = {
+    transcribe: () => Promise.resolve("transcribed words"),
+  };
+  try {
+    const input = await parseTelegramUserTurn(
+      fakeCtx({
+        audio: { file_id: "a1", duration: 3 },
+        caption: "please act on this",
+      } as Message),
+      {} as import("@lmstudio/sdk").LMStudioClient,
+      "token",
+      transcriber,
+    );
+    assertEquals(input, { text: "please act on this\n\n[Transcribed audio]\ntranscribed words" });
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+Deno.test("parseTelegramUserTurn returns null for audio without transcriber", async () => {
+  const input = await parseTelegramUserTurn(
+    fakeCtx({ voice: { file_id: "v1", duration: 3 } } as Message),
+    {} as import("@lmstudio/sdk").LMStudioClient,
+    "token",
+  );
+  assertEquals(input, null);
 });
 
 Deno.test({

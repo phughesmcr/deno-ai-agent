@@ -33,6 +33,16 @@ export {
   prepareTelegramImages,
   UnsupportedImageError,
 } from "./telegram-image.ts";
+export {
+  AudioTooLargeError,
+  type AudioTranscriber,
+  createWhisperCliTranscriber,
+  downloadTelegramMessageAudio,
+  extractAudioFileId,
+  telegramAudioDuration,
+  telegramAudioKind,
+  UnsupportedAudioError,
+} from "./telegram-audio.ts";
 export { replyError, replyWithModelText } from "./telegram-reply.ts";
 export { createTelegramManager, getTelegramBotToken, type TelegramContext } from "./telegram.ts";
 export { ActiveTurnRegistry } from "./turn-gate.ts";

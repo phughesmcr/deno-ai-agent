@@ -2,6 +2,9 @@
 
 A [Deno](https://deno.com/) Telegram bot backed by a local [LM Studio](https://lmstudio.ai/) model. Messages are handled in a persistent chat context with a hot-reloadable system prompt, optional tools, and [OpenTelemetry](https://opentelemetry.io/) instrumentation.
 
+> [!IMPORTANT]
+> This is my personal agent harness. Its currently entirely vibe-coded. 
+
 ## Prerequisites
 
 - [Deno](https://docs.deno.com/runtime/getting_started/installation/) 2.x
@@ -46,6 +49,14 @@ Send a **photo** or image **document** (JPEG, PNG, WebP) with an optional captio
 - Images are **ephemeral**: they work while the bot and LM Studio stay running. After a bot restart or `/load`, prior images appear as placeholder text in context, not as pixels.
 - Optional integration tests: set `LMSTUDIO_IMAGE_TEST=1` with LM Studio running.
 
+### Audio (Telegram + whisper.cpp)
+
+Send a Telegram **voice**, **audio**, or `audio/*` document message to transcribe it locally before the model turn.
+
+- Install/build [`whisper.cpp`](https://github.com/ggml-org/whisper.cpp), download a GGML Whisper model, then set `WHISPER_CPP_BIN` and `WHISPER_CPP_MODEL`.
+- Audio is downloaded from Telegram, transcribed through the local `whisper-cli`, and appended to the session as text. Original audio is not stored in Deno KV.
+- Captions are prepended to the transcript as instructions for the model.
+
 ## Environment variables
 
 ### Reasoning
@@ -79,6 +90,10 @@ Send a **photo** or image **document** (JPEG, PNG, WebP) with an optional captio
 | `SILAS_PERMISSION_RUN_PROMPTS`  | Set to `1` to prompt in Telegram for each distinct `run` permission (shell)            |
 | `PERMISSION_PROMPT_TIMEOUT_MS`  | Auto-deny broker prompts after this many ms (default: `120000`)                        |
 | `SILAS_PROJECT_ROOT`            | Repo root for broker policy (auto-allow read under project; deny writes to `src/`)   |
+| `TELEGRAM_AUDIO_TRANSCRIPTION`  | Enable Telegram audio transcription; defaults to enabled when `WHISPER_CPP_BIN` is set |
+| `WHISPER_CPP_BIN`               | Local `whisper-cli` command or absolute path                                           |
+| `WHISPER_CPP_MODEL`             | GGML Whisper model path; required when audio transcription is enabled                  |
+| `WHISPER_CPP_LANGUAGE`          | Whisper language code (default: `auto`)                                                |
 
 
 Copy `.env.example` to `.env` and fill in values.
@@ -149,8 +164,8 @@ flowchart LR
 
 
 
-1. An incoming Telegram text or image message is appended to the session bound to that Telegram conversation
-   (`chat.id + message_thread_id`; photos are uploaded to LM Studio as temporary vision inputs).
+1. An incoming Telegram text, image, or transcribed audio message is appended to the session bound to that Telegram
+   conversation (`chat.id + message_thread_id`; photos are uploaded to LM Studio as temporary vision inputs).
 2. `model.act()` runs against LM Studio with the current history and tools.
 3. Assistant text is streamed into context and sent back as a MarkdownV2 reply (`stripThinking` removes model “thinking” blocks).
 4. Changes to `SYSTEM.md` in the workspace reload the system prompt without restarting.
