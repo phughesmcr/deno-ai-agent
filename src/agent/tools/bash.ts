@@ -18,6 +18,7 @@ async function readStream(stream: ReadableStream<Uint8Array> | null): Promise<st
 const bashParameters = {
   command: z.string().describe("Shell command to execute"),
   timeout: z.number().optional().describe("Timeout in seconds (optional)"),
+  is_background: z.boolean().optional().describe("Start the command in the background and return immediately"),
 } as const;
 
 export const bashToolDefinition: AgentToolDefinition<typeof bashParameters> = {
@@ -25,7 +26,7 @@ export const bashToolDefinition: AgentToolDefinition<typeof bashParameters> = {
   description:
     `Execute a bash command in the workspace directory. Returns stdout and stderr. Output is truncated to last ${DEFAULT_MAX_LINES} lines or ${
       DEFAULT_MAX_BYTES / 1024
-    }KB (whichever is hit first). Optionally provide a timeout in seconds. For reading files outside the workspace (e.g. ~/.codex/...), use the read tool with a ~/ path instead of bash.`,
+    }KB (whichever is hit first). Optionally provide a timeout in seconds, or is_background=true for long-running commands. For reading files outside the workspace (e.g. ~/.codex/...), use the read tool with a ~/ path instead of bash.`,
   parameters: bashParameters,
   authorize: ({ command }, deps): ApprovalRequest => {
     return requestForOperation(deps.workspace, {
@@ -35,7 +36,7 @@ export const bashToolDefinition: AgentToolDefinition<typeof bashParameters> = {
       summary: `cwd=${deps.workspace.root}`,
     });
   },
-  run: async ({ command, timeout }, deps): Promise<string> => {
+  run: async ({ command, timeout, is_background }, deps): Promise<string> => {
     const ctx = deps.workspace;
     const { cmd, args } = getShellCommand();
     await grantBrokerRunForCommands([cmd], ctx.signal);
@@ -59,7 +60,28 @@ export const bashToolDefinition: AgentToolDefinition<typeof bashParameters> = {
         turnId: ctx.getTurnId(),
         shell: cmd,
         cwd: ctx.root,
+        background: String(Boolean(is_background)),
       });
+
+      if (is_background) {
+        const child = new Deno.Command(cmd, {
+          args: [...args, command],
+          cwd: ctx.root,
+          stdout: "null",
+          stderr: "null",
+          env: { NO_COLOR: "1", TERM: "dumb" },
+        }).spawn();
+        child.unref();
+        logDebug("shell.started_background", {
+          sessionId: ctx.getSessionId(),
+          turnId: ctx.getTurnId(),
+          shell: cmd,
+          pid: String(child.pid),
+          durationMs: String(Math.round(performance.now() - started)),
+        });
+        return `Started background command with PID ${child.pid}.`;
+      }
+
       const child = new Deno.Command(cmd, {
         args: [...args, command],
         cwd: ctx.root,
