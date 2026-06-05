@@ -4,6 +4,7 @@ export {
   waitForPermissionControlClient,
 } from "./control-client.ts";
 export { type BrokerGrantScope, brokerNetValueForUrl, grantBrokerNetUrl } from "./grant-net.ts";
+export { currentBrokerGrantScope, withBrokerGrantScope } from "./grant-scope.ts";
 export { grantBrokerReadPath } from "./grant-read.ts";
 export {
   brokerRunGrantValuesForCommands,

@@ -1,6 +1,7 @@
 import * as path from "@std/path";
 
 import { sendControlGrant } from "./control-channel.ts";
+import { currentBrokerGrantScope } from "./grant-scope.ts";
 import { shouldRunPermissionControlClient } from "./control-client.ts";
 import type { BrokerGrantScope } from "./grant-net.ts";
 
@@ -11,7 +12,7 @@ import type { BrokerGrantScope } from "./grant-net.ts";
 export async function grantBrokerRunValues(
   values: readonly (string | null)[],
   signal?: AbortSignal,
-  scope: BrokerGrantScope = "session",
+  scope: BrokerGrantScope = currentBrokerGrantScope(),
 ): Promise<void> {
   for (const value of new Set(values)) {
     if (signal?.aborted) return;

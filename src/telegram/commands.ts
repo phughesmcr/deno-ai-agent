@@ -2,7 +2,7 @@ import { copyTodosForSession, type SavedSessionSummary, type SessionStatus, type
 
 /** One-line help text for supported session commands. */
 export const SESSION_HELP =
-  "Sessions: /topic <name> - create forum topic | /topics - known topic sessions | /new - fresh chat | /save - write to disk | /load <id|name> - restore | /resume <id|name> - alias for load | /rename <name> - label session | /fork - branch copy | /list - saved sessions | /session - status | /stats - tokens | /compact [instructions] - summarize history | /todos - task list";
+  "Sessions: /topic <name> - create forum topic | /topics - known topic sessions | /new - fresh chat | /save - write to disk | /load <id|name> - restore | /resume <id|name> - alias for load | /rename <name> - label session | /fork - branch copy | /list - saved sessions | /session - status | /stats - tokens | /compact [instructions] - summarize history | /todos - task list | /cron new|list|del - scheduled turns";
 
 /** Telegram topic binding summary shown by `/topics`. */
 export interface TelegramTopicBindingSummary {
@@ -44,6 +44,32 @@ export interface CommandSession {
   listBindings?(): Promise<TelegramTopicBindingSummary[]>;
 }
 
+/** Cron job summary shown by `/cron list`. */
+export interface CommandCronSummary {
+  /** Stable cron job id. */
+  id: string;
+  /** User-facing schedule text. */
+  scheduleText: string;
+  /** ISO timestamp for the next run. */
+  nextRunAt: string;
+  /** Whether the cron job is enabled. */
+  enabled: boolean;
+  /** Prompt sent to the agent when the job runs. */
+  prompt: string;
+  /** One-line permission profile summary. */
+  permissionSummary: string;
+}
+
+/** Cron operations required by Telegram command handling. */
+export interface CommandCronManager {
+  /** Creates a cron job from the `/cron new` tail. */
+  create(input: string): Promise<string>;
+  /** Lists cron jobs scoped to the current Telegram chat. */
+  list(): Promise<CommandCronSummary[]>;
+  /** Deletes a cron job by id. */
+  delete(id: string): Promise<boolean>;
+}
+
 function formatSessionLabel(status: Pick<SessionStatus, "id" | "name">): string {
   return status.name ? `${status.name} (${status.id})` : status.id;
 }
@@ -82,6 +108,17 @@ function formatBindingLine(binding: TelegramTopicBindingSummary): string {
   return `${formatThreadLabel(binding)} -> ${binding.sessionId}`;
 }
 
+const CRON_USAGE = "Usage: /cron new Every morning at 8am, <prompt>\n/cron list\n/cron del <id>";
+
+function formatCronSummary(summary: CommandCronSummary): string {
+  const state = summary.enabled ? "" : " (disabled)";
+  return [
+    `${summary.id} - ${summary.scheduleText} - next ${summary.nextRunAt}${state}`,
+    `  ${summary.permissionSummary}`,
+    `  ${summary.prompt}`,
+  ].join("\n");
+}
+
 /**
  * Command behavior independent of Grammy.
  * @internal
@@ -89,10 +126,12 @@ function formatBindingLine(binding: TelegramTopicBindingSummary): string {
 export class TelegramCommandHandler {
   private readonly _session: CommandSession;
   private readonly _todoStore?: TodoStore;
+  private readonly _cron?: CommandCronManager;
 
-  constructor(session: CommandSession, todoStore?: TodoStore) {
+  constructor(session: CommandSession, todoStore?: TodoStore, cron?: CommandCronManager) {
     this._session = session;
     this._todoStore = todoStore;
+    this._cron = cron;
   }
 
   help(): string {
@@ -185,5 +224,32 @@ export class TelegramCommandHandler {
     const bindings = await this._session.listBindings();
     if (bindings.length === 0) return "No known topic sessions for this chat.";
     return `Known topic sessions:\n${bindings.map(formatBindingLine).join("\n")}`;
+  }
+
+  async cron(input?: string): Promise<string> {
+    if (!this._cron) return CRON_USAGE;
+    const [command, ...rest] = (input ?? "").trim().split(/\s+/).filter((part) => part.length > 0);
+    if (!command) return CRON_USAGE;
+    if (command === "new") {
+      const payload = rest.join(" ").trim();
+      if (!payload) return CRON_USAGE;
+      try {
+        return await this._cron.create(payload);
+      } catch (error) {
+        return `Cron creation failed: ${errorMessage(error)}`;
+      }
+    }
+    if (command === "list") {
+      const jobs = await this._cron.list();
+      if (jobs.length === 0) return "No cron jobs.";
+      return `Cron jobs:\n${jobs.map(formatCronSummary).join("\n")}`;
+    }
+    if (command === "del" || command === "delete") {
+      const id = rest[0];
+      if (!id) return "Usage: /cron del <id>";
+      const deleted = await this._cron.delete(id);
+      return deleted ? `Deleted cron job ${id}.` : `Cron job not found: ${id}`;
+    }
+    return CRON_USAGE;
   }
 }

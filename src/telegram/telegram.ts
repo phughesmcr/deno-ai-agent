@@ -4,9 +4,10 @@ import { questions, type QuestionsFlavor } from "grammy-questions";
 import type { AskUserQuestionPort, TodoStore } from "../agent/mod.ts";
 import type { PermissionCallbackDispatch } from "../permission-broker/mod.ts";
 import { loadTelegramConfig, logDebug } from "../shared/mod.ts";
+import { shouldIgnoreUnauthorizedMessage } from "./authorization.ts";
 import { installConcurrentUpdates } from "./bot-runner.ts";
-import { SESSION_HELP, TelegramCommandHandler } from "./commands.ts";
-import { telegramConversationRef } from "./conversation.ts";
+import { type CommandCronManager, SESSION_HELP, TelegramCommandHandler } from "./commands.ts";
+import { type TelegramConversationRef, telegramConversationRef } from "./conversation.ts";
 import { showTodosForSession } from "./grammy-todo-display-adapter.ts";
 import { isPermissionCallback } from "./permission-callback.ts";
 import type { TelegramSessionCoordinator } from "./session-coordinator.ts";
@@ -47,6 +48,10 @@ interface TelegramPermissionPromptPort {
     actorId: number | undefined,
     adminId: number,
   ): Promise<PermissionCallbackDispatch>;
+}
+
+interface TelegramCronTopicPort {
+  createTopic(name: string): Promise<{ threadId: number; topicName: string }>;
 }
 
 function getEnv(): { token: string; adminId: number } {
@@ -91,6 +96,7 @@ export function createTelegramManager({
   approvals,
   turnAbort,
   todoStore,
+  cronForConversation,
 }: {
   sessions: TelegramSessionCoordinator;
   onAdminStart: (ctx: TelegramContext) => Promise<void>;
@@ -99,6 +105,7 @@ export function createTelegramManager({
   approvals?: TelegramApprovalPort;
   turnAbort?: TelegramTurnAbortPort;
   todoStore?: TodoStore;
+  cronForConversation?: (ref: TelegramConversationRef, topics: TelegramCronTopicPort) => CommandCronManager | undefined;
 }): TelegramManager {
   const { token, adminId } = getEnv();
 
@@ -110,6 +117,13 @@ export function createTelegramManager({
     return new TelegramCommandHandler(
       sessions.forConversation(ref, { createdBy: ctx.from?.id }),
       todoStore,
+      cronForConversation?.(ref, {
+        createTopic: async (name) => {
+          if (!ctx.chat) throw new Error("No Telegram chat found for topic creation.");
+          const topic = await ctx.api.createForumTopic(ctx.chat.id, name);
+          return { threadId: topic.message_thread_id, topicName: name };
+        },
+      }),
     );
   }
 
@@ -141,6 +155,7 @@ export function createTelegramManager({
 
   bot.on("message", async (ctx, next) => {
     if (!ctx.config.isAdmin) {
+      if (shouldIgnoreUnauthorizedMessage(ctx)) return;
       await replyInConversation(ctx, "Sorry, you are not authorized to use this bot.");
       return;
     }
@@ -288,6 +303,15 @@ export function createTelegramManager({
     if (blockIfInteractionPending(ctx)) return;
     const commands = commandsFor(ctx);
     await replyInConversation(ctx, commands ? await commands.topics() : "No Telegram chat found for this command.");
+  });
+
+  bot.command("cron", async (ctx: TelegramContext) => {
+    if (blockIfInteractionPending(ctx)) return;
+    const commands = commandsFor(ctx);
+    await replyInConversation(
+      ctx,
+      commands ? await commands.cron(commandRest(ctx)) : "No Telegram chat found for this command.",
+    );
   });
 
   bot.command("topic", async (ctx: TelegramContext) => {

@@ -1,10 +1,20 @@
 import type { Tool } from "@lmstudio/sdk";
 
 import {
+  createCronPermissionPromptPort,
+  CronCommandManager,
+  CronDispatcher,
+  type CronJob,
+  CronJobStore,
+} from "./src/cron/mod.ts";
+import { setCronDispatcher } from "./src/cron/runtime.ts";
+import {
   createAgent,
   createLMStudioManager,
+  createNoopTodoDisplayPort,
   createSkillManager,
   createToolContext,
+  createUnavailableAskUserQuestionPort,
   createWorkspace,
   DenoKvTodoStore,
   getModelToolSet,
@@ -23,7 +33,7 @@ import {
   shouldRunPermissionControlClient,
   waitForPermissionControlClient,
 } from "./src/permission-broker/mod.ts";
-import { loadAppConfig, logDebug, logError, logInfo, traceSpan } from "./src/shared/mod.ts";
+import { type ApprovalGate, loadAppConfig, logDebug, logError, logInfo, traceSpan } from "./src/shared/mod.ts";
 import {
   ActiveTurnRegistry,
   botCommandName,
@@ -46,11 +56,13 @@ import {
   startTelegramBot,
   startTelegramTypingIndicator,
   type TelegramContext,
+  type TelegramConversationRef,
   telegramConversationRef,
   TelegramSessionBindingStore,
   TelegramSessionCoordinator,
   UnsupportedImageError,
 } from "./src/telegram/mod.ts";
+import { sendModelTextReply } from "./src/telegram/model-reply.ts";
 
 const PENDING_INTERACTION_HINT =
   "Please resolve the pending Telegram approval or broker permission prompt first (or wait for it to time out).";
@@ -84,7 +96,9 @@ async function main(): Promise<void> {
   const botToken = getTelegramBotToken();
 
   const userQuestions = createTelegramAskUserQuestionPort();
-  const permissionPrompts = createTelegramPermissionPromptPort(config.PERMISSION_PROMPT_TIMEOUT_MS);
+  const permissionPrompts = createCronPermissionPromptPort(
+    createTelegramPermissionPromptPort(config.PERMISSION_PROMPT_TIMEOUT_MS),
+  );
   const approvals = createTelegramApprovalGate();
 
   if (shouldRunPermissionControlClient()) {
@@ -134,6 +148,7 @@ async function main(): Promise<void> {
     sessions: agent.sessions,
     bindings: new TelegramSessionBindingStore(workspaceKv),
   });
+  const cronStore = new CronJobStore(workspaceKv);
 
   const todoStore = new DenoKvTodoStore(workspaceKv);
   const todoDisplay = createTelegramTodoDisplayPort({ store: todoStore });
@@ -153,7 +168,11 @@ async function main(): Promise<void> {
     getSessionId: () => agent.sessions.current.id,
   });
   await subagents.reconcileAbandonedOnStartup();
-  const createTurnToolSet = async (): Promise<
+  const createTurnToolSet = async (overrides?: {
+    approvalGate?: ApprovalGate;
+    userQuestions?: typeof userQuestions;
+    todoDisplay?: ReturnType<typeof createNoopTodoDisplayPort>;
+  }): Promise<
     { tools: Tool[]; guardToolCall: ReturnType<typeof getModelToolSet>["guardToolCall"] }
   > => {
     await skills.refresh();
@@ -161,12 +180,12 @@ async function main(): Promise<void> {
     setMcpSystemPromptAppendix(mcpRegistry.systemPromptAppendix);
     return getModelToolSet({
       workspace: toolContext,
-      approvalGate: approvals,
-      userQuestions,
+      approvalGate: overrides?.approvalGate ?? approvals,
+      userQuestions: overrides?.userQuestions ?? userQuestions,
       todos: {
         getSessionId: () => agent.sessions.current.id,
         store: todoStore,
-        display: todoDisplay,
+        display: overrides?.todoDisplay ?? todoDisplay,
       },
       skills: {
         manager: skills,
@@ -189,6 +208,79 @@ async function main(): Promise<void> {
   }
 
   const turnAbort = { abortActiveTurn };
+
+  async function executeCronTurn(
+    job: CronJob,
+    approvalGate: ApprovalGate,
+    signal: AbortSignal,
+  ): Promise<void> {
+    const ref: TelegramConversationRef = {
+      chatId: job.chatId,
+      ...(job.threadId !== undefined ? { threadId: job.threadId } : {}),
+    };
+    const startMessage = await telegram.bot.api.sendMessage(
+      job.chatId,
+      `Cron job ${job.id} started.\n${job.prompt}`,
+      { message_thread_id: job.threadId },
+    );
+
+    let actMs = 0;
+    await telegramSessions.replaceWithNew(ref, { topicName: job.topicName });
+    await telegramSessions.withConversation(ref, async () => {
+      const { tools, guardToolCall } = await createTurnToolSet({
+        approvalGate,
+        userQuestions: createUnavailableAskUserQuestionPort(),
+        todoDisplay: createNoopTodoDisplayPort(),
+      });
+      activeTurnId = `cron:${job.id}`;
+
+      const turnController = new AbortController();
+      const approvalController = new AbortController();
+      const onShutdown = (): void => {
+        turnController.abort();
+        approvalController.abort();
+      };
+      signal.addEventListener("abort", onShutdown);
+      const clearActiveTurn = activeTurns.setActiveTurn({
+        id: activeTurnId,
+        actController: turnController,
+        approvalController,
+      });
+
+      const runSignal = AbortSignal.any([signal, turnController.signal]);
+      const actStarted = performance.now();
+      try {
+        const { replyTexts } = await runTurn(agent, { text: job.prompt }, {
+          tools,
+          guardToolCall,
+          signal: runSignal,
+        });
+        if (replyTexts.length > 0) {
+          await sendModelTextReply(
+            {
+              reply: (text, options) => telegram.bot.api.sendMessage(job.chatId, text, options),
+            },
+            replyTexts,
+            startMessage.message_id,
+            job.threadId,
+          );
+        } else {
+          await telegram.bot.api.sendMessage(
+            job.chatId,
+            "Cron job finished without a reply.",
+            { message_thread_id: job.threadId },
+          );
+        }
+      } finally {
+        actMs = performance.now() - actStarted;
+        clearActiveTurn();
+        signal.removeEventListener("abort", onShutdown);
+        approvalController.abort();
+        activeTurnId = "no-active-turn";
+      }
+    }, { topicName: job.topicName });
+    recordActDuration(actMs, "ok");
+  }
 
   async function executeTelegramTurn(
     ctx: TelegramContext,
@@ -307,7 +399,25 @@ async function main(): Promise<void> {
     approvals,
     turnAbort,
     todoStore,
+    cronForConversation: (ref, topics) =>
+      new CronCommandManager({
+        store: cronStore,
+        ref,
+        mcpTools: () => mcpRegistry.getTools(),
+        createTopic: topics.createTopic,
+      }),
   });
+
+  setCronDispatcher(
+    new CronDispatcher({
+      store: cronStore,
+      permissionPrompts,
+      signal: controller.signal,
+      runner: {
+        run: executeCronTurn,
+      },
+    }),
+  );
 
   let telegramRunner: ReturnType<typeof startTelegramBot> | undefined;
 

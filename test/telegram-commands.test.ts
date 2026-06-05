@@ -1,6 +1,7 @@
 import { assertEquals } from "jsr:@std/assert@1/equals";
 import type { SavedSessionSummary, SessionStatus } from "../src/agent/context/session.ts";
 import {
+  type CommandCronManager,
   type CommandSession,
   formatSessionStatus,
   SESSION_HELP,
@@ -114,9 +115,41 @@ class FakeSession {
   }
 }
 
-function createHandler(session = new FakeSession()): { handler: TelegramCommandHandler; session: FakeSession } {
+class FakeCronManager implements CommandCronManager {
+  created: string[] = [];
+  deleted: string[] = [];
+  listResult = [
+    {
+      id: "cron-a",
+      scheduleText: "Every morning at 8am",
+      nextRunAt: "2026-06-06T08:00:00.000Z",
+      enabled: true,
+      prompt: "Check Gmail.",
+      permissionSummary: "mcp:gmail/search",
+    },
+  ];
+
+  create(input: string): Promise<string> {
+    this.created.push(input);
+    return Promise.resolve("Created cron job cron-new.\nNext run: 2026-06-06T08:00:00.000Z");
+  }
+
+  list(): Promise<typeof this.listResult> {
+    return Promise.resolve(this.listResult);
+  }
+
+  delete(id: string): Promise<boolean> {
+    this.deleted.push(id);
+    return Promise.resolve(id === "cron-a");
+  }
+}
+
+function createHandler(
+  cron?: CommandCronManager,
+  session = new FakeSession(),
+): { handler: TelegramCommandHandler; session: FakeSession } {
   return {
-    handler: new TelegramCommandHandler(session as unknown as CommandSession),
+    handler: new TelegramCommandHandler(session as unknown as CommandSession, undefined, cron),
     session,
   };
 }
@@ -197,7 +230,7 @@ Deno.test("TelegramCommandHandler returns user-facing command failure text", asy
   session.compactError = new Error("model unavailable");
   session.renameError = new Error("Invalid session name");
   session.listSavedResult = [];
-  const { handler } = createHandler(session);
+  const { handler } = createHandler(undefined, session);
 
   assertEquals(await handler.save(), "Save failed: disk full");
   assertEquals(await handler.load(), "Usage: /load <id|name>\n\n/list shows saved sessions.");
@@ -207,4 +240,35 @@ Deno.test("TelegramCommandHandler returns user-facing command failure text", asy
   assertEquals(await handler.fork(), "Fork failed: cannot fork");
   assertEquals(await handler.compact(), "Compaction failed: model unavailable");
   assertEquals(await handler.list(), "No saved sessions. /save writes the current chat.");
+});
+
+Deno.test("TelegramCommandHandler returns text for cron commands", async () => {
+  const cron = new FakeCronManager();
+  const { handler } = createHandler(cron, new FakeSession());
+
+  assertEquals(
+    await handler.cron("new Every morning at 8am, Check Gmail."),
+    "Created cron job cron-new.\nNext run: 2026-06-06T08:00:00.000Z",
+  );
+  assertEquals(cron.created, ["Every morning at 8am, Check Gmail."]);
+  assertEquals(
+    await handler.cron("list"),
+    [
+      "Cron jobs:",
+      "cron-a - Every morning at 8am - next 2026-06-06T08:00:00.000Z",
+      "  mcp:gmail/search",
+      "  Check Gmail.",
+    ].join("\n"),
+  );
+  assertEquals(await handler.cron("del cron-a"), "Deleted cron job cron-a.");
+  assertEquals(await handler.cron("del missing"), "Cron job not found: missing");
+});
+
+Deno.test("TelegramCommandHandler returns cron usage without a configured manager", async () => {
+  const { handler } = createHandler();
+
+  assertEquals(
+    await handler.cron(),
+    "Usage: /cron new Every morning at 8am, <prompt>\n/cron list\n/cron del <id>",
+  );
 });

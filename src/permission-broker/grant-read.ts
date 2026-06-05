@@ -1,4 +1,5 @@
 import { sendControlGrant } from "./control-channel.ts";
+import { currentBrokerGrantScope } from "./grant-scope.ts";
 
 /** Values Deno may send on the broker `read` permission for the same file. */
 function readGrantValues(absolutePath: string): string[] {
@@ -14,6 +15,6 @@ export async function grantBrokerReadPath(absolutePath: string, signal?: AbortSi
   for (const value of new Set(readGrantValues(absolutePath))) {
     if (signal?.aborted) return;
     // deno-lint-ignore no-await-in-loop -- Grant frames must stay in order on the control socket.
-    await sendControlGrant("read", value, signal);
+    await sendControlGrant("read", value, signal, currentBrokerGrantScope());
   }
 }
