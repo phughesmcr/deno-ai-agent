@@ -57,7 +57,7 @@ function decideReadWrite(kind: "read" | "write", pathValue: string | null, ctx: 
   if (ctx.brokerSocketPaths.includes(target)) return "auto_allow";
   if (isUnderRoot(target, ctx.workspaceRoot)) return "auto_allow";
   if (isUnderRoot(target, ctx.denoDir)) return "auto_allow";
-  // Silas must read its own tree at startup; tool-layer policy still blocks agent writes to src/.
+  // Silas must read its own tree at startup; broker policy protects repo source writes.
   if (kind === "read" && isUnderRoot(target, ctx.projectRoot)) return "auto_allow";
   if (kind === "write" && isUnderRoot(target, ctx.repoSrcDir)) return "auto_deny";
   if (target.startsWith("/etc") || target.includes("/.ssh")) return "auto_deny";
