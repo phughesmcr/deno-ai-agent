@@ -121,6 +121,7 @@ class FakeCronManager implements CommandCronManager {
   listResult = [
     {
       id: "cron-a",
+      scheduleKind: "recurring" as const,
       scheduleText: "Every morning at 8am",
       nextRunAt: "2026-06-06T08:00:00.000Z",
       enabled: true,
@@ -260,7 +261,7 @@ Deno.test("TelegramCommandHandler returns text for cron commands", async () => {
     await handler.cron("list"),
     [
       "Cron jobs:",
-      "cron-a - Every morning at 8am - fresh - next 2026-06-06T08:00:00.000Z",
+      "cron-a - recurring - Every morning at 8am - fresh - next 2026-06-06T08:00:00.000Z",
       "  mcp:gmail/search",
       "  Check Gmail.",
     ].join("\n"),

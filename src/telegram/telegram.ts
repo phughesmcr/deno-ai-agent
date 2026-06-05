@@ -308,10 +308,18 @@ export function createTelegramManager({
   bot.command("cron", async (ctx: TelegramContext) => {
     if (blockIfInteractionPending(ctx)) return;
     const commands = commandsFor(ctx);
-    await replyInConversation(
-      ctx,
-      commands ? await commands.cron(commandRest(ctx)) : "No Telegram chat found for this command.",
-    );
+    const commandController = new AbortController();
+    const withQuestions = Boolean(userQuestions?.isAvailable());
+    if (withQuestions) userQuestions?.setTurnContext({ ctx, signal: commandController.signal });
+    try {
+      await replyInConversation(
+        ctx,
+        commands ? await commands.cron(commandRest(ctx)) : "No Telegram chat found for this command.",
+      );
+    } finally {
+      commandController.abort();
+      if (withQuestions) userQuestions?.clearTurnContext();
+    }
   });
 
   bot.command("topic", async (ctx: TelegramContext) => {

@@ -1,4 +1,9 @@
-export { createTelegramApprovalGate, encodeApprovalCallback, type TelegramApprovalGate } from "./approval-gate.ts";
+export {
+  createTelegramApprovalGate,
+  encodeApprovalCallback,
+  type InlineKeyboardMarkup,
+  type TelegramApprovalGate,
+} from "./approval-gate.ts";
 export { installConcurrentUpdates, startTelegramBot } from "./bot-runner.ts";
 export { formatSessionStatus, SESSION_HELP, TelegramCommandHandler } from "./commands.ts";
 export {

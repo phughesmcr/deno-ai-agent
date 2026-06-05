@@ -10,6 +10,12 @@ import {
 
 import { getActMaxPredictionRounds } from "../shared/act-config.ts";
 import { getActDraftModel } from "../shared/draft-model.ts";
+import {
+  type CronScheduleExtractionRequest,
+  type CronScheduleExtractor,
+  parseRawExtractedCronSchedule,
+  type RawExtractedCronSchedule,
+} from "../cron/schedule.ts";
 import { actReasoningParsingOption, persistedModelText } from "../shared/reasoning.ts";
 import { prepareSummaryCompaction, type SummaryCompactionInput } from "./context/compactor.ts";
 import { materializeMessageForChat } from "./context/message-materialize.ts";
@@ -40,7 +46,7 @@ export interface SubagentActResult {
 }
 
 /** Unified model-act boundary for normal turns, compaction summaries, and subagents. */
-export interface AgentModelActPort extends ModelTurnPort, ContextSummaryPort {
+export interface AgentModelActPort extends ModelTurnPort, ContextSummaryPort, CronScheduleExtractor {
   /** Runs one read-only subagent turn. */
   runSubagent(request: SubagentActRequest): Promise<SubagentActResult>;
 }
@@ -73,6 +79,191 @@ function appendMessages(client: LMStudioClient, chat: Chat, messages: ChatMessag
   for (const message of messages) {
     chat.append(materializeMessageForChat(client, message));
   }
+}
+
+function extractJsonObject(text: string): unknown {
+  const trimmed = text.trim();
+  const fenced = /```(?:json)?\s*([\s\S]*?)\s*```/i.exec(trimmed);
+  const jsonText = fenced?.[1]?.trim() ?? firstBalancedJsonObject(trimmed);
+  return JSON.parse(jsonText) as unknown;
+}
+
+function firstBalancedJsonObject(text: string): string {
+  for (let start = text.indexOf("{"); start !== -1; start = text.indexOf("{", start + 1)) {
+    const candidate = balancedJsonObjectFrom(text, start);
+    if (candidate) return candidate;
+  }
+  throw new Error("Cron schedule extractor response did not contain a JSON object.");
+}
+
+function balancedJsonObjectFrom(text: string, start: number): string | undefined {
+  let depth = 0;
+  let inString = false;
+  let escaped = false;
+
+  for (let index = start; index < text.length; index++) {
+    const char = text[index];
+    if (char === undefined) continue;
+
+    if (inString) {
+      if (escaped) {
+        escaped = false;
+      } else if (char === "\\") {
+        escaped = true;
+      } else if (char === '"') {
+        inString = false;
+      }
+      continue;
+    }
+
+    if (char === '"') {
+      inString = true;
+    } else if (char === "{") {
+      depth++;
+    } else if (char === "}") {
+      depth--;
+      if (depth === 0) return text.slice(start, index + 1);
+    }
+  }
+
+  return undefined;
+}
+
+const cronScheduleJsonSchema = {
+  type: "object",
+  oneOf: [
+    {
+      required: ["status", "prompt", "scheduleText", "schedule"],
+      properties: {
+        status: { const: "ok" },
+        prompt: { type: "string", minLength: 1 },
+        scheduleText: { type: "string", minLength: 1 },
+        schedule: {
+          type: "object",
+          oneOf: [
+            {
+              required: ["kind", "recurrence"],
+              properties: {
+                kind: { const: "recurring" },
+                timezone: { type: "string", minLength: 1 },
+                recurrence: {
+                  type: "object",
+                  oneOf: [
+                    {
+                      required: ["kind", "every", "unit"],
+                      properties: {
+                        kind: { const: "interval" },
+                        every: { type: "integer", minimum: 1 },
+                        unit: { enum: ["minute", "hour"] },
+                      },
+                    },
+                    {
+                      required: ["kind", "hour", "minute"],
+                      properties: {
+                        kind: { const: "daily" },
+                        hour: { type: "integer", minimum: 0, maximum: 23 },
+                        minute: { type: "integer", minimum: 0, maximum: 59 },
+                      },
+                    },
+                    {
+                      required: ["kind", "weekday", "hour", "minute"],
+                      properties: {
+                        kind: { const: "weekly" },
+                        weekday: {
+                          enum: ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"],
+                        },
+                        hour: { type: "integer", minimum: 0, maximum: 23 },
+                        minute: { type: "integer", minimum: 0, maximum: 59 },
+                      },
+                    },
+                    {
+                      required: ["kind", "hour", "minute"],
+                      properties: {
+                        kind: { const: "weekdays" },
+                        hour: { type: "integer", minimum: 0, maximum: 23 },
+                        minute: { type: "integer", minimum: 0, maximum: 59 },
+                      },
+                    },
+                  ],
+                },
+              },
+            },
+            {
+              required: ["kind", "date", "time"],
+              properties: {
+                kind: { const: "once" },
+                timezone: { type: "string", minLength: 1 },
+                date: {
+                  type: "object",
+                  oneOf: [
+                    {
+                      required: ["kind", "date"],
+                      properties: {
+                        kind: { const: "date" },
+                        date: { type: "string", pattern: "^\\d{4}-\\d{2}-\\d{2}$" },
+                      },
+                    },
+                    {
+                      required: ["kind", "weekday"],
+                      properties: {
+                        kind: { const: "next_weekday" },
+                        weekday: {
+                          enum: ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"],
+                        },
+                      },
+                    },
+                  ],
+                },
+                time: { type: "string", pattern: "^\\d{2}:\\d{2}$" },
+              },
+            },
+          ],
+        },
+      },
+    },
+    {
+      required: ["status", "question"],
+      properties: {
+        status: { const: "needs_clarification" },
+        prompt: { type: "string", minLength: 1 },
+        scheduleText: { type: "string", minLength: 1 },
+        question: { type: "string", minLength: 1 },
+      },
+    },
+    {
+      required: ["status", "message"],
+      properties: {
+        status: { const: "unsupported" },
+        message: { type: "string", minLength: 1 },
+      },
+    },
+  ],
+} as const;
+
+function cronExtractionPrompt(request: CronScheduleExtractionRequest): string {
+  return [
+    "Extract schedule intent for a Silas /cron new command.",
+    "Return JSON only. Do not include Markdown.",
+    "",
+    "Output shape:",
+    '{"status":"ok","prompt":"...","scheduleText":"...","schedule":{"kind":"recurring","timezone":"Europe/London","recurrence":{"kind":"interval","every":1,"unit":"minute"}}}',
+    '{"status":"ok","prompt":"...","scheduleText":"...","schedule":{"kind":"once","timezone":"Europe/London","date":{"kind":"next_weekday","weekday":"tuesday"},"time":"10:00"}}',
+    '{"status":"needs_clarification","prompt":"...","scheduleText":"...","question":"What time should I remind you?"}',
+    '{"status":"unsupported","message":"..."}',
+    "",
+    "Rules:",
+    "- Split the command into scheduleText and prompt.",
+    "- For recurring schedules, use interval, daily, weekly, or weekdays recurrence.",
+    "- For one-shot schedules, include date and 24-hour HH:mm time.",
+    "- If a one-shot schedule has no explicit time and no clarification supplies one, return needs_clarification.",
+    "- Use the default timezone unless the user explicitly names another timezone.",
+    "- Do not compute exact instants or nextRunAt.",
+    "",
+    `Now: ${request.now.toISOString()}`,
+    `Default timezone: ${request.defaultTimezone}`,
+    `Command: ${request.input}`,
+    request.clarification ? `Clarification answer: ${request.clarification}` : "",
+  ].filter((line) => line.length > 0).join("\n");
 }
 
 /**
@@ -178,6 +369,33 @@ export class LmStudioAgentModelAct implements AgentModelActPort {
     });
 
     return prepared.finish(summary);
+  }
+
+  /** Extracts cron schedule intent from a user command without using tools. */
+  async extractCronSchedule(request: CronScheduleExtractionRequest): Promise<RawExtractedCronSchedule> {
+    const chat = Chat.empty();
+    chat.replaceSystemPrompt("You extract cron scheduling intent and return strict JSON only.");
+    chat.append("user", cronExtractionPrompt(request));
+
+    let result = "";
+    await this._model.act(chat, [], {
+      ...(getActDraftModel() ?? {}),
+      ...actReasoningParsingOption(),
+      allowParallelToolExecution: true,
+      contextOverflowPolicy: "truncateMiddle",
+      maxTokens: 1024,
+      maxPredictionRounds: 1,
+      structured: { type: "json", jsonSchema: cronScheduleJsonSchema },
+      onMessage: (message) => {
+        if (message.getRole() !== "assistant") return;
+        const text = message.getText();
+        if (text) result = persistedModelText(text);
+      },
+      signal: request.signal ?? this._signal,
+    });
+
+    if (!result.trim()) throw new Error("Cron schedule extractor returned an empty response.");
+    return parseRawExtractedCronSchedule(extractJsonObject(result));
   }
 
   /** Runs a read-only subagent model act and returns the final assistant text. */

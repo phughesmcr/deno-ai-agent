@@ -47,6 +47,7 @@ import {
   downloadTelegramMessageImage,
   getTelegramBotToken,
   ImageTooLargeError,
+  type InlineKeyboardMarkup,
   isBotCommand,
   parseTelegramUserTurn,
   prepareTelegramImages,
@@ -223,6 +224,18 @@ async function main(): Promise<void> {
       `Cron job ${job.id} started.\n${job.prompt}`,
       { message_thread_id: job.threadId },
     );
+    const cronTurnContext = {
+      config: { adminId: config.TELEGRAM_ADMIN_ID, isAdmin: true },
+      message: {
+        chat: { id: job.chatId },
+        message_thread_id: job.threadId,
+      },
+      reply: (text: string, options?: { reply_markup?: InlineKeyboardMarkup; message_thread_id?: number }) =>
+        telegram.bot.api.sendMessage(job.chatId, text, {
+          message_thread_id: options?.message_thread_id ?? job.threadId,
+          ...(options?.reply_markup ? { reply_markup: options.reply_markup } : {}),
+        }),
+    };
 
     let actMs = 0;
     if (job.sessionMode === "fresh") {
@@ -250,6 +263,8 @@ async function main(): Promise<void> {
       });
 
       const runSignal = AbortSignal.any([signal, turnController.signal]);
+      permissionPrompts.setTurnContext({ ctx: cronTurnContext, signal: approvalController.signal });
+      approvals.setTurnContext({ ctx: cronTurnContext, signal: approvalController.signal });
       const actStarted = performance.now();
       try {
         const { replyTexts } = await runTurn(agent, { text: job.prompt }, {
@@ -278,6 +293,8 @@ async function main(): Promise<void> {
         clearActiveTurn();
         signal.removeEventListener("abort", onShutdown);
         approvalController.abort();
+        permissionPrompts.clearTurnContext();
+        approvals.clearTurnContext();
         activeTurnId = "no-active-turn";
       }
     }, { topicName: job.topicName });
@@ -406,6 +423,8 @@ async function main(): Promise<void> {
         store: cronStore,
         ref,
         mcpTools: () => mcpRegistry.getTools(),
+        scheduleExtractor: agent.modelAct,
+        userInteraction: userQuestions,
         createTopic: topics.createTopic,
       }),
   });
@@ -414,6 +433,7 @@ async function main(): Promise<void> {
     new CronDispatcher({
       store: cronStore,
       permissionPrompts,
+      approvals,
       signal: controller.signal,
       runner: {
         run: executeCronTurn,

@@ -1,6 +1,7 @@
 import type { TelegramConversationRef } from "../telegram/conversation.ts";
 import { telegramThreadKey } from "../telegram/conversation.ts";
-import type { CronPermissionProfile } from "./permissions.ts";
+import type { CronPermissionBrokerRule, CronPermissionProfile, CronPermissionToolRule } from "./permissions.ts";
+import type { CronSchedule } from "./schedule.ts";
 
 /** Controls whether a cron job gets a clean or retained chat session on each run. */
 export type CronSessionMode = "fresh" | "persistent";
@@ -11,10 +12,8 @@ export interface CronJob extends TelegramConversationRef {
   id: string;
   /** Prompt sent to the agent on each scheduled run. */
   prompt: string;
-  /** User-facing schedule text. */
-  scheduleText: string;
-  /** Time zone label for the v1 schedule. */
-  timezone: string;
+  /** Deterministic schedule data extracted from user-facing text. */
+  schedule: CronSchedule;
   /** ISO timestamp for the next due run. */
   nextRunAt: string;
   /** Whether dispatcher should execute this job. */
@@ -40,8 +39,7 @@ export interface CronJob extends TelegramConversationRef {
 /** Input for creating a cron job. */
 export interface CreateCronJobInput extends TelegramConversationRef {
   prompt: string;
-  scheduleText: string;
-  timezone: string;
+  schedule: CronSchedule;
   nextRunAt: string;
   sessionMode?: CronSessionMode;
   permissionProfile: CronPermissionProfile;
@@ -83,8 +81,7 @@ function createJob(input: CreateCronJobInput): CronJob {
     chatId: input.chatId,
     ...(input.threadId !== undefined ? { threadId: input.threadId } : {}),
     prompt: input.prompt,
-    scheduleText: input.scheduleText,
-    timezone: input.timezone,
+    schedule: input.schedule,
     nextRunAt: input.nextRunAt,
     enabled: true,
     sessionMode: input.sessionMode ?? "fresh",
@@ -99,6 +96,34 @@ function sortJobs(a: CronJob, b: CronJob): number {
   const byTime = a.nextRunAt.localeCompare(b.nextRunAt);
   if (byTime !== 0) return byTime;
   return a.id.localeCompare(b.id);
+}
+
+function includesToolRule(rules: CronPermissionToolRule[], candidate: CronPermissionToolRule): boolean {
+  return rules.some((rule) => rule.operation === candidate.operation && rule.target === candidate.target);
+}
+
+function includesBrokerRule(rules: CronPermissionBrokerRule[], candidate: CronPermissionBrokerRule): boolean {
+  return rules.some((rule) => rule.permission === candidate.permission && rule.value === candidate.value);
+}
+
+function mergePermissionProfile(
+  profile: CronPermissionProfile,
+  patch: {
+    toolRules?: CronPermissionToolRule[];
+    brokerRules?: CronPermissionBrokerRule[];
+  },
+): CronPermissionProfile {
+  const toolRules = [...profile.toolRules];
+  for (const rule of patch.toolRules ?? []) {
+    if (!includesToolRule(toolRules, rule)) toolRules.push(rule);
+  }
+
+  const brokerRules = [...profile.brokerRules];
+  for (const rule of patch.brokerRules ?? []) {
+    if (!includesBrokerRule(brokerRules, rule)) brokerRules.push(rule);
+  }
+
+  return { ...profile, toolRules, brokerRules };
 }
 
 /** Deno KV store for durable cron jobs and due indexes. */
@@ -195,6 +220,35 @@ export class CronJobStore {
     return result.ok ? updated : undefined;
   }
 
+  /** Adds exact preapproved permission rules to a cron job without duplicating existing rules. */
+  async addPermissionRules(
+    id: string,
+    patch: {
+      toolRules?: CronPermissionToolRule[];
+      brokerRules?: CronPermissionBrokerRule[];
+    },
+  ): Promise<CronJob | undefined> {
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const entry = await this._kv.get<CronJob>(jobKey(id));
+      const job = entry.value ? normalizeJob(entry.value) : undefined;
+      if (!job) return undefined;
+      const permissionProfile = mergePermissionProfile(job.permissionProfile, patch);
+      if (
+        permissionProfile.toolRules.length === job.permissionProfile.toolRules.length &&
+        permissionProfile.brokerRules.length === job.permissionProfile.brokerRules.length
+      ) {
+        return job;
+      }
+      const updated: CronJob = { ...job, permissionProfile, updatedAt: nowIso() };
+      const result = await this._kv.atomic()
+        .check(entry)
+        .set(jobKey(id), updated)
+        .commit();
+      if (result.ok) return updated;
+    }
+    throw new Error(`Cron job ${id} permission profile was not updated`);
+  }
+
   /** Marks a run successful and moves the due index to the next run. */
   async completeRun(id: string, result: { ranAt: string; nextRunAt: string }): Promise<CronJob | undefined> {
     const entry = await this._kv.get<CronJob>(jobKey(id));
@@ -217,6 +271,22 @@ export class CronJobStore {
     return committed.ok ? updated : undefined;
   }
 
+  /** Marks a one-shot run successful and removes the completed job. */
+  async completeOneShotRun(id: string, result: { ranAt: string }): Promise<CronJob | undefined> {
+    const entry = await this._kv.get<CronJob>(jobKey(id));
+    const job = entry.value ? normalizeJob(entry.value) : undefined;
+    if (!job) return undefined;
+    const completed: CronJob = { ...job, lastRunAt: result.ranAt, lastError: undefined, updatedAt: nowIso() };
+    const committed = await this._kv.atomic()
+      .check(entry)
+      .delete(jobKey(id))
+      .delete(chatKey(job.chatId, id))
+      .delete(dueKey(job.nextRunAt, id))
+      .delete(leaseKey(id))
+      .commit();
+    return committed.ok ? completed : undefined;
+  }
+
   /** Records a failed run, advances the due index, and releases the lease. */
   async failRun(
     id: string,
@@ -237,6 +307,27 @@ export class CronJobStore {
       .set(jobKey(id), updated)
       .delete(dueKey(job.nextRunAt, id))
       .set(dueKey(updated.nextRunAt, id), id)
+      .delete(leaseKey(id))
+      .commit();
+    return committed.ok ? updated : undefined;
+  }
+
+  /** Records a failed one-shot run, disables it, and removes it from the due index. */
+  async failOneShotRun(id: string, result: { failedAt: string; error: string }): Promise<CronJob | undefined> {
+    const entry = await this._kv.get<CronJob>(jobKey(id));
+    const job = entry.value ? normalizeJob(entry.value) : undefined;
+    if (!job) return undefined;
+    const updated: CronJob = {
+      ...job,
+      enabled: false,
+      lastFailedAt: result.failedAt,
+      lastError: result.error,
+      updatedAt: nowIso(),
+    };
+    const committed = await this._kv.atomic()
+      .check(entry)
+      .set(jobKey(id), updated)
+      .delete(dueKey(job.nextRunAt, id))
       .delete(leaseKey(id))
       .commit();
     return committed.ok ? updated : undefined;

@@ -5,8 +5,13 @@ import { type CreateCronJobInput, CronJobStore } from "../../src/cron/store.ts";
 const input: CreateCronJobInput = {
   chatId: 1,
   prompt: "Check Gmail and summarize actions.",
-  scheduleText: "Every morning at 8am",
-  timezone: "Europe/London",
+  schedule: {
+    kind: "recurring",
+    scheduleText: "Every morning at 8am",
+    timezone: "Europe/London",
+    cronExpression: "0 8 * * *",
+    recurrence: { kind: "daily", hour: 8, minute: 0 },
+  },
   nextRunAt: "2026-06-06T07:00:00.000Z",
   permissionProfile: {
     toolRules: [{ operation: "mcp", target: "gmail/search" }],
@@ -48,6 +53,30 @@ Deno.test("CronJobStore updates session mode", async () => {
   });
 });
 
+Deno.test("CronJobStore adds permission rules without duplicating existing rules", async () => {
+  await withStore(async (store) => {
+    const created = await store.create(input);
+
+    const updated = await store.addPermissionRules(created.id, {
+      toolRules: [
+        { operation: "mcp", target: "gmail/search" },
+        { operation: "write", target: "MEMORY.md" },
+      ],
+      brokerRules: [
+        { permission: "run", value: "/bin/zsh" },
+        { permission: "run", value: "/bin/zsh" },
+      ],
+    });
+
+    assertEquals(updated?.permissionProfile.toolRules, [
+      { operation: "mcp", target: "gmail/search" },
+      { operation: "write", target: "MEMORY.md" },
+    ]);
+    assertEquals(updated?.permissionProfile.brokerRules, [{ permission: "run", value: "/bin/zsh" }]);
+    assertEquals((await store.get(created.id))?.permissionProfile, updated?.permissionProfile);
+  });
+});
+
 Deno.test("CronJobStore lists due enabled jobs by nextRunAt", async () => {
   await withStore(async (store) => {
     const due = await store.create(input);
@@ -82,6 +111,56 @@ Deno.test("CronJobStore completes run by moving due index", async () => {
     assertEquals(updated?.lastRunAt, "2026-06-06T07:00:00.000Z");
     assertEquals(await store.listDue("2026-06-06T07:00:00.000Z"), []);
     assertEquals((await store.listDue("2026-06-07T07:00:00.000Z")).map((due) => due.id), [job.id]);
+  });
+});
+
+Deno.test("CronJobStore deletes successful one-shot jobs", async () => {
+  await withStore(async (store) => {
+    const job = await store.create({
+      ...input,
+      schedule: {
+        kind: "once",
+        scheduleText: "next Tuesday",
+        timezone: "Europe/London",
+        runAt: "2026-06-09T09:00:00.000Z",
+      },
+      nextRunAt: "2026-06-09T09:00:00.000Z",
+    });
+    await store.acquireLease(job.id, "2026-06-09T09:00:00.000Z", 60_000);
+
+    const deleted = await store.completeOneShotRun(job.id, { ranAt: "2026-06-09T09:00:00.000Z" });
+
+    assertEquals(deleted?.lastRunAt, "2026-06-09T09:00:00.000Z");
+    assertEquals(await store.get(job.id), undefined);
+    assertEquals(await store.listDue("2026-06-09T09:00:00.000Z"), []);
+    assertEquals(await store.listForChat(1), []);
+  });
+});
+
+Deno.test("CronJobStore disables failed one-shot jobs and removes them from due list", async () => {
+  await withStore(async (store) => {
+    const job = await store.create({
+      ...input,
+      schedule: {
+        kind: "once",
+        scheduleText: "next Tuesday",
+        timezone: "Europe/London",
+        runAt: "2026-06-09T09:00:00.000Z",
+      },
+      nextRunAt: "2026-06-09T09:00:00.000Z",
+    });
+    await store.acquireLease(job.id, "2026-06-09T09:00:00.000Z", 60_000);
+
+    const updated = await store.failOneShotRun(job.id, {
+      failedAt: "2026-06-09T09:00:00.000Z",
+      error: "permission denied",
+    });
+
+    assertEquals(updated?.enabled, false);
+    assertEquals(updated?.lastFailedAt, "2026-06-09T09:00:00.000Z");
+    assertEquals(updated?.lastError, "permission denied");
+    assertEquals(await store.listDue("2026-06-09T09:00:00.000Z"), []);
+    assertEquals((await store.listForChat(1)).map((listed) => listed.id), [job.id]);
   });
 });
 

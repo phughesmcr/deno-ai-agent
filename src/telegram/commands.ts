@@ -48,6 +48,8 @@ export interface CommandSession {
 export interface CommandCronSummary {
   /** Stable cron job id. */
   id: string;
+  /** Whether this schedule recurs or runs once. */
+  scheduleKind: "recurring" | "once";
   /** User-facing schedule text. */
   scheduleText: string;
   /** ISO timestamp for the next run. */
@@ -118,7 +120,7 @@ const CRON_USAGE =
 function formatCronSummary(summary: CommandCronSummary): string {
   const state = summary.enabled ? "" : " (disabled)";
   return [
-    `${summary.id} - ${summary.scheduleText} - ${summary.sessionMode} - next ${summary.nextRunAt}${state}`,
+    `${summary.id} - ${summary.scheduleKind} - ${summary.scheduleText} - ${summary.sessionMode} - next ${summary.nextRunAt}${state}`,
     `  ${summary.permissionSummary}`,
     `  ${summary.prompt}`,
   ].join("\n");

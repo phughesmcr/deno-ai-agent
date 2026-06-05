@@ -3,12 +3,24 @@ export { CronDispatcher, type CronDispatcherOptions, type CronJobRunner } from "
 export {
   createCronApprovalGate,
   createCronPermissionPromptPort,
+  type CronLocalToolPolicy,
   type CronPermissionBrokerRule,
   type CronPermissionProfile,
   type CronPermissionPromptPort,
   type CronPermissionToolRule,
 } from "./permissions.ts";
-export { nextDailyRunAtUtc, nextRunForScheduleText, parseCronNewInput, type ParsedCronNewInput } from "./schedule.ts";
+export {
+  cronExpressionForRecurrence,
+  type CronRecurrence,
+  type CronSchedule,
+  type CronScheduleExtractionRequest,
+  type CronScheduleExtractor,
+  defaultCronTimezone,
+  nextRunForSchedule,
+  normalizeCronSchedule,
+  parseRawExtractedCronSchedule,
+  type RawExtractedCronSchedule,
+} from "./schedule.ts";
 export {
   type CreateCronJobInput,
   cronConversationLabel,

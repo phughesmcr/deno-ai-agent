@@ -1,5 +1,5 @@
 import { type Chat, ChatMessage, type ChatMessageData, type LLM, type LMStudioClient, type Tool } from "@lmstudio/sdk";
-import { assert, assertEquals, assertStringIncludes } from "jsr:@std/assert@1";
+import { assert, assertEquals, assertRejects, assertStringIncludes } from "jsr:@std/assert@1";
 
 import type { ModelActObserver } from "../src/agent/context/session.ts";
 import { LmStudioAgentModelAct } from "../src/agent/model-act.ts";
@@ -15,6 +15,7 @@ interface FakeActOptions {
   allowParallelToolExecution?: boolean;
   maxTokens?: number;
   maxPredictionRounds?: number;
+  structured?: { type: "json"; jsonSchema?: unknown };
   signal?: AbortSignal;
   onMessage?: (message: ChatMessage) => void;
   onFirstToken?: (roundIndex: number) => void;
@@ -282,6 +283,105 @@ Deno.test("LmStudioAgentModelAct summarize uses truncateMiddle, no tools, and pr
     assertStringIncludes(summary, "<modified-files>\nsrc/b.ts\n</modified-files>");
     assertEquals(summary.includes("<think>"), false);
   });
+});
+
+Deno.test("LmStudioAgentModelAct extractCronSchedule returns validated JSON intent", async () => {
+  const sdkModel = new FakeSdkModel();
+  sdkModel.replies = [
+    JSON.stringify({
+      status: "ok",
+      prompt: "ls the cwd",
+      scheduleText: "every minute",
+      schedule: {
+        kind: "recurring",
+        recurrence: { kind: "interval", every: 1, unit: "minute" },
+      },
+    }),
+  ];
+  const signal = new AbortController().signal;
+  const port = new LmStudioAgentModelAct({ client: fakeLmClient(), model: sdkModel as unknown as LLM });
+
+  const result = await port.extractCronSchedule({
+    input: "every minute, ls the cwd",
+    now: new Date("2026-06-05T16:19:47.000Z"),
+    defaultTimezone: "Europe/London",
+    signal,
+  });
+
+  const call = sdkModel.actCalls[0];
+  assert(call);
+  assertEquals(call.tools, []);
+  assertEquals(call.options.signal, signal);
+  assertEquals(call.options.maxTokens, 1024);
+  assertEquals(call.options.maxPredictionRounds, 1);
+  assertEquals(call.options.structured?.type, "json");
+  assertEquals(snapshot(call.chat).at(0), [
+    "system",
+    "You extract cron scheduling intent and return strict JSON only.",
+  ]);
+  assertStringIncludes(snapshot(call.chat).at(-1)?.[1] ?? "", "Command: every minute, ls the cwd");
+  assertEquals(result, {
+    status: "ok",
+    prompt: "ls the cwd",
+    scheduleText: "every minute",
+    schedule: {
+      kind: "recurring",
+      recurrence: { kind: "interval", every: 1, unit: "minute" },
+    },
+  });
+});
+
+Deno.test("LmStudioAgentModelAct extractCronSchedule ignores thinking before JSON", async () => {
+  const sdkModel = new FakeSdkModel();
+  sdkModel.replies = [
+    [
+      "The user wants a recurring command. I should return JSON.",
+      "```json",
+      JSON.stringify({
+        status: "ok",
+        prompt: "ls the cwd",
+        scheduleText: "every minute",
+        schedule: {
+          kind: "recurring",
+          recurrence: { kind: "interval", every: 1, unit: "minute" },
+        },
+      }),
+      "```",
+    ].join("\n"),
+  ];
+  const port = new LmStudioAgentModelAct({ client: fakeLmClient(), model: sdkModel as unknown as LLM });
+
+  const result = await port.extractCronSchedule({
+    input: "every minute, ls the cwd",
+    now: new Date("2026-06-05T16:19:47.000Z"),
+    defaultTimezone: "Europe/London",
+  });
+
+  assertEquals(result, {
+    status: "ok",
+    prompt: "ls the cwd",
+    scheduleText: "every minute",
+    schedule: {
+      kind: "recurring",
+      recurrence: { kind: "interval", every: 1, unit: "minute" },
+    },
+  });
+});
+
+Deno.test("LmStudioAgentModelAct extractCronSchedule rejects malformed schedule JSON", async () => {
+  const sdkModel = new FakeSdkModel();
+  sdkModel.replies = [JSON.stringify({ status: "ok", prompt: "", scheduleText: "", schedule: {} })];
+  const port = new LmStudioAgentModelAct({ client: fakeLmClient(), model: sdkModel as unknown as LLM });
+
+  await assertRejects(
+    () =>
+      port.extractCronSchedule({
+        input: "every minute, ls the cwd",
+        now: new Date("2026-06-05T16:19:47.000Z"),
+        defaultTimezone: "Europe/London",
+      }),
+    Error,
+  );
 });
 
 Deno.test("LmStudioAgentModelAct runSubagent uses truncateMiddle tools and returns stripped final assistant text", async () => {
