@@ -5,7 +5,7 @@ import type { CommandCronManager, CommandCronSummary } from "../telegram/command
 import type { TelegramConversationRef } from "../telegram/conversation.ts";
 import type { CronPermissionProfile } from "./permissions.ts";
 import { parseCronNewInput } from "./schedule.ts";
-import type { CronJob, CronJobStore } from "./store.ts";
+import type { CronJob, CronJobStore, CronSessionMode } from "./store.ts";
 
 interface CronCommandManagerOptions {
   store: CronJobStore;
@@ -44,6 +44,7 @@ function toSummary(job: CronJob): CommandCronSummary {
     scheduleText: job.scheduleText,
     nextRunAt: job.nextRunAt,
     enabled: job.enabled,
+    sessionMode: job.sessionMode,
     prompt: job.prompt,
     permissionSummary: permissionSummary(job.permissionProfile),
   };
@@ -96,5 +97,9 @@ export class CronCommandManager implements CommandCronManager {
 
   async delete(id: string): Promise<boolean> {
     return (await this._store.delete(id)) !== undefined;
+  }
+
+  async setMode(id: string, mode: CronSessionMode): Promise<boolean> {
+    return (await this._store.setSessionMode(id, mode)) !== undefined;
   }
 }

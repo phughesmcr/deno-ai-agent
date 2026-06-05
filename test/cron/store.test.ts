@@ -30,9 +30,21 @@ Deno.test("CronJobStore creates, lists, and deletes chat jobs", async () => {
 
     assertEquals(listed.map((job) => job.id), [created.id]);
     assertEquals(listed[0]?.prompt, input.prompt);
+    assertEquals(listed[0]?.sessionMode, "fresh");
 
     await store.delete(created.id);
     assertEquals(await store.listForChat(1), []);
+  });
+});
+
+Deno.test("CronJobStore updates session mode", async () => {
+  await withStore(async (store) => {
+    const created = await store.create(input);
+
+    const updated = await store.setSessionMode(created.id, "persistent");
+
+    assertEquals(updated?.sessionMode, "persistent");
+    assertEquals((await store.get(created.id))?.sessionMode, "persistent");
   });
 });
 

@@ -33,3 +33,25 @@ Deno.test("CronCommandManager creates a dedicated topic for new cron jobs", asyn
     assertEquals(text.includes("Topic: Cron: every 2 minutes"), true);
   });
 });
+
+Deno.test("CronCommandManager changes cron session mode", async () => {
+  await withStore(async (store) => {
+    const created = await store.create({
+      chatId: 123,
+      threadId: 99,
+      prompt: "Review code",
+      scheduleText: "every 1 hours",
+      timezone: "UTC",
+      nextRunAt: "2026-06-06T08:00:00.000Z",
+      permissionProfile: { toolRules: [], brokerRules: [] },
+    });
+    const manager = new CronCommandManager({
+      store,
+      ref: { chatId: 123 },
+      mcpTools: () => [],
+    });
+
+    assertEquals(await manager.setMode(created.id, "persistent"), true);
+    assertEquals((await store.get(created.id))?.sessionMode, "persistent");
+  });
+});

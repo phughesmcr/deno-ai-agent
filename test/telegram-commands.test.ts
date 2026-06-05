@@ -124,6 +124,7 @@ class FakeCronManager implements CommandCronManager {
       scheduleText: "Every morning at 8am",
       nextRunAt: "2026-06-06T08:00:00.000Z",
       enabled: true,
+      sessionMode: "fresh" as const,
       prompt: "Check Gmail.",
       permissionSummary: "mcp:gmail/search",
     },
@@ -141,6 +142,10 @@ class FakeCronManager implements CommandCronManager {
   delete(id: string): Promise<boolean> {
     this.deleted.push(id);
     return Promise.resolve(id === "cron-a");
+  }
+
+  setMode(id: string, mode: "fresh" | "persistent"): Promise<boolean> {
+    return Promise.resolve(id === "cron-a" && mode === "persistent");
   }
 }
 
@@ -255,13 +260,17 @@ Deno.test("TelegramCommandHandler returns text for cron commands", async () => {
     await handler.cron("list"),
     [
       "Cron jobs:",
-      "cron-a - Every morning at 8am - next 2026-06-06T08:00:00.000Z",
+      "cron-a - Every morning at 8am - fresh - next 2026-06-06T08:00:00.000Z",
       "  mcp:gmail/search",
       "  Check Gmail.",
     ].join("\n"),
   );
   assertEquals(await handler.cron("del cron-a"), "Deleted cron job cron-a.");
   assertEquals(await handler.cron("del missing"), "Cron job not found: missing");
+  assertEquals(
+    await handler.cron("mode cron-a persistent"),
+    "Cron job cron-a session mode set to persistent.",
+  );
 });
 
 Deno.test("TelegramCommandHandler returns cron usage without a configured manager", async () => {
@@ -269,6 +278,6 @@ Deno.test("TelegramCommandHandler returns cron usage without a configured manage
 
   assertEquals(
     await handler.cron(),
-    "Usage: /cron new Every morning at 8am, <prompt>\n/cron list\n/cron del <id>",
+    "Usage: /cron new Every morning at 8am, <prompt>\n/cron list\n/cron del <id>\n/cron mode <id> <fresh|persistent>",
   );
 });

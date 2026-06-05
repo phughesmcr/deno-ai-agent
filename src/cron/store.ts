@@ -2,6 +2,9 @@ import type { TelegramConversationRef } from "../telegram/conversation.ts";
 import { telegramThreadKey } from "../telegram/conversation.ts";
 import type { CronPermissionProfile } from "./permissions.ts";
 
+/** Controls whether a cron job gets a clean or retained chat session on each run. */
+export type CronSessionMode = "fresh" | "persistent";
+
 /** Durable user-created cron job. */
 export interface CronJob extends TelegramConversationRef {
   /** Stable job id. */
@@ -16,6 +19,8 @@ export interface CronJob extends TelegramConversationRef {
   nextRunAt: string;
   /** Whether dispatcher should execute this job. */
   enabled: boolean;
+  /** Whether each run uses a fresh or retained chat session. */
+  sessionMode: CronSessionMode;
   /** Explicit background permissions for this job. */
   permissionProfile: CronPermissionProfile;
   /** ISO timestamp for job creation. */
@@ -38,6 +43,7 @@ export interface CreateCronJobInput extends TelegramConversationRef {
   scheduleText: string;
   timezone: string;
   nextRunAt: string;
+  sessionMode?: CronSessionMode;
   permissionProfile: CronPermissionProfile;
   topicName?: string;
 }
@@ -81,6 +87,7 @@ function createJob(input: CreateCronJobInput): CronJob {
     timezone: input.timezone,
     nextRunAt: input.nextRunAt,
     enabled: true,
+    sessionMode: input.sessionMode ?? "fresh",
     permissionProfile: input.permissionProfile,
     createdAt: now,
     updatedAt: now,
@@ -118,7 +125,7 @@ export class CronJobStore {
   /** Returns one job by id. */
   async get(id: string): Promise<CronJob | undefined> {
     const entry = await this._kv.get<CronJob>(jobKey(id));
-    return entry.value ?? undefined;
+    return entry.value ? normalizeJob(entry.value) : undefined;
   }
 
   /** Lists enabled and disabled cron jobs for one Telegram chat. */
@@ -146,7 +153,7 @@ export class CronJobStore {
   /** Deletes a cron job and its indexes. */
   async delete(id: string): Promise<CronJob | undefined> {
     const entry = await this._kv.get<CronJob>(jobKey(id));
-    const job = entry.value;
+    const job = entry.value ? normalizeJob(entry.value) : undefined;
     if (!job) return undefined;
     await this._kv.atomic()
       .check(entry)
@@ -164,7 +171,7 @@ export class CronJobStore {
       jobKey(id),
       leaseKey(id),
     ]);
-    const job = jobEntry.value;
+    const job = jobEntry.value ? normalizeJob(jobEntry.value) : undefined;
     if (!job?.enabled || leaseEntry.value) return undefined;
 
     const result = await this._kv.atomic()
@@ -175,10 +182,23 @@ export class CronJobStore {
     return result.ok ? job : undefined;
   }
 
+  /** Updates whether a cron job uses fresh or persistent sessions. */
+  async setSessionMode(id: string, sessionMode: CronSessionMode): Promise<CronJob | undefined> {
+    const entry = await this._kv.get<CronJob>(jobKey(id));
+    const job = entry.value ? normalizeJob(entry.value) : undefined;
+    if (!job) return undefined;
+    const updated: CronJob = { ...job, sessionMode, updatedAt: nowIso() };
+    const result = await this._kv.atomic()
+      .check(entry)
+      .set(jobKey(id), updated)
+      .commit();
+    return result.ok ? updated : undefined;
+  }
+
   /** Marks a run successful and moves the due index to the next run. */
   async completeRun(id: string, result: { ranAt: string; nextRunAt: string }): Promise<CronJob | undefined> {
     const entry = await this._kv.get<CronJob>(jobKey(id));
-    const job = entry.value;
+    const job = entry.value ? normalizeJob(entry.value) : undefined;
     if (!job) return undefined;
     const updated: CronJob = {
       ...job,
@@ -203,7 +223,7 @@ export class CronJobStore {
     result: { failedAt: string; nextRunAt: string; error: string },
   ): Promise<CronJob | undefined> {
     const entry = await this._kv.get<CronJob>(jobKey(id));
-    const job = entry.value;
+    const job = entry.value ? normalizeJob(entry.value) : undefined;
     if (!job) return undefined;
     const updated: CronJob = {
       ...job,
@@ -221,6 +241,10 @@ export class CronJobStore {
       .commit();
     return committed.ok ? updated : undefined;
   }
+}
+
+function normalizeJob(job: CronJob): CronJob {
+  return { ...job, sessionMode: job.sessionMode ?? "fresh" };
 }
 
 /** Stable label for cron job Telegram conversations. */

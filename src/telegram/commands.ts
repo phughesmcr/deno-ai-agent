@@ -54,6 +54,8 @@ export interface CommandCronSummary {
   nextRunAt: string;
   /** Whether the cron job is enabled. */
   enabled: boolean;
+  /** Whether each run starts fresh or retains the prior session. */
+  sessionMode: "fresh" | "persistent";
   /** Prompt sent to the agent when the job runs. */
   prompt: string;
   /** One-line permission profile summary. */
@@ -68,6 +70,8 @@ export interface CommandCronManager {
   list(): Promise<CommandCronSummary[]>;
   /** Deletes a cron job by id. */
   delete(id: string): Promise<boolean>;
+  /** Changes whether a cron job uses a fresh or persistent session. */
+  setMode(id: string, mode: "fresh" | "persistent"): Promise<boolean>;
 }
 
 function formatSessionLabel(status: Pick<SessionStatus, "id" | "name">): string {
@@ -108,12 +112,13 @@ function formatBindingLine(binding: TelegramTopicBindingSummary): string {
   return `${formatThreadLabel(binding)} -> ${binding.sessionId}`;
 }
 
-const CRON_USAGE = "Usage: /cron new Every morning at 8am, <prompt>\n/cron list\n/cron del <id>";
+const CRON_USAGE =
+  "Usage: /cron new Every morning at 8am, <prompt>\n/cron list\n/cron del <id>\n/cron mode <id> <fresh|persistent>";
 
 function formatCronSummary(summary: CommandCronSummary): string {
   const state = summary.enabled ? "" : " (disabled)";
   return [
-    `${summary.id} - ${summary.scheduleText} - next ${summary.nextRunAt}${state}`,
+    `${summary.id} - ${summary.scheduleText} - ${summary.sessionMode} - next ${summary.nextRunAt}${state}`,
     `  ${summary.permissionSummary}`,
     `  ${summary.prompt}`,
   ].join("\n");
@@ -249,6 +254,15 @@ export class TelegramCommandHandler {
       if (!id) return "Usage: /cron del <id>";
       const deleted = await this._cron.delete(id);
       return deleted ? `Deleted cron job ${id}.` : `Cron job not found: ${id}`;
+    }
+    if (command === "mode") {
+      const id = rest[0];
+      const mode = rest[1];
+      if (!id || (mode !== "fresh" && mode !== "persistent")) {
+        return "Usage: /cron mode <id> <fresh|persistent>";
+      }
+      const updated = await this._cron.setMode(id, mode);
+      return updated ? `Cron job ${id} session mode set to ${mode}.` : `Cron job not found: ${id}`;
     }
     return CRON_USAGE;
   }

@@ -225,7 +225,9 @@ async function main(): Promise<void> {
     );
 
     let actMs = 0;
-    await telegramSessions.replaceWithNew(ref, { topicName: job.topicName });
+    if (job.sessionMode === "fresh") {
+      await telegramSessions.replaceWithNew(ref, { topicName: job.topicName });
+    }
     await telegramSessions.withConversation(ref, async () => {
       const { tools, guardToolCall } = await createTurnToolSet({
         approvalGate,
