@@ -5,8 +5,6 @@ import type {
   SavedSessionSummary,
   SessionCompactionResult,
   SessionStatus,
-  SessionTurnOptions,
-  SessionTurnResult,
 } from "../../src/agent/mod.ts";
 import { TelegramSessionBindingStore } from "../../src/telegram/session-binding-store.ts";
 import { TelegramSessionCoordinator } from "../../src/telegram/session-coordinator.ts";
@@ -17,15 +15,6 @@ class FakeAgentSessions implements AgentSessions {
   savedIds: string[] = [];
   loadedRefs: string[] = [];
   loadError: Error | undefined;
-
-  turn(_input: string, _options: SessionTurnOptions): Promise<SessionTurnResult> {
-    return Promise.resolve({
-      replyTexts: [],
-      turnTokens: 0,
-      compacted: false,
-      totalTokens: 0,
-    });
-  }
 
   new(): SessionStatus {
     this.current = { id: this.nextIds.shift() ?? "created-fallback" };
@@ -71,12 +60,11 @@ class FakeAgentSessions implements AgentSessions {
     return Promise.resolve(this._status(true));
   }
 
-  _status(existsOnDisk: boolean): SessionStatus {
+  _status(persisted: boolean): SessionStatus {
     return {
       id: this.current.id,
       name: this.current.name,
-      dirty: false,
-      existsOnDisk,
+      persisted,
       messageCount: 1,
       tokenCount: 0,
       maxContextLength: 100,
@@ -121,6 +109,18 @@ Deno.test("TelegramSessionCoordinator loads an existing binding before operation
 
     assertEquals(status.id, "saved-topic");
     assertEquals(sessions.loadedRefs, ["saved-topic"]);
+  });
+});
+
+Deno.test("TelegramSessionCoordinator runs work in a specific saved session without rebinding", async () => {
+  await withCoordinator(async (coordinator, store, sessions) => {
+    await store.bind({ chatId: 1, threadId: 5 }, { sessionId: "bound-topic" });
+
+    const status = await coordinator.withSession("queued-session", () => sessions.status());
+
+    assertEquals(status.id, "queued-session");
+    assertEquals(sessions.loadedRefs, ["queued-session"]);
+    assertEquals((await store.get({ chatId: 1, threadId: 5 }))?.sessionId, "bound-topic");
   });
 });
 

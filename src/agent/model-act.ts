@@ -17,10 +17,11 @@ import {
   type RawExtractedCronSchedule,
 } from "../cron/schedule.ts";
 import { actReasoningParsingOption, persistedModelText } from "../shared/reasoning.ts";
+import type { ModelActObserver, ModelTurnOutput, ModelTurnPort, ModelTurnRequest } from "../core/mod.ts";
 import { prepareSummaryCompaction, type SummaryCompactionInput } from "./context/compactor.ts";
 import { materializeMessageForChat } from "./context/message-materialize.ts";
 import { chatMessageForPersistence } from "./context/persisted-message.ts";
-import type { ContextSummaryPort, ModelTurnOutput, ModelTurnPort, ModelTurnRequest } from "./context/session.ts";
+import type { ContextSummaryPort } from "./context/session.ts";
 
 /** @internal SDK exposes getRaw() at runtime but not in public types. */
 type ChatMessageWithRaw = ChatMessage & {
@@ -37,6 +38,8 @@ export interface SubagentActRequest {
   tools: Tool[];
   /** Signal that cancels the active subagent act. */
   signal: AbortSignal;
+  /** Optional telemetry observer for model callback events. */
+  observer?: ModelActObserver;
 }
 
 /** Result of a read-only subagent model act. */
@@ -405,6 +408,8 @@ export class LmStudioAgentModelAct implements AgentModelActPort {
     chat.append("user", request.task);
 
     let result = "";
+    const actStarted = performance.now();
+    let firstTokenMs: number | undefined;
     await this._model.act(chat, request.tools, {
       ...(getActDraftModel() ?? {}),
       ...actReasoningParsingOption(),
@@ -413,9 +418,35 @@ export class LmStudioAgentModelAct implements AgentModelActPort {
       maxTokens: 4096,
       maxPredictionRounds: getActMaxPredictionRounds(),
       onMessage: (message) => {
+        request.observer?.onMessage();
         if (message.getRole() !== "assistant") return;
         const text = message.getText();
         if (text) result = persistedModelText(text);
+      },
+      onFirstToken: (roundIndex) => {
+        const ms = performance.now() - actStarted;
+        if (firstTokenMs === undefined) firstTokenMs = ms;
+        request.observer?.onFirstToken(roundIndex, ms);
+      },
+      onRoundStart: (roundIndex) => request.observer?.onRoundStart(roundIndex),
+      onRoundEnd: (roundIndex) => request.observer?.onRoundEnd(roundIndex),
+      onToolCallRequestDequeued: (roundIndex, callId) => {
+        request.observer?.onToolCallRequestDequeued(roundIndex, callId);
+      },
+      onToolCallRequestEnd: (roundIndex, callId, info) => {
+        request.observer?.onToolCallRequestEnd(roundIndex, callId, info.toolCallRequest.name, info.isQueued);
+      },
+      onToolCallRequestFailure: (_roundIndex, callId, error) => {
+        request.observer?.onToolCallRequestFailure(callId, error.message);
+      },
+      onToolCallRequestFinalized: (_roundIndex, callId, info) => {
+        request.observer?.onToolCallRequestFinalized(callId, info.toolCallRequest.name);
+      },
+      onToolCallRequestNameReceived: (_roundIndex, callId, name) => {
+        request.observer?.onToolCallRequestNameReceived(callId, name);
+      },
+      onToolCallRequestStart: (roundIndex, callId, info) => {
+        request.observer?.onToolCallRequestStart(roundIndex, callId, info.toolCallId);
       },
       signal: request.signal,
     });

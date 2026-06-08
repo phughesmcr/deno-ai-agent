@@ -10,7 +10,7 @@ import {
   formatControlMessage,
   parseControlMessage,
 } from "./control-protocol.ts";
-import { logDebug } from "./log.ts";
+import { errorMessage, logDebug } from "./log.ts";
 import type { PermissionPromptPort } from "./permission-prompt-port.ts";
 
 /** Options for the permission broker control client. */
@@ -18,9 +18,11 @@ export interface ControlClientOptions {
   controlPath: string;
   promptPort: PermissionPromptPort;
   reconnectDelayMs?: number;
+  heartbeatIntervalMs?: number;
 }
 
 const controlReady = Promise.withResolvers<void>();
+const CONTROL_HEARTBEAT_INTERVAL_MS = 30_000;
 let controlReadyResolve: (() => void) | undefined = controlReady.resolve;
 
 /** Resolves once the control client has connected and sent `register` to the broker. */
@@ -69,7 +71,12 @@ export async function runPermissionControlClient(
           markControlReady();
         }
         // deno-lint-ignore no-await-in-loop -- Serving one control connection completes before reconnecting.
-        await serveControl(conn, options.promptPort, signal);
+        await serveControl(
+          conn,
+          options.promptPort,
+          signal,
+          options.heartbeatIntervalMs ?? CONTROL_HEARTBEAT_INTERVAL_MS,
+        );
       } finally {
         detachControlConnection();
         conn.close();
@@ -77,7 +84,7 @@ export async function runPermissionControlClient(
     } catch (error) {
       if (signal.aborted) return;
       logDebug("permission_broker.control_error", {
-        message: error instanceof Error ? error.message : String(error),
+        message: errorMessage(error),
       });
       // deno-lint-ignore no-await-in-loop -- Backoff belongs between sequential reconnect attempts.
       await new Promise((resolve) => setTimeout(resolve, delay));
@@ -89,7 +96,14 @@ async function serveControl(
   conn: Deno.Conn,
   port: PermissionPromptPort,
   signal: AbortSignal,
+  heartbeatIntervalMs: number,
 ): Promise<void> {
+  const heartbeatId = setInterval(() => {
+    void sendHeartbeat(conn, port, signal);
+  }, heartbeatIntervalMs);
+  using heartbeatCleanup = { [Symbol.dispose]: () => clearInterval(heartbeatId) };
+  void heartbeatCleanup;
+
   const abortHandler = (): void => {
     port.abortPending();
     conn.close();
@@ -109,6 +123,23 @@ async function serveControl(
     }
   } finally {
     signal.removeEventListener("abort", abortHandler);
+  }
+}
+
+async function sendHeartbeat(conn: Deno.Conn, port: PermissionPromptPort, signal: AbortSignal): Promise<void> {
+  if (signal.aborted) return;
+  try {
+    await writeControlLine(
+      formatControlMessage({
+        type: "heartbeat",
+        pid: Deno.pid,
+        sentAt: new Date().toISOString(),
+      }),
+      signal,
+    );
+  } catch {
+    port.abortPending();
+    conn.close();
   }
 }
 

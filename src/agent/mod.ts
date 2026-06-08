@@ -1,34 +1,28 @@
 export { McpRegistry, type McpRegistryOptions } from "../mcp/mod.ts";
-export { recordActDuration } from "./act-telemetry.ts";
 export {
-  type PreparedSummaryCompaction,
-  prepareSummaryCompaction,
-  type SummaryCompactionInput,
-  type SummaryCompactor,
-} from "./context/compactor.ts";
-export {
-  FORMAT_VERSION,
-  type SessionCompactionEntry,
-  type SessionEntry,
-  type SessionFileDetails,
-  type SessionHeader,
-  type SessionLog,
-  type SessionMessageEntry,
-  SessionStore,
-} from "./context/session-store.ts";
-export {
-  type AgentSessions,
-  type ContextSummaryPort,
+  type GuardedToolCallRequest,
   type ModelActObserver,
   type ModelTurnOutput,
   type ModelTurnPort,
   type ModelTurnRequest,
-  PersistentAgentSessions,
+  type ToolCallGuard,
+  type ToolCallGuardController,
+} from "../core/mod.ts";
+export { createModelActObserver, recordActDuration, tokenBucket } from "./act-telemetry.ts";
+export {
+  type PreparedSummaryCompaction,
+  prepareSummaryCompaction,
+  type SessionFileDetails,
+  type SummaryCompactionInput,
+  type SummaryCompactor,
+} from "./context/compactor.ts";
+export {
+  type AgentSessions,
+  type ContextSummaryPort,
+  DurableAgentSessions,
   type SavedSessionSummary,
   type SessionCompactionResult,
   type SessionStatus,
-  type SessionTurnOptions,
-  type SessionTurnResult,
 } from "./context/session.ts";
 export { createLMStudioManager, type LMStudioManager } from "./lmstudio.ts";
 export {
@@ -37,7 +31,7 @@ export {
   type SubagentActRequest,
   type SubagentActResult,
 } from "./model-act.ts";
-export { type Agent, createAgent, type CreateAgentOptions, runTurn, type TurnResult } from "./runtime.ts";
+export { type Agent, createAgent, type CreateAgentOptions } from "./runtime.ts";
 export {
   createSkillManager,
   type CreateSkillManagerOptions,
@@ -49,10 +43,12 @@ export {
 export {
   createReadOnlySubagentTools,
   createUnavailableSubagentPort,
-  SubagentJobService,
-  type SubagentJobServiceOptions,
+  type RunSubagentWorkOptions,
   type SubagentPort,
   type SubagentRecord,
+  type SubagentRecoveryResult,
+  SubagentRuntime,
+  type SubagentRuntimeOptions,
   type SubagentSpawnSpec,
   type SubagentStatus,
 } from "./subagents.ts";
@@ -60,7 +56,6 @@ export {
   type AgentToolDeps,
   allToolNames,
   type AskUserQuestionParams,
-  type AskUserQuestionPort,
   copyTodosForSession,
   createAskUserQuestionTool,
   createNoopTodoDisplayPort,
@@ -69,7 +64,7 @@ export {
   createToolCallGuard,
   createToolContext,
   createTypeScriptReplTool,
-  createUnavailableAskUserQuestionPort,
+  createUnavailableUserInteractionPort,
   DenoKvTodoStore,
   detectTodoChanges,
   formatAnswers,
@@ -99,8 +94,6 @@ export {
   type TodoUpdatePayload,
   type TodoWriteDeps,
   type TodoWriteParams,
-  type ToolCallGuard,
-  type ToolCallGuardController,
   type ToolContext,
   type ToolContextOptions,
   type ToolName,
@@ -115,7 +108,13 @@ export {
   validateTodoWriteParams,
   writeTodoFile,
 } from "./tools/index.ts";
-export { normalizeUserTurnInput, type UserTurnInput } from "./user-turn.ts";
+export {
+  type DurableUserImage,
+  normalizeUserTurnInput,
+  userTurnImageCount,
+  type UserTurnInput,
+  userTurnMessageData,
+} from "./user-turn.ts";
 export { WorkspaceSandbox } from "./workspace-sandbox.ts";
 export {
   createWorkspace,

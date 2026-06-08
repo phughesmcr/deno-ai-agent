@@ -102,7 +102,7 @@ async function sendOrEditTodoMessage(
   }
 }
 
-/** Shows or updates the todo status message for a session (used by /todos command). @internal */
+/** Shows or updates the todo status message for a session (used by /todo and /todos). @internal */
 export async function showTodosForSession(
   ctx: TodoDisplayContext,
   sessionId: string,

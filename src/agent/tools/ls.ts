@@ -2,9 +2,13 @@ import type { Tool } from "@lmstudio/sdk";
 import * as path from "@std/path";
 import { z } from "zod/v3";
 
-import type { ApprovalRequest } from "../../shared/approval.ts";
 import type { ToolContext } from "./context.ts";
-import { type AgentToolDefinition, type AgentToolDeps, toolFromDefinition } from "./definitions.ts";
+import {
+  type AgentToolCapabilityRequestSpec,
+  type AgentToolDefinition,
+  type AgentToolDeps,
+  toolFromDefinition,
+} from "./definitions.ts";
 import { DEFAULT_MAX_BYTES, formatSize, truncateHead } from "./truncate.ts";
 
 const DEFAULT_LIMIT = 500;
@@ -23,7 +27,7 @@ export const lsToolDefinition: AgentToolDefinition<typeof lsParameters> = {
       DEFAULT_MAX_BYTES / 1024
     }KB (whichever is hit first).`,
   parameters: lsParameters,
-  authorize: async ({ path: userPath, limit }, deps): Promise<ApprovalRequest> => {
+  authorize: async ({ path: userPath, limit }, deps): Promise<AgentToolCapabilityRequestSpec> => {
     const effectiveLimit = limit ?? DEFAULT_LIMIT;
     const op = await deps.workspace.fs.operation({
       operation: "list",
@@ -32,7 +36,7 @@ export const lsToolDefinition: AgentToolDefinition<typeof lsParameters> = {
       require: "existingDirectory",
       summary: `list directory, limit=${effectiveLimit}`,
     });
-    return op.approvalRequest();
+    return op.capabilityRequest();
   },
   run: async ({ path: userPath, limit }, deps): Promise<string> => {
     const ctx = deps.workspace;

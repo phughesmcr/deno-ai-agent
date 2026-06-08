@@ -1,4 +1,5 @@
 import { assertEquals } from "jsr:@std/assert@1/equals";
+import { assertStringIncludes } from "jsr:@std/assert@1/string-includes";
 import type { SavedSessionSummary, SessionStatus } from "../src/agent/context/session.ts";
 import {
   type CommandCronManager,
@@ -42,8 +43,7 @@ class FakeSession {
   statusValue: SessionStatus = {
     id: "current",
     name: "active",
-    dirty: false,
-    existsOnDisk: true,
+    persisted: true,
     messageCount: 3,
     tokenCount: 25,
     maxContextLength: 100,
@@ -57,7 +57,7 @@ class FakeSession {
 
   new(): Promise<SessionStatus> {
     this.current = { id: "new-id" };
-    this.statusValue = { ...this.statusValue, id: "new-id", name: undefined, dirty: false, existsOnDisk: false };
+    this.statusValue = { ...this.statusValue, id: "new-id", name: undefined, persisted: false };
     return Promise.resolve({ ...this.statusValue });
   }
 
@@ -77,8 +77,7 @@ class FakeSession {
       ...this.statusValue,
       id: this.current.id,
       name: ref === "archived" ? undefined : this.statusValue.name,
-      dirty: false,
-      existsOnDisk: true,
+      persisted: true,
     };
     return this.status();
   }
@@ -167,15 +166,14 @@ Deno.test("formatSessionStatus renders name, persistence, messages, and token fi
     formatSessionStatus({
       id: "abc",
       name: "demo",
-      dirty: true,
-      existsOnDisk: true,
+      persisted: true,
       messageCount: 8,
       tokenCount: 33,
       maxContextLength: 100,
     }),
     [
       "Session: demo (abc)",
-      "State: saved (unsaved changes)",
+      "State: saved",
       "Messages: 8",
       "Tokens: 33 / 100 (33%)",
     ].join("\n"),
@@ -199,6 +197,7 @@ Deno.test("TelegramCommandHandler returns text for successful session commands",
   const { handler, session } = createHandler();
 
   assertEquals(handler.help(), SESSION_HELP);
+  assertStringIncludes(handler.help(), "/cron new|list|del|mode");
   assertEquals(await handler.newSession(), "New session bound to this Telegram conversation.\nID: new-id");
   assertEquals(await handler.save(), "Saved.\nnew-id");
   assertEquals(await handler.compact("keep file paths"), "Compacted.\nTokens before: 90\nTokens after: 30");
@@ -260,7 +259,18 @@ Deno.test("TelegramCommandHandler returns user-facing command failure text", asy
   assertEquals(await handler.rename("bad"), "Rename failed: Invalid session name");
   assertEquals(await handler.fork(), "Fork failed: cannot fork");
   assertEquals(await handler.compact(), "Compaction failed: model unavailable");
-  assertEquals(await handler.list(), "No saved sessions. /save writes the current chat.");
+  assertEquals(await handler.list(), "No saved sessions. /save persists the current chat.");
+});
+
+Deno.test("TelegramCommandHandler surfaces v4-only load failures", async () => {
+  const session = new FakeSession();
+  session.loadError = new Error("Legacy sessions unsupported after durable v4 rewrite. Start a new session instead.");
+  const { handler } = createHandler(undefined, session);
+
+  assertEquals(
+    await handler.load("old-session"),
+    "Load failed: Legacy sessions unsupported after durable v4 rewrite. Start a new session instead.",
+  );
 });
 
 Deno.test("TelegramCommandHandler returns text for cron commands", async () => {

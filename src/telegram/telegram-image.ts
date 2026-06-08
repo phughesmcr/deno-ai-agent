@@ -3,6 +3,7 @@
 import type { FileHandle, LMStudioClient } from "@lmstudio/sdk";
 import type { Api } from "grammy";
 import type { Message } from "grammy/types";
+import type { DurableUserImage } from "../agent/user-turn.ts";
 
 /** Default user text when an image has no caption. */
 export const DEFAULT_IMAGE_PROMPT = "Describe this image.";
@@ -114,10 +115,27 @@ export async function prepareTelegramImages(
   client: LMStudioClient,
   items: TelegramImageItem[],
 ): Promise<FileHandle[]> {
-  const handles: FileHandle[] = [];
+  return await prepareDurableUserImages(client, await durableTelegramImages(items));
+}
+
+/** Converts Telegram image bytes into durable base64 payloads for queued work. */
+export async function durableTelegramImages(items: TelegramImageItem[]): Promise<DurableUserImage[]> {
+  const images: DurableUserImage[] = [];
   for (const item of items) {
     assertImageSize(item.bytes);
-    const handle = await client.files.prepareImageBase64(item.fileName, await bytesToBase64(item.bytes));
+    images.push({ fileName: item.fileName, base64: await bytesToBase64(item.bytes) });
+  }
+  return images;
+}
+
+/** Uploads durable image payloads to LM Studio and returns handles for the model. */
+export async function prepareDurableUserImages(
+  client: LMStudioClient,
+  images: readonly DurableUserImage[],
+): Promise<FileHandle[]> {
+  const handles: FileHandle[] = [];
+  for (const image of images) {
+    const handle = await client.files.prepareImageBase64(image.fileName, image.base64);
     handles.push(handle);
   }
   return handles;

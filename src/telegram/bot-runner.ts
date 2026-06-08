@@ -31,9 +31,9 @@ function telegramRunnerOptions(): RunOptions<TelegramContext["update"]> {
 }
 
 /**
- * Serializes plain messages per chat, but lets callback queries (approvals, pm:, questions)
+ * Serializes plain messages per chat, but lets callback queries (capability prompts, cp:, questions)
  * and `/q` run while a long `model.act()` turn is in progress. `bot.start()` would queue
- * callbacks behind the message handler and cause approval timeouts.
+ * callbacks behind the message handler and cause capability prompt timeouts.
  */
 export function installConcurrentUpdates(bot: Bot<TelegramContext>): void {
   const { sequentialize } = grammyRunner();

@@ -1,12 +1,4 @@
-import type {
-  AgentSessions,
-  SavedSessionSummary,
-  SessionCompactionResult,
-  SessionStatus,
-  SessionTurnOptions,
-  SessionTurnResult,
-} from "../agent/mod.ts";
-import type { UserTurnInput } from "../agent/user-turn.ts";
+import type { AgentSessions, SavedSessionSummary, SessionCompactionResult, SessionStatus } from "../agent/mod.ts";
 import type { TelegramConversationRef } from "./conversation.ts";
 import type { TelegramSessionBinding, TelegramSessionBindingStore } from "./session-binding-store.ts";
 
@@ -37,7 +29,7 @@ type QueuedOperation<T> = () => Promise<T> | T;
 
 /**
  * Routes Telegram conversations through the single mutable AgentSessions facade.
- * All operations are serialized because v1 shares one workspace and one in-memory session object.
+ * Operations are serialized because the facade exposes one current session identity at a time.
  */
 export class TelegramSessionCoordinator {
   private readonly _sessions: AgentSessions;
@@ -54,19 +46,6 @@ export class TelegramSessionCoordinator {
     return await this._exclusive(() => this._ensureLoaded(ref, metadata));
   }
 
-  /** Runs a model turn in the session bound to this Telegram conversation. */
-  async turn(
-    ref: TelegramConversationRef,
-    input: string | UserTurnInput,
-    options: SessionTurnOptions,
-    metadata?: BindMetadata,
-  ): Promise<SessionTurnResult> {
-    return await this._exclusive(async () => {
-      await this._ensureLoaded(ref, metadata);
-      return await this._sessions.turn(input, options);
-    });
-  }
-
   /** Runs custom work with the session for a conversation loaded and the global lock held. */
   async withConversation<T>(
     ref: TelegramConversationRef,
@@ -75,6 +54,14 @@ export class TelegramSessionCoordinator {
   ): Promise<T> {
     return await this._exclusive(async () => {
       await this._ensureLoaded(ref, metadata);
+      return await operation();
+    });
+  }
+
+  /** Runs custom work with a specific saved session loaded and the global session facade lock held. */
+  async withSession<T>(sessionId: string, operation: QueuedOperation<T>): Promise<T> {
+    return await this._exclusive(async () => {
+      await this._sessions.load(sessionId);
       return await operation();
     });
   }

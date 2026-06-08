@@ -4,7 +4,7 @@ import {
   normalizeBrokerValue,
   parseBrokerRequest,
 } from "../../src/permission-broker/protocol.ts";
-import { parseControlMessage } from "../../src/permission-broker/control-protocol.ts";
+import { formatControlMessage, parseControlMessage } from "../../src/permission-broker/control-protocol.ts";
 
 Deno.test("normalizeBrokerValue unwraps JSON string", () => {
   assertEquals(normalizeBrokerValue('"./README.md"'), "./README.md");
@@ -60,4 +60,30 @@ Deno.test("parseControlMessage rejects malformed control message shape", () => {
       result: "maybe",
     }))
   );
+});
+
+Deno.test("control heartbeat message round-trips", () => {
+  const line = formatControlMessage({
+    type: "heartbeat",
+    pid: 42,
+    sentAt: "2026-06-08T09:00:00.000Z",
+  });
+
+  assertEquals(parseControlMessage(line), {
+    type: "heartbeat",
+    pid: 42,
+    sentAt: "2026-06-08T09:00:00.000Z",
+  });
+});
+
+Deno.test("control abort message round-trips", () => {
+  const line = formatControlMessage({
+    type: "abort",
+    requestId: "request-1",
+  });
+
+  assertEquals(parseControlMessage(line), {
+    type: "abort",
+    requestId: "request-1",
+  });
 });

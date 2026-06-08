@@ -1,7 +1,7 @@
 import { type Chat, ChatMessage, type ChatMessageData, type LLM, type LMStudioClient, type Tool } from "@lmstudio/sdk";
 import { assert, assertEquals, assertRejects, assertStringIncludes } from "jsr:@std/assert@1";
 
-import type { ModelActObserver } from "../src/agent/context/session.ts";
+import type { ModelActObserver } from "../src/core/mod.ts";
 import { LmStudioAgentModelAct } from "../src/agent/model-act.ts";
 import { withEnv } from "./_env.ts";
 
@@ -394,12 +394,15 @@ Deno.test("LmStudioAgentModelAct runSubagent uses truncateMiddle tools and retur
     const port = new LmStudioAgentModelAct({ client: fakeLmClient(), model: sdkModel as unknown as LLM });
     const tools = [{ name: "read" }, { name: "grep" }] as unknown as Tool[];
     const signal = new AbortController().signal;
+    sdkModel.emitToolEvents = true;
+    const events: string[] = [];
 
     const result = await port.runSubagent({
       systemPrompt: "subagent system",
       task: "Inspect the repo",
       tools,
       signal,
+      observer: recordingObserver(events),
     });
 
     const call = sdkModel.actCalls[0];
@@ -413,6 +416,19 @@ Deno.test("LmStudioAgentModelAct runSubagent uses truncateMiddle tools and retur
       ["user", "Inspect the repo"],
     ]);
     assertEquals(result.text, "final result");
+    assertEquals(events, [
+      "round-start:0",
+      "first:0:number",
+      "tool-start:0:7:tool-1",
+      "tool-name:7:read",
+      "tool-end:0:7:read:true",
+      "tool-dequeued:0:7",
+      "tool-failure:8:tool failed",
+      "tool-finalized:7:read",
+      "message",
+      "message",
+      "round-end:0",
+    ]);
   });
 });
 

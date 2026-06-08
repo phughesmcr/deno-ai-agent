@@ -23,10 +23,14 @@ export type {
   ToolFilesystemTarget,
 } from "./tool-filesystem.ts";
 export {
+  type AgentRuntimeToolDefinition,
+  type AgentToolCapabilityRequestSpec,
   type AgentToolDefinition,
   type AgentToolDeps,
   type AgentToolDeps as ModelToolDeps,
   allToolNames,
+  runtimeToolFromDefinition,
+  toolFromRuntimeDefinition,
   type ToolName,
   type ToolParams,
 } from "./definitions.ts";
@@ -39,6 +43,9 @@ export {
   localToolDefinitions,
   type ModelToolSet,
   readOnlySubagentToolDefinitions,
+  type ToolCapabilityAuthorizer,
+  TurnAuthorization,
+  type TurnAuthorizationOptions,
 } from "./registry.ts";
 export { getShellCommand } from "./shell-command.ts";
 export { createSubagentTool } from "./subagent.ts";
@@ -73,8 +80,6 @@ export {
   UserQuestionDeclinedError,
 } from "./user-interaction.ts";
 export {
-  type AskUserQuestionPort,
-  createUnavailableAskUserQuestionPort,
   createUnavailableUserInteractionPort,
   type TurnTarget,
   type UserInteractionPort,

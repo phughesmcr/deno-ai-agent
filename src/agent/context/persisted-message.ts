@@ -12,7 +12,7 @@ function messageData(message: ChatMessage): ChatMessageData {
 }
 
 /**
- * Assistant message shaped for session chat and JSONL persistence.
+ * Assistant message shaped for durable event persistence.
  * @internal
  */
 export function chatMessageForPersistence(message: ChatMessage): ChatMessage {

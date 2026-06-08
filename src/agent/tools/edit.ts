@@ -1,9 +1,13 @@
 import type { Tool } from "@lmstudio/sdk";
 import { z } from "zod/v3";
 
-import type { ApprovalRequest } from "../../shared/approval.ts";
 import type { ToolContext } from "./context.ts";
-import { type AgentToolDefinition, type AgentToolDeps, toolFromDefinition } from "./definitions.ts";
+import {
+  type AgentToolCapabilityRequestSpec,
+  type AgentToolDefinition,
+  type AgentToolDeps,
+  toolFromDefinition,
+} from "./definitions.ts";
 import {
   applyEditsToNormalizedContent,
   detectLineEnding,
@@ -36,7 +40,7 @@ export const editToolDefinition: AgentToolDefinition<typeof editParameters> = {
   description:
     "Edit a file using exact text replacement. Each edits[].oldText must match a unique, non-overlapping region of the original file. Edits are matched against the original file, not incrementally.",
   parameters: editParameters,
-  authorize: async ({ path: userPath, edits }, deps): Promise<ApprovalRequest> => {
+  authorize: async ({ path: userPath, edits }, deps): Promise<AgentToolCapabilityRequestSpec> => {
     assertEdits(edits);
     const op = await deps.workspace.fs.operation({
       operation: "edit",
@@ -47,7 +51,7 @@ export const editToolDefinition: AgentToolDefinition<typeof editParameters> = {
       summary: `replace ${edits.length} block(s)`,
       mutationQueue: true,
     });
-    return op.approvalRequest();
+    return op.capabilityRequest();
   },
   run: async ({ path: userPath, edits }, deps): Promise<string> => {
     const ctx = deps.workspace;

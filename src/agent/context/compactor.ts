@@ -1,8 +1,10 @@
 import type { ChatMessageData, ToolCallRequest } from "@lmstudio/sdk";
 
+import type { SessionFileDetails, SummaryCompactionInput } from "../../core/mod.ts";
 import { persistedModelText } from "../../shared/reasoning.ts";
 import { imageFileParts } from "./message-materialize.ts";
-import type { SessionFileDetails } from "./session-store.ts";
+
+export type { SessionFileDetails, SummaryCompactionInput } from "../../core/mod.ts";
 
 const SKILL_CONTENT_PATTERN = /<skill_content name="([^"]+)">[\s\S]*?<\/skill_content>/g;
 const DEFAULT_TOOL_RESULT_LIMIT = 2_000;
@@ -32,23 +34,6 @@ Critical Context
 - ...
 
 Preserve concrete user instructions, active plans, file paths, decisions, blockers, and details needed to continue work.`;
-
-/**
- * Input used to generate a structured compaction checkpoint.
- * @internal
- */
-export interface SummaryCompactionInput {
-  /** Current system prompt to apply while asking the model for a summary. */
-  systemPrompt: string;
-  /** Previous checkpoint summary, when this compaction updates an earlier checkpoint. */
-  previousSummary?: string;
-  /** Raw message data to fold into the checkpoint. */
-  messages: ChatMessageData[];
-  /** Optional user-supplied manual compaction instructions. */
-  instructions?: string;
-  /** Cumulative file context to include in the checkpoint. */
-  details: SessionFileDetails;
-}
 
 /** Function that generates a structured checkpoint summary. */
 export type SummaryCompactor = (input: SummaryCompactionInput) => Promise<string>;

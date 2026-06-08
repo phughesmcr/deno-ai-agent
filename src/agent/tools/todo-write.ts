@@ -1,11 +1,16 @@
 import type { Tool } from "@lmstudio/sdk";
 import { z } from "zod/v3";
 
-import type { ApprovalRequest } from "../../shared/approval.ts";
+import { errorMessage } from "../../shared/error.ts";
 import { logDebug } from "../../shared/log.ts";
 import { requestForOperation, todoKvDisplayPath } from "./approval-support.ts";
 import type { ToolContext } from "./context.ts";
-import { type AgentToolDefinition, type AgentToolDeps, toolFromDefinition } from "./definitions.ts";
+import {
+  type AgentToolCapabilityRequestSpec,
+  type AgentToolDefinition,
+  type AgentToolDeps,
+  toolFromDefinition,
+} from "./definitions.ts";
 import type { TodoDisplayPort } from "./todo-display-port.ts";
 
 export type TodoStatus = "pending" | "in_progress" | "completed";
@@ -392,7 +397,7 @@ export const todoWriteToolDefinition: AgentToolDefinition<typeof todoWriteParame
   name: "todo_write",
   description: TODO_WRITE_DESCRIPTION,
   parameters: todoWriteParameters,
-  authorize: ({ todos }, deps): ApprovalRequest => {
+  authorize: ({ todos }, deps): AgentToolCapabilityRequestSpec => {
     const sessionId = deps.todos.getSessionId();
     return requestForOperation(deps.workspace, {
       operation: "todo",
@@ -418,7 +423,7 @@ async function runTodoWrite(params: TodoWriteParams, deps: TodoWriteDeps): Promi
   try {
     updateResult = await deps.store.updateTodos(sessionId, params.todos);
   } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
+    const message = errorMessage(error);
     logDebug("todo_write.persist_error", { sessionId, message });
     return `Failed to modify todos. An error occurred during the operation.
 
@@ -436,7 +441,7 @@ Todo list modification failed with error: ${message}. You may need to retry or h
         telegram: updateResult.telegram,
       });
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
+      const message = errorMessage(error);
       logDebug("todo_write.display_error", { sessionId, message });
     }
   }

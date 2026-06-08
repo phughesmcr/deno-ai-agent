@@ -1,6 +1,7 @@
 import type { Tool } from "@lmstudio/sdk";
 import { z } from "zod/v3";
 
+import { errorMessage } from "../../shared/error.ts";
 import { type AgentToolDefinition, type AgentToolDeps, toolFromDefinition } from "./definitions.ts";
 import { UserQuestionDeclinedError } from "./user-interaction.ts";
 import { cursorQuestionsToAnswers, type UserInteractionPort } from "./user-question-port.ts";
@@ -170,7 +171,7 @@ export const askUserQuestionToolDefinition: AgentToolDefinition<typeof askUserQu
       if (error instanceof UserQuestionDeclinedError) {
         return error.message;
       }
-      const message = error instanceof Error ? error.message : String(error);
+      const message = errorMessage(error);
       return `Failed to process user answers: ${message}`;
     }
   },

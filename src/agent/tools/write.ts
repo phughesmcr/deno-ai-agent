@@ -2,9 +2,13 @@ import type { Tool } from "@lmstudio/sdk";
 import * as path from "@std/path";
 import { z } from "zod/v3";
 
-import type { ApprovalRequest } from "../../shared/approval.ts";
 import type { ToolContext } from "./context.ts";
-import { type AgentToolDefinition, type AgentToolDeps, toolFromDefinition } from "./definitions.ts";
+import {
+  type AgentToolCapabilityRequestSpec,
+  type AgentToolDefinition,
+  type AgentToolDeps,
+  toolFromDefinition,
+} from "./definitions.ts";
 
 const writeParameters = {
   path: z.string().describe(
@@ -18,7 +22,7 @@ export const writeToolDefinition: AgentToolDefinition<typeof writeParameters> = 
   description:
     "Write content to a file. Creates the file if it doesn't exist, overwrites if it does. Automatically creates parent directories.",
   parameters: writeParameters,
-  authorize: async ({ path: userPath, content }, deps): Promise<ApprovalRequest> => {
+  authorize: async ({ path: userPath, content }, deps): Promise<AgentToolCapabilityRequestSpec> => {
     const op = await deps.workspace.fs.operation({
       operation: "write",
       path: userPath,
@@ -27,7 +31,7 @@ export const writeToolDefinition: AgentToolDefinition<typeof writeParameters> = 
       summary: `write ${content.length} bytes`,
       mutationQueue: true,
     });
-    return op.approvalRequest();
+    return op.capabilityRequest();
   },
   run: async ({ path: userPath, content }, deps): Promise<string> => {
     const ctx = deps.workspace;

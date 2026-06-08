@@ -147,7 +147,7 @@ Deno.test("ToolFilesystem strips path quotes and expands host tilde paths", asyn
   }
 });
 
-Deno.test("ToolFilesystem approval requests match workspace and host risk behavior", async () => {
+Deno.test("ToolFilesystem capability requests match workspace and host risk behavior", async () => {
   const outside = await Deno.makeTempDir({ prefix: "silas-outside-" });
   const { dir, ctx, cleanup } = await createTestWorkspace();
   try {
@@ -160,15 +160,17 @@ Deno.test("ToolFilesystem approval requests match workspace and host risk behavi
       access: "write",
       workspaceRisk: "medium",
       summary: "write 9 bytes",
-    })).approvalRequest();
+    })).capabilityRequest();
     assertEquals(workspaceRequest, {
-      operation: "write",
-      target: "workspace.txt",
+      source: "local_tool",
+      capability: { kind: "local_tool", target: "workspace.txt", action: "write" },
       risk: "medium",
       summary: "write 9 bytes",
-      sessionId: "test-session",
-      turnId: "test-turn",
       timeoutMs: DEFAULT_APPROVAL_TIMEOUT_MS,
+      display: {
+        action: "write",
+        target: "workspace.txt",
+      },
     });
 
     const hostRequest = (await ctx.fs.operation({
@@ -176,8 +178,8 @@ Deno.test("ToolFilesystem approval requests match workspace and host risk behavi
       path: `${outside}/host.txt`,
       access: "read",
       summary: "read text",
-    })).approvalRequest();
-    assertEquals(hostRequest.target, path.resolve(`${outside}/host.txt`));
+    })).capabilityRequest();
+    assertEquals(hostRequest.capability.target, path.resolve(`${outside}/host.txt`));
     assertEquals(hostRequest.risk, "high");
     assertEquals(hostRequest.timeoutMs, DEFAULT_APPROVAL_TIMEOUT_MS * 2);
   } finally {

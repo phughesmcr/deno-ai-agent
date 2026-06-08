@@ -6,8 +6,9 @@ import { type AudioTranscriber, downloadTelegramMessageAudio, extractAudioFileId
 import {
   DEFAULT_IMAGE_PROMPT,
   downloadTelegramMessageImage,
+  durableTelegramImages,
   extractImageFileId,
-  prepareTelegramImages,
+  prepareDurableUserImages,
 } from "./telegram-image.ts";
 import type { TelegramContext } from "./telegram.ts";
 
@@ -33,10 +34,12 @@ export async function parseTelegramUserTurn(
 
   if (fileId) {
     const item = await downloadTelegramMessageImage(ctx.api, botToken, message);
-    const images = await prepareTelegramImages(client, [item]);
+    const durableImages = await durableTelegramImages([item]);
+    const images = await prepareDurableUserImages(client, durableImages);
     return {
       text: caption ?? text ?? DEFAULT_IMAGE_PROMPT,
       images,
+      durableImages,
     };
   }
 

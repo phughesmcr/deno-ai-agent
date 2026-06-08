@@ -6,14 +6,10 @@ import {
   grantBrokerWritePath,
   shouldRunPermissionControlClient,
 } from "../../permission-broker/mod.ts";
-import {
-  type ApprovalOperation,
-  type ApprovalRequest,
-  type ApprovalRisk,
-  DEFAULT_APPROVAL_TIMEOUT_MS,
-} from "../../shared/approval.ts";
+import { type ApprovalOperation, type ApprovalRisk, DEFAULT_APPROVAL_TIMEOUT_MS } from "../../shared/approval.ts";
 import { logDebug } from "../../shared/log.ts";
 import { expandTilde, WorkspaceSandbox } from "../workspace-sandbox.ts";
+import type { AgentToolCapabilityRequestSpec } from "./definitions.ts";
 import { withFileMutationQueue } from "./file-mutation-queue.ts";
 
 export interface ToolFilesystem {
@@ -37,7 +33,7 @@ export interface ToolFilesystemOperationSpec {
 
 export interface ToolFilesystemOperation {
   readonly target: ToolFilesystemTarget;
-  approvalRequest(): ApprovalRequest;
+  capabilityRequest(): AgentToolCapabilityRequestSpec;
   withAccess<T>(callback: (target: ToolFilesystemTarget) => Promise<T>): Promise<T>;
 }
 
@@ -149,30 +145,31 @@ async function grantBrokerAccess(
 class ToolFilesystemOperationImpl implements ToolFilesystemOperation {
   readonly target: ToolFilesystemTarget;
   private readonly _spec: ToolFilesystemOperationSpec;
-  private readonly _getSessionId: () => string;
-  private readonly _getTurnId: () => string;
 
   constructor(
     target: ToolFilesystemTarget,
     spec: ToolFilesystemOperationSpec,
-    getSessionId: () => string,
-    getTurnId: () => string,
   ) {
     this.target = target;
     this._spec = spec;
-    this._getSessionId = getSessionId;
-    this._getTurnId = getTurnId;
   }
 
-  approvalRequest(): ApprovalRequest {
+  capabilityRequest(): AgentToolCapabilityRequestSpec {
+    const target = this.target.outsideWorkspace ? this.target.absolutePath : this.target.displayPath;
     return {
-      operation: this._spec.operation,
-      target: this.target.outsideWorkspace ? this.target.absolutePath : this.target.displayPath,
+      source: "local_tool",
+      capability: {
+        kind: "local_tool",
+        target,
+        action: this._spec.operation,
+      },
       risk: this.target.outsideWorkspace ? "high" : this._spec.workspaceRisk ?? "low",
       summary: this._spec.summary,
-      sessionId: this._getSessionId(),
-      turnId: this._getTurnId(),
       timeoutMs: this.target.outsideWorkspace ? DEFAULT_APPROVAL_TIMEOUT_MS * 2 : DEFAULT_APPROVAL_TIMEOUT_MS,
+      display: {
+        action: this._spec.operation,
+        target,
+      },
     };
   }
 
@@ -232,7 +229,7 @@ class ToolFilesystemImpl implements ToolFilesystem {
       signal: this.signal,
     };
     assertRequiredKind(target, spec.require);
-    return new ToolFilesystemOperationImpl(target, spec, this._getSessionId, this._getTurnId);
+    return new ToolFilesystemOperationImpl(target, spec);
   }
 
   scoped(options: { allowHostPaths: boolean }): ToolFilesystem {

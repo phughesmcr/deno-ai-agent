@@ -2,11 +2,15 @@ import type { Tool } from "@lmstudio/sdk";
 import { z } from "zod/v3";
 
 import { grantBrokerRunForCommands } from "../../permission-broker/mod.ts";
-import type { ApprovalRequest } from "../../shared/approval.ts";
 import { logDebug } from "../../shared/mod.ts";
 import { requestForOperation } from "./approval-support.ts";
 import type { ToolContext } from "./context.ts";
-import { type AgentToolDefinition, type AgentToolDeps, toolFromDefinition } from "./definitions.ts";
+import {
+  type AgentToolCapabilityRequestSpec,
+  type AgentToolDefinition,
+  type AgentToolDeps,
+  toolFromDefinition,
+} from "./definitions.ts";
 import { getShellCommand } from "./shell-command.ts";
 import { DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES, formatSize, truncateTail } from "./truncate.ts";
 
@@ -28,7 +32,7 @@ export const bashToolDefinition: AgentToolDefinition<typeof bashParameters> = {
       DEFAULT_MAX_BYTES / 1024
     }KB (whichever is hit first). Optionally provide a timeout in seconds, or is_background=true for long-running commands. For reading files outside the workspace (e.g. ~/.codex/...), use the read tool with a ~/ path instead of bash.`,
   parameters: bashParameters,
-  authorize: ({ command }, deps): ApprovalRequest => {
+  authorize: ({ command }, deps): AgentToolCapabilityRequestSpec => {
     return requestForOperation(deps.workspace, {
       operation: "shell",
       target: command,

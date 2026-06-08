@@ -3,9 +3,13 @@ import { walk } from "@std/fs";
 import * as path from "@std/path";
 import { z } from "zod/v3";
 
-import type { ApprovalRequest } from "../../shared/approval.ts";
 import type { ToolContext } from "./context.ts";
-import { type AgentToolDefinition, type AgentToolDeps, toolFromDefinition } from "./definitions.ts";
+import {
+  type AgentToolCapabilityRequestSpec,
+  type AgentToolDefinition,
+  type AgentToolDeps,
+  toolFromDefinition,
+} from "./definitions.ts";
 import {
   appendSearchNotices,
   commandExists,
@@ -109,7 +113,7 @@ export const findToolDefinition: AgentToolDefinition<typeof findParameters> = {
       DEFAULT_MAX_BYTES / 1024
     }KB (whichever is hit first).`,
   parameters: findParameters,
-  authorize: async ({ path: searchDir, limit }, deps): Promise<ApprovalRequest> => {
+  authorize: async ({ path: searchDir, limit }, deps): Promise<AgentToolCapabilityRequestSpec> => {
     const effectiveLimit = limit ?? DEFAULT_LIMIT;
     const op = await deps.workspace.fs.operation({
       operation: "find",
@@ -119,7 +123,7 @@ export const findToolDefinition: AgentToolDefinition<typeof findParameters> = {
       externalCommands: ["fd"],
       summary: `find files, limit=${effectiveLimit}`,
     });
-    return op.approvalRequest();
+    return op.capabilityRequest();
   },
   run: async ({ pattern, path: searchDir, limit }, deps): Promise<string> => {
     const ctx = deps.workspace;

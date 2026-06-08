@@ -1,12 +1,17 @@
 export { CronCommandManager } from "./commands.ts";
-export { CronDispatcher, type CronDispatcherOptions, type CronJobRunner } from "./dispatcher.ts";
 export {
-  createCronApprovalGate,
-  createCronPermissionPromptPort,
+  CronDispatcher,
+  type CronDispatcherOptions,
+  type CronJobRunner,
+  type CronJobRunnerResult,
+} from "./dispatcher.ts";
+export {
+  createCronCapabilityDelegate,
+  type CronCapabilityDelegate,
+  type CronCapabilityProfileHooks,
   type CronLocalToolPolicy,
   type CronPermissionBrokerRule,
   type CronPermissionProfile,
-  type CronPermissionPromptPort,
   type CronPermissionToolRule,
 } from "./permissions.ts";
 export {

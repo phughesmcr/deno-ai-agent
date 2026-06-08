@@ -135,6 +135,11 @@ Deno.test({
 
   try {
     await controlJsonl.writeLine(formatControlMessage({ type: "register", pid: 42 }));
+    await controlJsonl.writeLine(formatControlMessage({
+      type: "heartbeat",
+      pid: 42,
+      sentAt: "2026-06-08T09:00:00.000Z",
+    }));
     await new Promise((r) => setTimeout(r, 20));
 
     const runLine = JSON.stringify({
@@ -296,6 +301,53 @@ Deno.test({
 });
 
 Deno.test({
+  name: "broker daemon denies pending prompt when control socket disconnects",
+  ignore: !integrationEnabled(),
+}, async () => {
+  const { env, controller, done } = await makeEnv(true);
+
+  const controlConn = await Deno.connect({ transport: "unix", path: env.controlPath });
+  const brokerConn = await Deno.connect({ transport: "unix", path: env.brokerPath });
+  const control = new ControlSocketSession();
+  control.attach(controlConn);
+  const brokerJsonl = new JsonlConnection(brokerConn);
+
+  try {
+    await control.writeLine(formatControlMessage({ type: "register", pid: 42 }));
+    await new Promise((r) => setTimeout(r, 20));
+
+    await brokerJsonl.writeLine(JSON.stringify({
+      v: 1,
+      pid: 1,
+      id: 30,
+      datetime: "2025-01-01T00:00:00.000Z",
+      permission: "run",
+      value: "/bin/sh",
+    }));
+
+    const prompt = parseControlMessage((await control.readLine())!);
+    assertEquals(prompt.type, "prompt");
+
+    controlConn.close();
+
+    const response = JSON.parse(await readLineWithin(brokerJsonl, 500));
+    assertEquals(response.id, 30);
+    assertEquals(response.result, "deny");
+    assertEquals(response.reason, "Permission prompt aborted.");
+  } finally {
+    try {
+      controlConn.close();
+    } catch {
+      /* already closed */
+    }
+    brokerConn.close();
+    controller.abort();
+    await done;
+    await cleanupEnv(env);
+  }
+});
+
+Deno.test({
   name: "broker daemon returns one matching response per request line",
   ignore: !integrationEnabled(),
 }, async () => {
@@ -430,6 +482,26 @@ async function cleanupEnv(env: BrokerDaemonEnv): Promise<void> {
     await Deno.remove(path.dirname(env.brokerPath), { recursive: true });
   } catch {
     /* already removed */
+  }
+}
+
+async function readLineWithin(jsonl: JsonlConnection, timeoutMs: number): Promise<string> {
+  let timeoutId: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      jsonl.readLine().then((line) => {
+        if (line === null) throw new Error("connection closed before response");
+        return line;
+      }),
+      new Promise<never>((_resolve, reject) => {
+        timeoutId = setTimeout(
+          () => reject(new Error(`timed out waiting for broker response after ${timeoutMs}ms`)),
+          timeoutMs,
+        );
+      }),
+    ]);
+  } finally {
+    if (timeoutId !== undefined) clearTimeout(timeoutId);
   }
 }
 

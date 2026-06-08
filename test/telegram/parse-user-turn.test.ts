@@ -21,6 +21,17 @@ function fakeCtx(message: Message): TelegramContext {
   } as any as TelegramContext;
 }
 
+function fakeImageClient(calls: { fileName: string; base64: string }[]): import("@lmstudio/sdk").LMStudioClient {
+  return {
+    files: {
+      prepareImageBase64(fileName: string, base64: string): Promise<{ id: string }> {
+        calls.push({ fileName, base64 });
+        return Promise.resolve({ id: "image-1" });
+      },
+    },
+  } as unknown as import("@lmstudio/sdk").LMStudioClient;
+}
+
 Deno.test({
   name: "parseTelegramUserTurn returns text-only input",
   sanitizeOps: false,
@@ -109,6 +120,34 @@ Deno.test({
     );
     assertEquals(input?.text, "what is this");
     assertEquals(input?.images?.length, 1);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+Deno.test("parseTelegramUserTurn returns durable image payloads", async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = () =>
+    Promise.resolve(
+      new Response(Uint8Array.from(atob(TINY_PNG_BASE64), (c) => c.charCodeAt(0))),
+    );
+  const calls: { fileName: string; base64: string }[] = [];
+
+  try {
+    const message = {
+      photo: [{ file_id: "p1", width: 100, height: 100, file_size: 70 }],
+      caption: "what is this",
+    } as Message;
+    const input = await parseTelegramUserTurn(
+      fakeCtx(message),
+      fakeImageClient(calls),
+      "token",
+    );
+
+    assertEquals(input?.text, "what is this");
+    assertEquals(input?.images?.length, 1);
+    assertEquals(input?.durableImages, [{ fileName: "test.jpg", base64: TINY_PNG_BASE64 }]);
+    assertEquals(calls, [{ fileName: "test.jpg", base64: TINY_PNG_BASE64 }]);
   } finally {
     globalThis.fetch = originalFetch;
   }

@@ -3,6 +3,7 @@ import type { Client } from "@modelcontextprotocol/sdk/client";
 
 import type { UserInteractionPort } from "../agent/tools/user-question-port.ts";
 import { grantBrokerNetUrl } from "../permission-broker/mod.ts";
+import { errorMessage } from "../shared/error.ts";
 import { logDebug, logError, logInfo } from "../shared/log.ts";
 import { createMcpClient } from "./client-factory.ts";
 import type { ResolvedMcpServerConfig } from "./config.ts";
@@ -13,6 +14,7 @@ import { grantMcpHttpBrokerAccess } from "./grant-http.ts";
 import { grantMcpStdioBrokerAccess } from "./grant-stdio.ts";
 import { attachMcpNotificationHandlers } from "./notifications.ts";
 import { ElicitationGate } from "./parallel.ts";
+import { readMcpResourceText } from "./resources.ts";
 import { createLmToolsForServer, type McpListedTool } from "./tools-adapter.ts";
 import { DenoStdioClientTransport } from "./transports/deno-stdio.ts";
 import { createHttpTransport } from "./transports/http.ts";
@@ -40,6 +42,8 @@ export interface McpConnectionOptions {
   maxToolsTotal: number;
   autoReadResourceLinks: boolean;
   onToolsListChanged: () => void;
+  onPromptsListChanged?: () => void;
+  onResourcesListChanged?: () => void;
 }
 
 /** One connected MCP server session. */
@@ -124,6 +128,8 @@ export class McpConnection {
 
     attachMcpNotificationHandlers(client, this._options.userInteraction, {
       onToolsListChanged: this._options.onToolsListChanged,
+      onPromptsListChanged: this._options.onPromptsListChanged,
+      onResourcesListChanged: this._options.onResourcesListChanged,
     });
 
     try {
@@ -154,8 +160,8 @@ export class McpConnection {
     }));
 
     const filtered = filterTools(allTools, this._config);
-    const budgeted = applyToolBudget(filtered, this._options.maxToolsTotal);
-    const omitted = filtered.slice(budgeted.exposed.length).map((t) => t.name);
+    const budgeted = applyToolBudget(filtered.exposed, this._options.maxToolsTotal);
+    const omitted = [...budgeted.omittedToolNames, ...filtered.omittedToolNames];
 
     const lmTools = createLmToolsForServer({
       serverId: this._config.id,
@@ -186,9 +192,9 @@ export class McpConnection {
       inputSchema: t.inputSchema as Record<string, unknown>,
     }));
     const filtered = filterTools(allTools, this._config);
-    const budgeted = applyToolBudget(filtered, maxToolsTotal);
+    const budgeted = applyToolBudget(filtered.exposed, maxToolsTotal);
     this._state.listedTools = allTools;
-    this._state.omittedToolNames = filtered.slice(budgeted.exposed.length).map((t) => t.name);
+    this._state.omittedToolNames = [...budgeted.omittedToolNames, ...filtered.omittedToolNames];
     this._state.lmTools = createLmToolsForServer({
       serverId: this._config.id,
       transport: this._config.transport,
@@ -210,37 +216,42 @@ export class McpConnection {
   async callTool(
     toolName: string,
     args: Record<string, unknown>,
-    _signal?: AbortSignal,
+    signal?: AbortSignal,
   ): Promise<string> {
     if (!this._state) return "Error: MCP server not connected.";
     if (this._config.transport === "http" && this._config.url) {
       await grantBrokerNetUrl(new URL(this._config.url));
     }
 
-    const run = async (): Promise<string> => {
-      try {
-        const result = await this._state!.client.callTool({ name: toolName, arguments: args });
-        return formatCallToolResult(result as import("./content.ts").McpCallToolResult);
-      } catch (error) {
-        return handleCallToolError(error, this._options);
-      }
+    const callOnce = async (): Promise<string> => {
+      const result = await this._state!.client.callTool({ name: toolName, arguments: args });
+      return await formatConnectionToolResult(
+        result as import("./content.ts").McpCallToolResult,
+        this._state!.client,
+        this._options.autoReadResourceLinks,
+      );
     };
 
     if (!this._options.elicitationEnabled) {
       try {
-        return await run();
+        return await callOnce();
       } catch (error) {
         return handleCallToolError(error, this._options);
       }
     }
 
     try {
-      return await run();
+      return await callOnce();
     } catch (error) {
-      const retry = await tryUrlElicitationRetry(error, this._state.client, this._options.userInteraction);
+      const retry = await tryUrlElicitationRetry(
+        error,
+        this._options.userInteraction,
+        signal ?? new AbortController().signal,
+        this._config.id,
+      );
       if (retry === "retry") {
         try {
-          return await run();
+          return await callOnce();
         } catch (e2) {
           return handleCallToolError(e2, this._options);
         }
@@ -250,7 +261,36 @@ export class McpConnection {
   }
 }
 
-function filterTools(tools: McpListedTool[], config: ResolvedMcpServerConfig): McpListedTool[] {
+async function formatConnectionToolResult(
+  result: import("./content.ts").McpCallToolResult,
+  client: Client,
+  autoReadResourceLinks: boolean,
+): Promise<string> {
+  const formatted = formatCallToolResult(result);
+  if (!autoReadResourceLinks) return formatted;
+
+  const resourceBlocks: string[] = [];
+  for (const item of result.content) {
+    if (item.type !== "resource_link") continue;
+    const uri = item["uri"];
+    if (typeof uri !== "string" || uri.length === 0) continue;
+    try {
+      const text = await readMcpResourceText(client, uri);
+      resourceBlocks.push(`Resource ${uri}:\n${text}`);
+    } catch (error) {
+      const message = errorMessage(error);
+      resourceBlocks.push(`Resource ${uri}:\nError reading resource: ${message}`);
+    }
+  }
+
+  if (resourceBlocks.length === 0) return formatted;
+  return `${formatted}\n\n${resourceBlocks.join("\n\n")}`;
+}
+
+function filterTools(
+  tools: McpListedTool[],
+  config: ResolvedMcpServerConfig,
+): { exposed: McpListedTool[]; omittedToolNames: string[] } {
   let list = tools;
   if (config.includeTools?.length) {
     const allow = new Set(config.includeTools);
@@ -260,18 +300,24 @@ function filterTools(tools: McpListedTool[], config: ResolvedMcpServerConfig): M
     const deny = new Set(config.excludeTools);
     list = list.filter((t) => !deny.has(t.name));
   }
-  return list.slice(0, config.maxTools);
+  return {
+    exposed: list.slice(0, config.maxTools),
+    omittedToolNames: list.slice(config.maxTools).map((tool) => tool.name),
+  };
 }
 
 function applyToolBudget(
   tools: McpListedTool[],
   maxTotal: number,
-): { exposed: McpListedTool[] } {
-  return { exposed: tools.slice(0, maxTotal) };
+): { exposed: McpListedTool[]; omittedToolNames: string[] } {
+  return {
+    exposed: tools.slice(0, maxTotal),
+    omittedToolNames: tools.slice(maxTotal).map((tool) => tool.name),
+  };
 }
 
 function handleCallToolError(error: unknown, options: McpConnectionOptions): string {
-  const message = error instanceof Error ? error.message : String(error);
+  const message = errorMessage(error);
   if (!options.elicitationEnabled && message.toLowerCase().includes("elicitation")) {
     return MCP_ELICITATION_UNAVAILABLE;
   }
@@ -280,8 +326,9 @@ function handleCallToolError(error: unknown, options: McpConnectionOptions): str
 
 async function tryUrlElicitationRetry(
   error: unknown,
-  _client: Client,
   port: UserInteractionPort,
+  signal: AbortSignal,
+  serverId: string,
 ): Promise<"retry" | "none"> {
   const code = (error as { code?: number })?.code;
   const data = (error as { data?: { elicitations?: unknown[] } })?.data;
@@ -297,9 +344,10 @@ async function tryUrlElicitationRetry(
       message: el.message,
       url: el.url,
       elicitationId: el.elicitationId,
-      serverId: "mcp",
+      serverId,
     });
     if (result.action !== "accept") return "none";
+    await port.waitForUrlElicitationComplete?.(el.elicitationId, signal);
   }
   return "retry";
 }

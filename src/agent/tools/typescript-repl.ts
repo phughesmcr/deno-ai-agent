@@ -2,11 +2,15 @@ import type { Tool } from "@lmstudio/sdk";
 import { z } from "zod/v3";
 
 import { grantBrokerRunForCommands } from "../../permission-broker/mod.ts";
-import type { ApprovalRequest } from "../../shared/approval.ts";
 import { logDebug } from "../../shared/mod.ts";
 import { requestForOperation } from "./approval-support.ts";
 import type { ToolContext } from "./context.ts";
-import { type AgentToolDefinition, type AgentToolDeps, toolFromDefinition } from "./definitions.ts";
+import {
+  type AgentToolCapabilityRequestSpec,
+  type AgentToolDefinition,
+  type AgentToolDeps,
+  toolFromDefinition,
+} from "./definitions.ts";
 import { readStreamToString } from "./search-support.ts";
 import { DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES, formatSize, truncateTail } from "./truncate.ts";
 
@@ -74,7 +78,7 @@ export const typescriptReplToolDefinition: AgentToolDefinition<typeof typescript
       DEFAULT_MAX_BYTES / 1024
     }KB (whichever is hit first). Optionally provide a timeout in seconds, up to ${MAX_TIMEOUT_SECONDS}.`,
   parameters: typescriptReplParameters,
-  authorize: ({ typescript, timeout }, deps): ApprovalRequest => {
+  authorize: ({ typescript, timeout }, deps): AgentToolCapabilityRequestSpec => {
     const timeoutSeconds = timeout ?? DEFAULT_TIMEOUT_SECONDS;
     return requestForOperation(deps.workspace, {
       operation: "shell",

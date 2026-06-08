@@ -8,9 +8,6 @@ cd "$ROOT"
 # shellcheck source=scripts/broker-env.sh
 source "$ROOT/scripts/broker-env.sh"
 
-export OTEL_DENO="${OTEL_DENO:-true}"
-export OTEL_SERVICE_NAME="${OTEL_SERVICE_NAME:-deno-ai-agent}"
-
 rm -f "$SILAS_BROKER_LISTEN_PATH" "$SILAS_PERMISSION_CONTROL_PATH"
 
 echo "Starting permission broker (background)..."

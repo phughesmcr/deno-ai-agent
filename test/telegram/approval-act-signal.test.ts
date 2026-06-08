@@ -1,19 +1,20 @@
 import { assertEquals } from "jsr:@std/assert@1";
 
+import type { CapabilityRequest } from "../../src/core/mod.ts";
 import {
-  createTelegramApprovalGate,
-  encodeApprovalCallback,
-  type TelegramApprovalCallbackContext,
-  type TelegramApprovalTurnContext,
-} from "../../src/telegram/approval-gate.ts";
+  createTelegramCapabilityPromptPort,
+  type TelegramCapabilityCallbackContext,
+  type TelegramCapabilityTurnContext,
+} from "../../src/telegram/capability-prompt.ts";
+import { encodeCapabilityCallback, toShortCapabilityRequestId } from "../../src/telegram/capability-callback.ts";
 
-type FakeApprovalContext = TelegramApprovalTurnContext & TelegramApprovalCallbackContext & {
+type FakeCapabilityContext = TelegramCapabilityTurnContext & TelegramCapabilityCallbackContext & {
   replies: string[];
   callbackAnswers: string[];
   markupsEdited: number;
 };
 
-function fakeContext(adminId = 42): FakeApprovalContext {
+function fakeContext(adminId = 42): FakeCapabilityContext {
   return {
     config: { adminId, isAdmin: true },
     from: { id: adminId },
@@ -35,33 +36,41 @@ function fakeContext(adminId = 42): FakeApprovalContext {
   };
 }
 
+function request(): CapabilityRequest {
+  return {
+    id: "approval-1",
+    sessionId: "session-1",
+    workId: "turn-1",
+    source: "local_tool",
+    capability: { kind: "local_tool", target: "/Users/peter/.codex/config.toml", action: "read" },
+    risk: "high",
+    timeoutMs: 5_000,
+    display: {
+      action: "read",
+      target: "/Users/peter/.codex/config.toml",
+    },
+  };
+}
+
 Deno.test("approval survives act signal abort when approve callback arrives", async () => {
-  const gate = createTelegramApprovalGate();
+  const prompt = createTelegramCapabilityPromptPort();
   const actController = new AbortController();
   const approvalController = new AbortController();
   const ctx = fakeContext();
 
-  gate.setTurnContext({ ctx, signal: approvalController.signal });
+  prompt.setTurnContext({ ctx, signal: approvalController.signal });
 
-  const pending = gate.requestApproval({
-    id: "approval-1",
-    operation: "read",
-    target: "/Users/peter/.codex/config.toml",
-    risk: "high",
-    sessionId: "session-1",
-    turnId: "turn-1",
-    timeoutMs: 5_000,
-  });
+  const pending = prompt.decide(request());
   await Promise.resolve();
 
   actController.abort();
 
-  await gate.handleCallback({
+  await prompt.handleCallback({
     ...fakeContext(),
-    callbackQuery: { data: encodeApprovalCallback("approval-1", "approve") },
+    callbackQuery: { data: encodeCapabilityCallback(toShortCapabilityRequestId("approval-1"), "approve") },
   });
 
   const decision = await pending;
-  assertEquals(decision.approved, true);
+  assertEquals(decision.decision, "allow");
   assertEquals(decision.reason, "approved");
 });

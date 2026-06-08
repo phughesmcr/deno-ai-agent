@@ -15,7 +15,7 @@ function mcpResultToElicitationResponse(result: UserInteractionResult): {
   return { action: result.action };
 }
 
-/** Registers elicitation/create on the MCP client. Phase 1: decline; Phase 2: full port. */
+/** Registers elicitation/create on the MCP client and routes enabled requests through the user-interaction port. */
 export function registerElicitationHandler(
   client: Client,
   port: UserInteractionPort,

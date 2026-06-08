@@ -1,6 +1,7 @@
 import type { Tool } from "@lmstudio/sdk";
 
 import type { UserInteractionPort } from "../agent/tools/user-question-port.ts";
+import { errorMessage } from "../shared/error.ts";
 import { logDebug, logError, logInfo } from "../shared/log.ts";
 import { type LoadedMcpConfig, loadMcpConfig } from "./config.ts";
 import { McpConnection, type McpConnectionError } from "./connection.ts";
@@ -11,7 +12,7 @@ import { createGetPromptTool, createReadResourceTool } from "./tools-adapter.ts"
 export interface McpRegistryOptions {
   workspacePath: string;
   userInteraction: UserInteractionPort;
-  /** When false (Phase 1), elicitation handler declines and callTool returns placeholder errors. */
+  /** When false, MCP elicitation requests are declined instead of prompting the user. */
   elicitationEnabled?: boolean;
 }
 
@@ -51,6 +52,12 @@ export class McpRegistry {
         onToolsListChanged: () => {
           void this.refreshTools();
         },
+        onPromptsListChanged: () => {
+          void this.rebuildAppendices();
+        },
+        onResourcesListChanged: () => {
+          void this.rebuildAppendices();
+        },
       });
       try {
         logInfo(`Connecting MCP server ${server.id} (${server.transport})...`);
@@ -59,7 +66,7 @@ export class McpRegistry {
         this._connections.set(server.id, conn);
         logInfo(`MCP server ${server.id} connected (${conn.lmTools.length} tool(s)).`);
       } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
+        const message = errorMessage(error);
         logError("mcp.connect_failed", { serverId: server.id, message });
         this._connectionErrors.push({ serverId: server.id, message });
       }

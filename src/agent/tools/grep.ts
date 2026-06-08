@@ -3,9 +3,13 @@ import { walk } from "@std/fs";
 import * as path from "@std/path";
 import { z } from "zod/v3";
 
-import type { ApprovalRequest } from "../../shared/approval.ts";
 import type { ToolContext } from "./context.ts";
-import { type AgentToolDefinition, type AgentToolDeps, toolFromDefinition } from "./definitions.ts";
+import {
+  type AgentToolCapabilityRequestSpec,
+  type AgentToolDefinition,
+  type AgentToolDeps,
+  toolFromDefinition,
+} from "./definitions.ts";
 import {
   appendSearchNotices,
   commandExists,
@@ -170,7 +174,7 @@ export const grepToolDefinition: AgentToolDefinition<typeof grepParameters> = {
       DEFAULT_MAX_BYTES / 1024
     }KB (whichever is hit first).`,
   parameters: grepParameters,
-  authorize: async ({ path: searchDir, limit, context }, deps): Promise<ApprovalRequest> => {
+  authorize: async ({ path: searchDir, limit, context }, deps): Promise<AgentToolCapabilityRequestSpec> => {
     const effectiveLimit = Math.max(1, limit ?? DEFAULT_LIMIT);
     const effectiveContext = context ?? 0;
     const op = await deps.workspace.fs.operation({
@@ -181,7 +185,7 @@ export const grepToolDefinition: AgentToolDefinition<typeof grepParameters> = {
       externalCommands: ["rg"],
       summary: `search text, limit=${effectiveLimit}, context=${effectiveContext}`,
     });
-    return op.approvalRequest();
+    return op.capabilityRequest();
   },
   run: async ({ pattern, path: searchDir, glob, ignoreCase, literal, context, limit }, deps): Promise<string> => {
     const ctx = deps.workspace;

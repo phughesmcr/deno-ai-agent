@@ -1,8 +1,9 @@
 import { copyTodosForSession, type SavedSessionSummary, type SessionStatus, type TodoStore } from "../agent/mod.ts";
+import { errorMessage } from "../shared/error.ts";
 
 /** One-line help text for supported session commands. */
 export const SESSION_HELP =
-  "Sessions: /topic <name> - create forum topic | /topics - known topic sessions | /new - fresh chat | /save - write to disk | /load <id|name> - restore | /resume <id|name> - alias for load | /rename <name> - label session | /fork - branch copy | /list - saved sessions | /session - status | /stats - tokens | /compact [instructions] - summarize history | /todos - task list | /cron new|list|del - scheduled turns";
+  "Sessions: /topic <name> - create forum topic | /topics - known topic sessions | /new - fresh chat | /save - persist session | /load <id|name> - restore | /resume <id|name> - alias for load | /rename <name> - label session | /fork - branch copy | /list - saved sessions | /session - status | /stats - tokens | /compact [instructions] - summarize history | /todo or /todos - task list | /cron new|list|del|mode - scheduled turns";
 
 /** Telegram topic binding summary shown by `/topics`. */
 export interface TelegramTopicBindingSummary {
@@ -83,9 +84,7 @@ function formatSessionLabel(status: Pick<SessionStatus, "id" | "name">): string 
 /** Formats session status for Telegram commands. */
 export function formatSessionStatus(status: SessionStatus): string {
   const filled = Math.round((status.tokenCount / status.maxContextLength) * 100);
-  const persist = status.existsOnDisk ?
-    (status.dirty ? "saved (unsaved changes)" : "saved") :
-    (status.dirty ? "not saved (unsaved changes)" : "not saved");
+  const persist = status.persisted ? "saved" : "not saved";
   return [
     `Session: ${formatSessionLabel(status)}`,
     `State: ${persist}`,
@@ -97,10 +96,6 @@ export function formatSessionStatus(status: SessionStatus): string {
 function formatListLine(summary: SavedSessionSummary, currentId: string): string {
   const label = summary.name ? `${summary.name} - ${summary.id}` : summary.id;
   return summary.id === currentId ? `${label} (current)` : label;
-}
-
-function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
 }
 
 function cronCreationErrorMessage(error: unknown): string {
@@ -232,7 +227,7 @@ export class TelegramCommandHandler {
 
   async list(): Promise<string> {
     const sessions = await this._session.list();
-    if (sessions.length === 0) return "No saved sessions. /save writes the current chat.";
+    if (sessions.length === 0) return "No saved sessions. /save persists the current chat.";
     const current = (await this._session.status()).id;
     const lines = sessions.map((summary) => formatListLine(summary, current));
     return `Saved sessions:\n${lines.join("\n")}`;

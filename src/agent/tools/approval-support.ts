@@ -1,13 +1,9 @@
-import {
-  type ApprovalOperation,
-  type ApprovalRequest,
-  type ApprovalRisk,
-  DEFAULT_APPROVAL_TIMEOUT_MS,
-} from "../../shared/approval.ts";
+import { type ApprovalOperation, type ApprovalRisk, DEFAULT_APPROVAL_TIMEOUT_MS } from "../../shared/approval.ts";
 import type { ToolContext } from "./context.ts";
+import type { AgentToolCapabilityRequestSpec } from "./definitions.ts";
 
 export function requestForOperation(
-  ctx: ToolContext,
+  _ctx: ToolContext,
   spec: {
     operation: ApprovalOperation;
     target: string;
@@ -15,14 +11,20 @@ export function requestForOperation(
     summary?: string;
     timeoutMs?: number;
   },
-): ApprovalRequest {
-  const request: ApprovalRequest = {
-    operation: spec.operation,
-    target: spec.target,
+): AgentToolCapabilityRequestSpec {
+  const request: AgentToolCapabilityRequestSpec = {
+    source: "local_tool",
+    capability: {
+      kind: "local_tool",
+      target: spec.target,
+      action: spec.operation,
+    },
     risk: spec.risk,
-    sessionId: ctx.getSessionId(),
-    turnId: ctx.getTurnId(),
     timeoutMs: spec.timeoutMs ?? DEFAULT_APPROVAL_TIMEOUT_MS,
+    display: {
+      action: spec.operation,
+      target: spec.target,
+    },
   };
   if (spec.summary !== undefined) request.summary = spec.summary;
   return request;

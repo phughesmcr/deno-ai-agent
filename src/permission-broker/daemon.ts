@@ -9,7 +9,7 @@ import {
 } from "./control-protocol.ts";
 import { ControlSocketSession } from "./control-socket.ts";
 import { JsonlConnection } from "./jsonl.ts";
-import { logDebug } from "./log.ts";
+import { errorMessage, logDebug } from "./log.ts";
 import { normalizeAbsolutePath } from "./paths.ts";
 import { createPolicyContext, decidePolicy, type PolicyContext } from "./policy.ts";
 import { type BrokerResponse, formatBrokerResponse, normalizeBrokerValue, parseBrokerRequest } from "./protocol.ts";
@@ -73,7 +73,7 @@ interface PendingPrompt {
 
 function isSocketClosedError(error: unknown): boolean {
   if (error instanceof Deno.errors.BadResource) return true;
-  const message = error instanceof Error ? error.message : String(error);
+  const message = errorMessage(error);
   return message.includes("operation canceled") || message.includes("Invalid argument");
 }
 
@@ -82,51 +82,51 @@ function isSocketClosedError(error: unknown): boolean {
  * @internal
  */
 export class PermissionBrokerDaemon {
-  readonly #env: BrokerDaemonEnv;
-  readonly #cache = new SessionCache();
-  #controlConn: Deno.Conn | undefined;
-  #controlSession: ControlSocketSession | undefined;
-  #controlRegistered = false;
-  readonly #brokerConns = new Set<Deno.Conn>();
-  #pending: PendingPrompt | undefined;
+  private readonly _env: BrokerDaemonEnv;
+  private readonly _cache = new SessionCache();
+  private _controlConn: Deno.Conn | undefined;
+  private _controlSession: ControlSocketSession | undefined;
+  private _controlRegistered = false;
+  private readonly _brokerConns = new Set<Deno.Conn>();
+  private _pending: PendingPrompt | undefined;
   private _promptQueueTail: Promise<void> = Promise.resolve();
 
   constructor(env: BrokerDaemonEnv) {
-    this.#env = env;
+    this._env = env;
   }
 
-  #policyContext(): PolicyContext {
+  private _policyContext(): PolicyContext {
     return createPolicyContext({
-      workspaceRoot: this.#env.workspacePath,
-      projectRoot: this.#env.projectRoot,
-      denoDir: this.#env.denoDir,
-      brokerSocketPaths: [this.#env.brokerPath, this.#env.controlPath],
-      runPromptsEnabled: this.#env.runPromptsEnabled,
+      workspaceRoot: this._env.workspacePath,
+      projectRoot: this._env.projectRoot,
+      denoDir: this._env.denoDir,
+      brokerSocketPaths: [this._env.brokerPath, this._env.controlPath],
+      runPromptsEnabled: this._env.runPromptsEnabled,
     });
   }
 
   /** Starts listeners and runs until aborted. */
   async run(signal: AbortSignal): Promise<void> {
-    await removeSocketPath(this.#env.brokerPath);
-    await removeSocketPath(this.#env.controlPath);
+    await removeSocketPath(this._env.brokerPath);
+    await removeSocketPath(this._env.controlPath);
 
-    const brokerListener = Deno.listen({ transport: "unix", path: this.#env.brokerPath });
-    const controlListener = Deno.listen({ transport: "unix", path: this.#env.controlPath });
+    const brokerListener = Deno.listen({ transport: "unix", path: this._env.brokerPath });
+    const controlListener = Deno.listen({ transport: "unix", path: this._env.controlPath });
     logDebug("permission_broker.listening", {
-      brokerPath: this.#env.brokerPath,
-      controlPath: this.#env.controlPath,
-      runPrompts: String(this.#env.runPromptsEnabled),
+      brokerPath: this._env.brokerPath,
+      controlPath: this._env.controlPath,
+      runPrompts: String(this._env.runPromptsEnabled),
     });
 
     const abortHandler = (): void => {
-      for (const conn of this.#brokerConns) {
+      for (const conn of this._brokerConns) {
         try {
           conn.close();
         } catch {
           /* already closed */
         }
       }
-      this.#controlConn?.close();
+      this._controlConn?.close();
       try {
         brokerListener.close();
       } catch {
@@ -142,8 +142,8 @@ export class PermissionBrokerDaemon {
 
     try {
       await Promise.all([
-        this.#acceptControl(controlListener, signal),
-        this.#acceptBroker(brokerListener, signal),
+        this._acceptControl(controlListener, signal),
+        this._acceptBroker(brokerListener, signal),
       ]);
     } finally {
       signal.removeEventListener("abort", abortHandler);
@@ -160,7 +160,7 @@ export class PermissionBrokerDaemon {
     }
   }
 
-  async #acceptBroker(listener: Deno.UnixListener, signal: AbortSignal): Promise<void> {
+  private async _acceptBroker(listener: Deno.UnixListener, signal: AbortSignal): Promise<void> {
     while (!signal.aborted) {
       let conn: Deno.Conn;
       try {
@@ -170,26 +170,26 @@ export class PermissionBrokerDaemon {
         if (signal.aborted || isSocketClosedError(error)) return;
         logDebug("permission_broker.accept_error", {
           kind: "broker",
-          message: error instanceof Error ? error.message : String(error),
+          message: errorMessage(error),
         });
         return;
       }
 
       if (signal.aborted) return;
-      this.#brokerConns.add(conn);
+      this._brokerConns.add(conn);
       logDebug("permission_broker.client_connected", { kind: "broker" });
       void (async () => {
         try {
-          await this.#serveBroker(conn);
+          await this._serveBroker(conn);
         } catch (error) {
           if (!signal.aborted && !isSocketClosedError(error)) {
             logDebug("permission_broker.connection_error", {
               kind: "broker",
-              message: error instanceof Error ? error.message : String(error),
+              message: errorMessage(error),
             });
           }
         } finally {
-          this.#brokerConns.delete(conn);
+          this._brokerConns.delete(conn);
           try {
             conn.close();
           } catch {
@@ -200,7 +200,7 @@ export class PermissionBrokerDaemon {
     }
   }
 
-  async #acceptControl(listener: Deno.UnixListener, signal: AbortSignal): Promise<void> {
+  private async _acceptControl(listener: Deno.UnixListener, signal: AbortSignal): Promise<void> {
     while (!signal.aborted) {
       let conn: Deno.Conn;
       try {
@@ -210,32 +210,33 @@ export class PermissionBrokerDaemon {
         if (signal.aborted || isSocketClosedError(error)) return;
         logDebug("permission_broker.accept_error", {
           kind: "control",
-          message: error instanceof Error ? error.message : String(error),
+          message: errorMessage(error),
         });
         return;
       }
 
       if (signal.aborted) return;
-      if (this.#controlConn) {
+      if (this._controlConn) {
         conn.close();
         continue;
       }
-      this.#controlConn = conn;
+      this._controlConn = conn;
       logDebug("permission_broker.client_connected", { kind: "control" });
       try {
         // deno-lint-ignore no-await-in-loop -- The daemon serves one control client before accepting a replacement.
-        await this.#serveControl(conn);
+        await this._serveControl(conn);
       } catch (error) {
         if (!signal.aborted && !isSocketClosedError(error)) {
           logDebug("permission_broker.connection_error", {
             kind: "control",
-            message: error instanceof Error ? error.message : String(error),
+            message: errorMessage(error),
           });
         }
       } finally {
-        this.#controlConn = undefined;
-        this.#controlSession = undefined;
-        this.#controlRegistered = false;
+        this._abortPrompt();
+        this._controlConn = undefined;
+        this._controlSession = undefined;
+        this._controlRegistered = false;
         try {
           conn.close();
         } catch {
@@ -245,22 +246,29 @@ export class PermissionBrokerDaemon {
     }
   }
 
-  async #serveControl(conn: Deno.Conn): Promise<void> {
+  private async _serveControl(conn: Deno.Conn): Promise<void> {
     const session = new ControlSocketSession();
     session.attach(conn);
-    this.#controlSession = session;
+    this._controlSession = session;
     while (true) {
       // deno-lint-ignore no-await-in-loop -- Control messages must be processed in socket order.
       const line = await session.readLine();
       if (line === null) return;
       const message = parseControlMessage(line);
       if (message.type === "register") {
-        this.#controlRegistered = true;
+        this._controlRegistered = true;
         logDebug("permission_broker.control_registered", { pid: String(message.pid) });
         continue;
       }
+      if (message.type === "heartbeat") {
+        logDebug("permission_broker.control_heartbeat", {
+          pid: String(message.pid),
+          sentAt: message.sentAt,
+        });
+        continue;
+      }
       if (message.type === "grant") {
-        this.#cache.grant(message.permission, message.value, message.scope);
+        this._cache.grant(message.permission, message.value, message.scope);
         logDebug("permission_broker.grant", {
           permission: message.permission,
           value: message.value ?? "",
@@ -269,16 +277,16 @@ export class PermissionBrokerDaemon {
         continue;
       }
       if (message.type === "decision") {
-        this.#resolvePrompt(message);
+        this._resolvePrompt(message);
         continue;
       }
       if (message.type === "abort") {
-        this.#abortPrompt(message.requestId);
+        this._abortPrompt(message.requestId);
       }
     }
   }
 
-  async #serveBroker(conn: Deno.Conn): Promise<void> {
+  private async _serveBroker(conn: Deno.Conn): Promise<void> {
     const jsonl = new JsonlConnection(conn);
     while (true) {
       // deno-lint-ignore no-await-in-loop -- Broker requests must be answered in request order.
@@ -286,17 +294,17 @@ export class PermissionBrokerDaemon {
       if (line === null) return;
       const request = parseBrokerRequest(line);
       // deno-lint-ignore no-await-in-loop -- Each Deno request must receive its matching response before the next.
-      const response = await this.#handleRequest(request);
+      const response = await this._handleRequest(request);
       // deno-lint-ignore no-await-in-loop -- Responses must be written in request order.
       await jsonl.writeLine(formatBrokerResponse(response));
     }
   }
 
-  async #handleRequest(request: ReturnType<typeof parseBrokerRequest>): Promise<BrokerResponse> {
-    const ctx = this.#policyContext();
+  private async _handleRequest(request: ReturnType<typeof parseBrokerRequest>): Promise<BrokerResponse> {
+    const ctx = this._policyContext();
     const value = normalizeBrokerValue(request.value);
-    const decision = this.#cache.consume(request.permission, value) ? "auto_allow" : decidePolicy(request, ctx);
-    const finalDecision = decision === "prompt" && !this.#controlRegistered ? "auto_deny" : decision;
+    const decision = this._cache.consume(request.permission, value) ? "auto_allow" : decidePolicy(request, ctx);
+    const finalDecision = decision === "prompt" && !this._controlRegistered ? "auto_deny" : decision;
 
     logDebug("permission_broker.request", {
       id: String(request.id),
@@ -311,10 +319,10 @@ export class PermissionBrokerDaemon {
     if (finalDecision === "auto_deny") {
       return { id: request.id, result: "deny", reason: "Denied by policy." };
     }
-    return await this.#promptUser(request.id, request.permission, value);
+    return await this._promptUser(request.id, request.permission, value);
   }
 
-  async #promptUser(brokerId: number, permission: string, value: string | null): Promise<BrokerResponse> {
+  private async _promptUser(brokerId: number, permission: string, value: string | null): Promise<BrokerResponse> {
     return await this._enqueuePrompt(() => this._promptUserNow(brokerId, permission, value));
   }
 
@@ -331,7 +339,7 @@ export class PermissionBrokerDaemon {
   }
 
   async _promptUserNow(brokerId: number, permission: string, value: string | null): Promise<BrokerResponse> {
-    if (!this.#controlConn || !this.#controlRegistered) {
+    if (!this._controlConn || !this._controlRegistered) {
       return { id: brokerId, result: "deny", reason: "Control client not registered." };
     }
 
@@ -344,45 +352,45 @@ export class PermissionBrokerDaemon {
       value,
     };
 
-    const session = this.#controlSession;
+    const session = this._controlSession;
     if (!session) {
       return { id: brokerId, result: "deny", reason: "Control session not ready." };
     }
 
     const response = Promise.withResolvers<BrokerResponse>();
     const timeoutId = setTimeout(() => {
-      this.#pending = undefined;
+      this._pending = undefined;
       response.resolve({ id: brokerId, result: "deny", reason: "Permission prompt timed out." });
-    }, this.#env.promptTimeoutMs);
+    }, this._env.promptTimeoutMs);
     using timeoutCleanup = { [Symbol.dispose]: () => clearTimeout(timeoutId) };
     void timeoutCleanup;
 
-    this.#pending = {
+    this._pending = {
       requestId,
       brokerId,
       permission,
       value,
       resolve: (result) => {
-        this.#pending = undefined;
+        this._pending = undefined;
         response.resolve(result);
       },
     };
 
     session.writeLine(formatControlMessage(prompt)).catch(() => {
-      this.#pending = undefined;
+      this._pending = undefined;
       response.resolve({ id: brokerId, result: "deny", reason: "Failed to send control prompt." });
     });
 
     return await response.promise;
   }
 
-  #resolvePrompt(decision: ControlDecision): void {
-    const current = this.#pending;
+  private _resolvePrompt(decision: ControlDecision): void {
+    const current = this._pending;
     if (!current || decision.requestId !== current.requestId) return;
 
     if (decision.result === "allow") {
       if (decision.grant === "session") {
-        this.#cache.grant(current.permission, current.value, "session");
+        this._cache.grant(current.permission, current.value, "session");
       }
       current.resolve({ id: current.brokerId, result: "allow" });
       return;
@@ -390,8 +398,8 @@ export class PermissionBrokerDaemon {
     current.resolve({ id: current.brokerId, result: "deny", reason: "Denied by user." });
   }
 
-  #abortPrompt(requestId?: string): void {
-    const current = this.#pending;
+  private _abortPrompt(requestId?: string): void {
+    const current = this._pending;
     if (!current) return;
     if (requestId !== undefined && requestId !== current.requestId) return;
     current.resolve({ id: current.brokerId, result: "deny", reason: "Permission prompt aborted." });

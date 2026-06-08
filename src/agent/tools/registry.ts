@@ -1,14 +1,23 @@
 import type { Tool } from "@lmstudio/sdk";
 
 import { isMcpToolName, parseMcpToolName } from "../../mcp/naming.ts";
-import type { ApprovalRequest } from "../../shared/approval.ts";
-import { createDenyApprovalGate } from "../../shared/approval.ts";
+import type { CapabilityDecisionResult, CapabilityRequest } from "../../core/mod.ts";
+import { ToolRuntime } from "../../core/tool_runtime.ts";
+import { DEFAULT_APPROVAL_TIMEOUT_MS } from "../../shared/approval.ts";
+import { errorMessage } from "../../shared/error.ts";
 import { logDebug } from "../../shared/log.ts";
 import type { SubagentPort } from "../subagents.ts";
 import { askUserQuestionToolDefinition } from "./ask-user-question.ts";
 import type { GuardedToolCallRequest, ToolCallGuard, ToolCallGuardController } from "./authorization.ts";
 import { bashToolDefinition } from "./bash.ts";
-import { type AgentToolDefinition, type AgentToolDeps, parseToolParams, toolFromDefinition } from "./definitions.ts";
+import {
+  type AgentRuntimeToolDefinition,
+  type AgentToolCapabilityRequestSpec,
+  type AgentToolDefinition,
+  type AgentToolDeps,
+  runtimeToolFromDefinition,
+  toolFromRuntimeDefinition,
+} from "./definitions.ts";
 import { editToolDefinition } from "./edit.ts";
 import { findToolDefinition } from "./find.ts";
 import { grepToolDefinition } from "./grep.ts";
@@ -19,17 +28,26 @@ import { subagentToolDefinition } from "./subagent.ts";
 import { createNoopTodoDisplayPort } from "./todo-display-port.ts";
 import { type TodoStore, todoWriteToolDefinition } from "./todo-write.ts";
 import { typescriptReplToolDefinition } from "./typescript-repl.ts";
-import { createUnavailableAskUserQuestionPort } from "./user-question-port.ts";
+import { createUnavailableUserInteractionPort } from "./user-question-port.ts";
 import { webFetchToolDefinition } from "./web-fetch.ts";
 import { writeToolDefinition } from "./write.ts";
-import { requestForOperation } from "./approval-support.ts";
 import { createSkillManager } from "../skills/mod.ts";
 import { createToolContext, type ToolContext } from "./context.ts";
 
 export interface ModelToolSet {
   tools: Tool[];
   guardToolCall: ToolCallGuard;
-  authorizeToolCall(call: GuardedToolCallRequest): Promise<ApprovalRequest | null>;
+  authorizeToolCall(call: GuardedToolCallRequest): Promise<CapabilityRequest | null>;
+}
+
+/** Per-turn capability authorizer used by guarded model tool calls. */
+export interface ToolCapabilityAuthorizer {
+  decide(request: CapabilityRequest, signal?: AbortSignal): Promise<CapabilityDecisionResult>;
+}
+
+/** Optional controls for deterministic authorization tests. */
+export interface TurnAuthorizationOptions {
+  createRequestId?: () => string;
 }
 
 export const localToolDefinitions: readonly AgentToolDefinition[] = [
@@ -56,7 +74,49 @@ export const readOnlySubagentToolDefinitions: readonly AgentToolDefinition[] = [
   skillToolDefinition,
 ];
 
-const definitionByName = new Map(localToolDefinitions.map((definition) => [definition.name, definition]));
+const localRuntimeTools = localToolDefinitions.map(runtimeToolFromDefinition);
+const readOnlySubagentRuntimeTools = readOnlySubagentToolDefinitions.map(runtimeToolFromDefinition);
+
+function toolName(tool: Tool): string | undefined {
+  const name = (tool as { name?: unknown }).name;
+  return typeof name === "string" ? name : undefined;
+}
+
+function mcpRuntimeTool(name: string): AgentRuntimeToolDefinition {
+  return {
+    name,
+    describe(): ReturnType<AgentRuntimeToolDefinition["describe"]> {
+      return {
+        name,
+        description: "MCP remote tool",
+        parameters: {},
+      };
+    },
+    parse(raw: Record<string, unknown> | undefined): Record<string, unknown> {
+      return raw ?? {};
+    },
+    authorize(): AgentToolCapabilityRequestSpec {
+      return mcpCapabilityRequestSpec(name);
+    },
+    execute(): string {
+      throw new Error("MCP tools execute through the MCP registry adapter.");
+    },
+  };
+}
+
+function exposedMcpRuntimeTools(deps: AgentToolDeps): AgentRuntimeToolDefinition[] {
+  return (deps.mcp?.getTools() ?? [])
+    .map(toolName)
+    .filter((name): name is string => name !== undefined && isMcpToolName(name))
+    .map(mcpRuntimeTool);
+}
+
+function toolRuntimeForDeps(deps: AgentToolDeps): ToolRuntime<AgentToolDeps, AgentToolCapabilityRequestSpec, string> {
+  return new ToolRuntime<AgentToolDeps, AgentToolCapabilityRequestSpec, string>([
+    ...localRuntimeTools,
+    ...exposedMcpRuntimeTools(deps),
+  ]);
+}
 
 function unavailableSubagentPort(): SubagentPort {
   const unavailable = (): Promise<never> => Promise.reject(new Error("Subagent job service is not configured."));
@@ -85,36 +145,48 @@ function denialReason(reason: string): string {
   return `Tool call denied: ${reason}`;
 }
 
-function mcpApprovalRequest(deps: AgentToolDeps, name: string): ApprovalRequest {
+function mcpCapabilityRequestSpec(name: string): AgentToolCapabilityRequestSpec {
   const parsed = parseMcpToolName(name);
   const target = parsed ? `${parsed.serverId}/${parsed.toolName}` : name;
-  return requestForOperation(deps.workspace, {
-    operation: "mcp",
-    target,
+  return {
+    source: "mcp_tool",
+    capability: { kind: "mcp_tool", target, action: "call" },
     risk: "high",
     summary: "MCP remote tool call",
-  });
+    timeoutMs: DEFAULT_APPROVAL_TIMEOUT_MS,
+    display: {
+      action: "call",
+      target,
+      subject: name,
+    },
+  };
 }
 
 async function resolveToolCallAuthorization(
   deps: AgentToolDeps,
   toolCallRequest: GuardedToolCallRequest,
+  createRequestId: () => string,
 ): Promise<
-  | { kind: "local"; request: ApprovalRequest | null; params: Record<string, unknown> }
-  | { kind: "mcp"; request: ApprovalRequest }
+  | { kind: "local"; request: CapabilityRequest | null; params: Record<string, unknown> }
+  | { kind: "mcp"; request: CapabilityRequest }
 > {
-  const definition = definitionByName.get(toolCallRequest.name as AgentToolDefinition["name"]);
+  const definition = toolRuntimeForDeps(deps).get(toolCallRequest.name);
   if (definition) {
-    const params = parseToolParams(definition, toolCallRequest.arguments);
-    return {
-      kind: "local",
-      request: await definition.authorize(params, deps),
-      params: { ...params },
-    };
-  }
-
-  if (isMcpToolName(toolCallRequest.name)) {
-    return { kind: "mcp", request: mcpApprovalRequest(deps, toolCallRequest.name) };
+    const params = definition.parse(toolCallRequest.arguments);
+    const spec = await definition.authorize(params, deps);
+    const request = spec ?
+      {
+        id: createRequestId(),
+        sessionId: deps.workspace.getSessionId(),
+        workId: deps.workspace.getTurnId(),
+        ...spec,
+      } satisfies CapabilityRequest :
+      null;
+    if (isMcpToolName(toolCallRequest.name)) {
+      if (!request) throw new Error(`MCP tool did not produce an authorization request: ${toolCallRequest.name}`);
+      return { kind: "mcp", request };
+    }
+    return { kind: "local", request, params: { ...(params as Record<string, unknown>) } };
   }
 
   throw new Error(`No authorization policy for tool: ${toolCallRequest.name}`);
@@ -123,18 +195,28 @@ async function resolveToolCallAuthorization(
 export async function authorizeToolCall(
   deps: AgentToolDeps,
   call: GuardedToolCallRequest,
-): Promise<ApprovalRequest | null> {
-  const resolved = await resolveToolCallAuthorization(deps, call);
+  options: TurnAuthorizationOptions = {},
+): Promise<CapabilityRequest | null> {
+  const resolved = await resolveToolCallAuthorization(
+    deps,
+    call,
+    options.createRequestId ?? (() => crypto.randomUUID()),
+  );
   return resolved.request;
 }
 
-export function createToolCallGuard(deps: AgentToolDeps): ToolCallGuard {
+export function createToolCallGuard(
+  deps: AgentToolDeps,
+  authorizer: ToolCapabilityAuthorizer,
+  options: TurnAuthorizationOptions = {},
+): ToolCallGuard {
+  const createRequestId = options.createRequestId ?? (() => crypto.randomUUID());
   return async (_roundIndex, callId, controller: ToolCallGuardController) => {
     let resolved: Awaited<ReturnType<typeof resolveToolCallAuthorization>>;
     try {
-      resolved = await resolveToolCallAuthorization(deps, controller.toolCallRequest);
+      resolved = await resolveToolCallAuthorization(deps, controller.toolCallRequest, createRequestId);
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
+      const message = errorMessage(error);
       logDebug("tool_guard.authorization_error", {
         tool: controller.toolCallRequest.name,
         callId: String(callId),
@@ -158,19 +240,19 @@ export function createToolCallGuard(deps: AgentToolDeps): ToolCallGuard {
     let approved = false;
     let reason = "denied";
     try {
-      const decision = await deps.approvalGate.requestApproval(resolved.request, deps.workspace.signal);
-      approved = decision.approved;
+      const decision = await authorizer.decide(resolved.request, deps.workspace.signal);
+      approved = decision.allowed;
       reason = decision.reason;
     } catch (error) {
-      reason = error instanceof Error ? error.message : String(error);
+      reason = errorMessage(error);
     }
 
     if (approved) {
       logDebug("tool.approved", {
-        operation: resolved.request.operation,
+        operation: resolved.request.capability.action,
         risk: resolved.request.risk,
         sessionId: resolved.request.sessionId,
-        turnId: resolved.request.turnId,
+        turnId: resolved.request.workId ?? "",
       });
       if (resolved.kind === "local") {
         controller.allowAndOverrideParameters(resolved.params);
@@ -184,18 +266,60 @@ export function createToolCallGuard(deps: AgentToolDeps): ToolCallGuard {
   };
 }
 
+/** Per-turn facade for model tools and capability guard authorization. */
+export class TurnAuthorization {
+  private readonly _deps: AgentToolDeps;
+  private readonly _authorizer: ToolCapabilityAuthorizer;
+  private readonly _options: TurnAuthorizationOptions;
+
+  /** Creates a per-turn authorization facade. */
+  constructor(
+    deps: AgentToolDeps,
+    authorizer: ToolCapabilityAuthorizer,
+    options: TurnAuthorizationOptions = {},
+  ) {
+    this._deps = deps;
+    this._authorizer = authorizer;
+    this._options = options;
+  }
+
+  /** Returns model-facing tools for the turn. */
+  getModelTools(): Tool[] {
+    return getModelTools(this._deps);
+  }
+
+  /** Parses and maps a tool call to a capability request without deciding it. */
+  authorizeToolCall(call: GuardedToolCallRequest): Promise<CapabilityRequest | null> {
+    return authorizeToolCall(this._deps, call, this._options);
+  }
+
+  /** Creates the LM Studio tool-call guard for this turn. */
+  createGuardToolCall(): ToolCallGuard {
+    return createToolCallGuard(this._deps, this._authorizer, this._options);
+  }
+
+  /** Returns tools plus guard as a single model turn set. */
+  getModelToolSet(): ModelToolSet {
+    return {
+      tools: this.getModelTools(),
+      guardToolCall: this.createGuardToolCall(),
+      authorizeToolCall: (call) => this.authorizeToolCall(call),
+    };
+  }
+}
+
 export function getModelTools(deps: AgentToolDeps): Tool[] {
-  const core = localToolDefinitions.map((definition) => toolFromDefinition(definition, deps));
+  const core = localRuntimeTools.map((definition) => toolFromRuntimeDefinition(definition, deps));
   const mcp = deps.mcp?.getTools() ?? [];
   return [...core, ...mcp];
 }
 
-export function getModelToolSet(deps: AgentToolDeps): ModelToolSet {
-  return {
-    tools: getModelTools(deps),
-    guardToolCall: createToolCallGuard(deps),
-    authorizeToolCall: (call) => authorizeToolCall(deps, call),
-  };
+export function getModelToolSet(
+  deps: AgentToolDeps,
+  authorizer: ToolCapabilityAuthorizer,
+  options: TurnAuthorizationOptions = {},
+): ModelToolSet {
+  return new TurnAuthorization(deps, authorizer, options).getModelToolSet();
 }
 
 export function createReadOnlySubagentToolsFromDefinitions(
@@ -212,8 +336,7 @@ export function createReadOnlySubagentToolsFromDefinitions(
         return workspace.signal;
       },
     },
-    approvalGate: createDenyApprovalGate("subagent_tools_are_not_interactive"),
-    userQuestions: createUnavailableAskUserQuestionPort(),
+    userQuestions: createUnavailableUserInteractionPort(),
     todos: {
       getSessionId: workspace.getSessionId,
       store: unavailableTodoStore(),
@@ -225,7 +348,7 @@ export function createReadOnlySubagentToolsFromDefinitions(
     },
     subagents: unavailableSubagentPort(),
   } satisfies AgentToolDeps;
-  return readOnlySubagentToolDefinitions.map((definition) => toolFromDefinition(definition, deps));
+  return readOnlySubagentRuntimeTools.map((definition) => toolFromRuntimeDefinition(definition, deps));
 }
 
 /** Creates tools from a workspace directory path (canonicalizes root). */
@@ -234,8 +357,7 @@ export async function getModelToolsForRoot(root: string): Promise<Tool[]> {
   const skills = await createSkillManager({ root });
   return getModelTools({
     workspace,
-    approvalGate: createDenyApprovalGate("approval_unavailable"),
-    userQuestions: createUnavailableAskUserQuestionPort(),
+    userQuestions: createUnavailableUserInteractionPort(),
     todos: {
       getSessionId: () => "00000000-0000-4000-8000-000000000000",
       store: unavailableTodoStore(),

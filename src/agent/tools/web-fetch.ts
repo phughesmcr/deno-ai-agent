@@ -2,11 +2,15 @@ import type { Tool } from "@lmstudio/sdk";
 import { z } from "zod/v3";
 
 import { grantBrokerNetUrl, shouldRunPermissionControlClient } from "../../permission-broker/mod.ts";
-import type { ApprovalRequest } from "../../shared/approval.ts";
 import { logDebug } from "../../shared/mod.ts";
 import { parseHttpUrl, requestForOperation, webFetchApprovalSummary } from "./approval-support.ts";
 import type { ToolContext } from "./context.ts";
-import { type AgentToolDefinition, type AgentToolDeps, toolFromDefinition } from "./definitions.ts";
+import {
+  type AgentToolCapabilityRequestSpec,
+  type AgentToolDefinition,
+  type AgentToolDeps,
+  toolFromDefinition,
+} from "./definitions.ts";
 
 const DEFAULT_TIMEOUT_SECONDS = 15;
 const MAX_TIMEOUT_SECONDS = 60;
@@ -239,7 +243,7 @@ export function createWebFetchToolDefinition(options: WebFetchToolOptions = {}):
     description:
       "Fetch an approved HTTP/HTTPS website document with GET only. Follows up to 5 redirects manually. Returns status, URLs, content type, redirect chain, and a bounded text body for textual responses. Does not send custom headers, cookies, request bodies, or non-GET methods.",
     parameters: webFetchParameters,
-    authorize: ({ url: rawUrl }, deps): ApprovalRequest => {
+    authorize: ({ url: rawUrl }, deps): AgentToolCapabilityRequestSpec => {
       const url = parseHttpUrl(rawUrl);
       return requestForOperation(deps.workspace, {
         operation: "network",

@@ -5,40 +5,40 @@ const encoder = new TextEncoder();
  * @internal
  */
 export class JsonlConnection {
-  readonly #conn: Deno.Conn;
-  readonly #decoder = new TextDecoder();
-  readonly #readBuffer = new Uint8Array(4096);
-  #pending = "";
-  #eof = false;
+  private readonly _conn: Deno.Conn;
+  private readonly _decoder = new TextDecoder();
+  private readonly _readBuffer = new Uint8Array(4096);
+  private _pending = "";
+  private _eof = false;
 
   constructor(conn: Deno.Conn) {
-    this.#conn = conn;
+    this._conn = conn;
   }
 
   /** Reads one JSONL line, preserving unread bytes for later calls. */
   async readLine(): Promise<string | null> {
     while (true) {
-      const index = this.#pending.indexOf("\n");
+      const index = this._pending.indexOf("\n");
       if (index >= 0) {
-        const line = this.#pending.slice(0, index);
-        this.#pending = this.#pending.slice(index + 1);
+        const line = this._pending.slice(0, index);
+        this._pending = this._pending.slice(index + 1);
         return line;
       }
 
-      if (this.#eof) {
-        if (this.#pending.length === 0) return null;
-        const line = this.#pending;
-        this.#pending = "";
+      if (this._eof) {
+        if (this._pending.length === 0) return null;
+        const line = this._pending;
+        this._pending = "";
         return line;
       }
 
       // deno-lint-ignore no-await-in-loop -- A JSONL frame must read sequentially from one socket.
-      const n = await this.#conn.read(this.#readBuffer);
+      const n = await this._conn.read(this._readBuffer);
       if (n === null) {
-        this.#pending += this.#decoder.decode();
-        this.#eof = true;
+        this._pending += this._decoder.decode();
+        this._eof = true;
       } else {
-        this.#pending += this.#decoder.decode(this.#readBuffer.subarray(0, n), { stream: true });
+        this._pending += this._decoder.decode(this._readBuffer.subarray(0, n), { stream: true });
       }
     }
   }
@@ -49,7 +49,7 @@ export class JsonlConnection {
     let written = 0;
     while (written < bytes.length) {
       // deno-lint-ignore no-await-in-loop -- Socket writes may be partial and must remain in order.
-      const n = await this.#conn.write(bytes.subarray(written));
+      const n = await this._conn.write(bytes.subarray(written));
       if (n === 0) throw new Error("socket write returned 0 bytes");
       written += n;
     }

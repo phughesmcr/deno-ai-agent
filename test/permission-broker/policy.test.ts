@@ -61,6 +61,19 @@ Deno.test("policy denies write under repo src", async () => {
   assertEquals(decidePolicy(request("write", file), ctx(fixture)), "auto_deny");
 });
 
+Deno.test("policy denies repo src writes even when workspace is the project root", async () => {
+  const fixture = await makeFixture();
+  const file = path.join(fixture.src, "main.ts");
+  const context = createPolicyContext({
+    workspaceRoot: fixture.project,
+    projectRoot: fixture.project,
+    denoDir: fixture.denoDir,
+    runPromptsEnabled: true,
+  });
+
+  assertEquals(decidePolicy(request("write", file), context), "auto_deny");
+});
+
 Deno.test("policy prompts read under home directory", async () => {
   const fixture = await makeFixture();
   const file = "/Users/tester/.codex/config.toml";

@@ -2,6 +2,8 @@ import { extractYaml } from "@std/front-matter";
 import * as path from "@std/path";
 import { z } from "zod/v3";
 
+import { errorMessage } from "../../shared/error.ts";
+
 const SKILL_FILE_NAME = "SKILL.md";
 const SKILLS_DIR_NAME = "skills";
 const SKILL_NAME_PATTERN = /^[A-Za-z0-9_-]+$/;
@@ -97,7 +99,7 @@ function parseSkillFile(filePath: string, baseDir: string, text: string): Skill 
   try {
     extracted = extractYaml(text);
   } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
+    const message = errorMessage(error);
     return diagnostic("bad_yaml", `Could not parse skill frontmatter: ${message}`, filePath);
   }
 
@@ -156,25 +158,25 @@ async function directSkillDirs(skillsDir: string): Promise<string[]> {
 
 /** Discovers AgentSkills under a workspace `skills/` directory. */
 export class SkillManager {
-  readonly #root: string;
-  #skills = new Map<string, Skill>();
-  #diagnostics: SkillDiagnostic[] = [];
+  private readonly _root: string;
+  private _skills = new Map<string, Skill>();
+  private _diagnostics: SkillDiagnostic[] = [];
 
   /** Creates a manager for a workspace root. Call `refresh()` before reading the catalog. */
   constructor(root: string) {
-    this.#root = path.resolve(root);
+    this._root = path.resolve(root);
   }
 
   /** Workspace root used for discovery. */
   get root(): string {
-    return this.#root;
+    return this._root;
   }
 
   /** Re-scans direct child skill directories under `${root}/skills`. */
   async refresh(): Promise<void> {
     const skills = new Map<string, Skill>();
     const diagnostics: SkillDiagnostic[] = [];
-    const skillsDir = path.join(this.#root, SKILLS_DIR_NAME);
+    const skillsDir = path.join(this._root, SKILLS_DIR_NAME);
     const dirNames = await directSkillDirs(skillsDir);
 
     const parsed = await Promise.all(dirNames.map(async (dirName) => {
@@ -208,23 +210,23 @@ export class SkillManager {
       skills.set(result.name, result);
     }
 
-    this.#skills = skills;
-    this.#diagnostics = diagnostics;
+    this._skills = skills;
+    this._diagnostics = diagnostics;
   }
 
   /** Returns model-visible skill summaries. */
   list(): SkillSummary[] {
-    return [...this.#skills.values()].map(toSummary);
+    return [...this._skills.values()].map(toSummary);
   }
 
   /** Returns a discovered skill by name. */
   get(name: string): Skill | undefined {
-    return this.#skills.get(name);
+    return this._skills.get(name);
   }
 
   /** Returns diagnostics from the most recent refresh. */
   diagnostics(): SkillDiagnostic[] {
-    return [...this.#diagnostics];
+    return [...this._diagnostics];
   }
 }
 

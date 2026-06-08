@@ -1,14 +1,7 @@
 import * as path from "@std/path";
 
-import type { ApprovalGate, ApprovalOperation, ApprovalRequest } from "../shared/approval.ts";
-import { approveDecision, denyDecision } from "../shared/approval.ts";
-import type {
-  PermissionCallbackDispatch,
-  PermissionPromptPort,
-  PermissionPromptRequest,
-  PermissionPromptResult,
-  PermissionPromptTurnTarget,
-} from "../permission-broker/mod.ts";
+import type { CapabilityDecisionDelegate, CapabilityDelegateDecision, CapabilityRequest } from "../core/mod.ts";
+import type { ApprovalOperation } from "../shared/approval.ts";
 
 /** Exact app-layer tool approval allowed for a cron job. */
 export interface CronPermissionToolRule {
@@ -31,7 +24,7 @@ export type CronLocalToolPolicy = "none" | "workspace-readonly";
 
 /** Explicit background permission profile for one cron job. */
 export interface CronPermissionProfile {
-  /** Built-in workspace-local tool policy. Missing legacy values use `workspace-readonly`. */
+  /** Built-in workspace-local tool policy. Defaults to `workspace-readonly`. */
   localToolPolicy?: CronLocalToolPolicy;
   /** App/model tool approvals that can be answered without Telegram prompts. */
   toolRules: CronPermissionToolRule[];
@@ -39,83 +32,134 @@ export interface CronPermissionProfile {
   brokerRules: CronPermissionBrokerRule[];
 }
 
-/** Permission prompt port with a cron-profile execution scope. */
-export interface CronPermissionPromptPort extends PermissionPromptPort {
-  /** Runs `operation` while broker prompts are answered from `profile`. */
+/** Hooks for persisting cron-profile rules learned through fallback prompts. */
+export interface CronCapabilityProfileHooks {
+  /** Called when a fallback prompt approves an app/model tool capability. */
+  onApprovedToolRule?: (rule: CronPermissionToolRule) => void | Promise<void>;
+  /** Called when a fallback prompt approves a broker permission capability. */
+  onApprovedBrokerRule?: (rule: CronPermissionBrokerRule) => void | Promise<void>;
+}
+
+/** Capability delegate with an active cron-profile stack. */
+export interface CronCapabilityDelegate extends CapabilityDecisionDelegate {
+  /** Runs `operation` while capability prompts are answered from `profile` when possible. */
   withProfile<T>(
     profile: CronPermissionProfile,
     jobId: string,
     operation: () => Promise<T>,
-    options?: {
-      onApprovedBrokerRule?: (rule: CronPermissionBrokerRule) => void | Promise<void>;
-    },
+    hooks?: CronCapabilityProfileHooks,
   ): Promise<T>;
-}
-
-function matchesToolRule(profile: CronPermissionProfile, request: ApprovalRequest): boolean {
-  return profile.toolRules.some((rule) =>
-    matchesExactToolRule(rule, request) || matchesMutationToolRule(rule, request)
-  );
-}
-
-function matchesBrokerRule(profile: CronPermissionProfile, request: PermissionPromptRequest): boolean {
-  return profile.brokerRules.some((rule) => rule.permission === request.permission && rule.value === request.value);
 }
 
 const workspaceReadOnlyOperations = new Set<ApprovalOperation>(["read", "list", "find", "grep", "skill"]);
 const localMutationOperations = new Set<ApprovalOperation>(["write", "edit"]);
+const approvalOperations = new Set<ApprovalOperation>([
+  "read",
+  "write",
+  "edit",
+  "list",
+  "find",
+  "grep",
+  "skill",
+  "todo",
+  "session",
+  "shell",
+  "network",
+  "mcp",
+]);
 
-function matchesExactToolRule(rule: CronPermissionToolRule, request: ApprovalRequest): boolean {
-  return rule.operation === request.operation && rule.target === request.target;
+function isApprovalOperation(value: string): value is ApprovalOperation {
+  return approvalOperations.has(value as ApprovalOperation);
 }
 
 function isWorkspaceDisplayTarget(target: string): boolean {
   return !path.isAbsolute(target) && !target.startsWith("~");
 }
 
-function matchesMutationToolRule(rule: CronPermissionToolRule, request: ApprovalRequest): boolean {
+function toolRuleForCapability(request: CapabilityRequest): CronPermissionToolRule | undefined {
+  if (request.source === "mcp_tool") {
+    return { operation: "mcp", target: request.capability.target };
+  }
+  if (request.source !== "local_tool") return undefined;
+  if (!isApprovalOperation(request.capability.action)) return undefined;
+  return { operation: request.capability.action, target: request.capability.target };
+}
+
+function brokerRuleForCapability(request: CapabilityRequest): CronPermissionBrokerRule | undefined {
+  if (request.source !== "broker_permission") return undefined;
+  return {
+    permission: request.capability.action,
+    value: request.capability.target === "(none)" ? null : request.capability.target,
+  };
+}
+
+function matchesExactToolRule(rule: CronPermissionToolRule, request: CronPermissionToolRule): boolean {
+  return rule.operation === request.operation && rule.target === request.target;
+}
+
+function matchesMutationToolRule(rule: CronPermissionToolRule, request: CronPermissionToolRule): boolean {
   return rule.target === request.target &&
     localMutationOperations.has(rule.operation) &&
     localMutationOperations.has(request.operation);
 }
 
-function matchesLocalToolPolicy(profile: CronPermissionProfile, request: ApprovalRequest): boolean {
-  const policy = profile.localToolPolicy ?? "workspace-readonly";
-  return policy === "workspace-readonly" &&
-    request.risk === "low" &&
-    workspaceReadOnlyOperations.has(request.operation) &&
-    isWorkspaceDisplayTarget(request.target);
+function matchesToolRule(profile: CronPermissionProfile, request: CapabilityRequest): boolean {
+  const rule = toolRuleForCapability(request);
+  if (!rule) return false;
+  return profile.toolRules.some((candidate) =>
+    matchesExactToolRule(candidate, rule) || matchesMutationToolRule(candidate, rule)
+  );
 }
 
-/** Creates an approval gate that auto-allows preapproved cron operations and delegates the rest. */
-export function createCronApprovalGate(
-  profile: CronPermissionProfile,
-  jobId: string,
-  fallback?: ApprovalGate,
-  onApprovedToolRule?: (rule: CronPermissionToolRule) => void | Promise<void>,
-): ApprovalGate {
+function matchesBrokerRule(profile: CronPermissionProfile, request: CapabilityRequest): boolean {
+  const rule = brokerRuleForCapability(request);
+  if (!rule) return false;
+  return profile.brokerRules.some((candidate) =>
+    candidate.permission === rule.permission && candidate.value === rule.value
+  );
+}
+
+function matchesLocalToolPolicy(profile: CronPermissionProfile, request: CapabilityRequest): boolean {
+  const policy = profile.localToolPolicy ?? "workspace-readonly";
+  return policy === "workspace-readonly" &&
+    request.source === "local_tool" &&
+    request.risk === "low" &&
+    workspaceReadOnlyOperations.has(request.capability.action as ApprovalOperation) &&
+    isWorkspaceDisplayTarget(request.capability.target);
+}
+
+function policyAllow(jobId: string): CapabilityDelegateDecision {
   return {
-    isPending: () => fallback?.isPending?.() ?? false,
-    requestApproval: async (request, signal) => {
-      if (matchesToolRule(profile, request) || matchesLocalToolPolicy(profile, request)) {
-        return approveDecision(`cron:${jobId}`);
-      }
-      if (!fallback) return denyDecision("cron_permission_not_preapproved", `cron:${jobId}`);
-      const decision = await fallback.requestApproval(request, signal);
-      if (decision.approved) {
-        await onApprovedToolRule?.({ operation: request.operation, target: request.target });
-      }
-      return decision;
-    },
+    decision: "allow",
+    scope: "once",
+    reason: "approved",
+    decidedAt: new Date().toISOString(),
+    decidedBy: `cron:${jobId}`,
+    source: "policy",
   };
 }
 
-/** Wraps the interactive permission prompt port with cron-profile auto decisions. */
-export function createCronPermissionPromptPort(base: PermissionPromptPort): CronPermissionPromptPort {
+async function maybeCacheApprovedRule(
+  request: CapabilityRequest,
+  decision: CapabilityDelegateDecision,
+  hooks?: CronCapabilityProfileHooks,
+): Promise<void> {
+  if (decision.decision !== "allow") return;
+  const toolRule = toolRuleForCapability(request);
+  if (toolRule) {
+    await hooks?.onApprovedToolRule?.(toolRule);
+    return;
+  }
+  const brokerRule = brokerRuleForCapability(request);
+  if (brokerRule) await hooks?.onApprovedBrokerRule?.(brokerRule);
+}
+
+/** Creates a cron-profile capability delegate over an interactive fallback delegate. */
+export function createCronCapabilityDelegate(base: CapabilityDecisionDelegate): CronCapabilityDelegate {
   const stack: {
     profile: CronPermissionProfile;
     jobId: string;
-    onApprovedBrokerRule?: (rule: CronPermissionBrokerRule) => void | Promise<void>;
+    hooks?: CronCapabilityProfileHooks;
   }[] = [];
 
   function active(): typeof stack[number] | undefined {
@@ -123,42 +167,29 @@ export function createCronPermissionPromptPort(base: PermissionPromptPort): Cron
   }
 
   return {
-    isPending: () => base.isPending(),
-    setTurnContext(target: PermissionPromptTurnTarget): void {
-      base.setTurnContext(target);
-    },
-    clearTurnContext(): void {
-      base.clearTurnContext();
-    },
-    abortPending(): void {
-      base.abortPending();
-    },
-    handleCallback(
-      data: string,
-      actorId: number | undefined,
-      adminId: number,
-    ): Promise<PermissionCallbackDispatch> {
-      return base.handleCallback(data, actorId, adminId);
-    },
-    async prompt(request: PermissionPromptRequest, signal?: AbortSignal): Promise<PermissionPromptResult> {
+    async decide(request: CapabilityRequest, signal?: AbortSignal): Promise<CapabilityDelegateDecision> {
       const current = active();
-      if (!current) return base.prompt(request, signal);
-      if (matchesBrokerRule(current.profile, request)) return { result: "allow", grant: "once" };
-      const result = await base.prompt(request, signal);
-      if (result.result === "allow") {
-        await current.onApprovedBrokerRule?.({ permission: request.permission, value: request.value });
+      if (!current) return await base.decide(request, signal);
+
+      if (
+        matchesToolRule(current.profile, request) ||
+        matchesLocalToolPolicy(current.profile, request) ||
+        matchesBrokerRule(current.profile, request)
+      ) {
+        return policyAllow(current.jobId);
       }
-      return result;
+
+      const decision = await base.decide(request, signal);
+      await maybeCacheApprovedRule(request, decision, current.hooks);
+      return decision;
     },
     async withProfile<T>(
       profile: CronPermissionProfile,
       jobId: string,
       operation: () => Promise<T>,
-      options?: {
-        onApprovedBrokerRule?: (rule: CronPermissionBrokerRule) => void | Promise<void>;
-      },
+      hooks?: CronCapabilityProfileHooks,
     ): Promise<T> {
-      stack.push({ profile, jobId, onApprovedBrokerRule: options?.onApprovedBrokerRule });
+      stack.push({ profile, jobId, hooks });
       try {
         return await operation();
       } finally {

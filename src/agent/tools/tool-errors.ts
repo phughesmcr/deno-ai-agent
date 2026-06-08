@@ -1,5 +1,6 @@
 import type { Tool } from "@lmstudio/sdk";
 
+import { errorMessage } from "../../shared/error.ts";
 import { UserQuestionAbortedError, UserQuestionDeclinedError } from "./user-interaction.ts";
 
 type ToolWithImplementation = Tool & {
@@ -23,7 +24,7 @@ export function withRecoverableToolErrors(tool: Tool): Tool {
       return await original(params, toolCtx);
     } catch (error) {
       if (isNonRecoverableToolError(error)) throw error;
-      const message = error instanceof Error ? error.message : String(error);
+      const message = errorMessage(error);
       return `Error: ${message}`;
     }
   };

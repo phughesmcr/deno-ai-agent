@@ -1,9 +1,13 @@
 import type { Tool } from "@lmstudio/sdk";
 import { z } from "zod/v3";
 
-import type { ApprovalRequest } from "../../shared/approval.ts";
 import type { ToolContext } from "./context.ts";
-import { type AgentToolDefinition, type AgentToolDeps, toolFromDefinition } from "./definitions.ts";
+import {
+  type AgentToolCapabilityRequestSpec,
+  type AgentToolDefinition,
+  type AgentToolDeps,
+  toolFromDefinition,
+} from "./definitions.ts";
 import { DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES, formatSize, truncateHead } from "./truncate.ts";
 
 const IMAGE_EXTENSIONS = new Set([".jpg", ".jpeg", ".png", ".gif", ".webp"]);
@@ -34,7 +38,7 @@ export const readToolDefinition: AgentToolDefinition<typeof readParameters> = {
     DEFAULT_MAX_BYTES / 1024
   }KB (whichever is hit first). Use offset/limit for large files. When you need the full file, continue with offset until complete. Images are not supported in phase 1. Use a relative path for workspace files. For host files outside the workspace, use this tool with an absolute path or \`~/...\` (requires Telegram approval) - do not use bash for host file reads.`,
   parameters: readParameters,
-  authorize: async ({ path: userPath, offset, limit }, deps): Promise<ApprovalRequest> => {
+  authorize: async ({ path: userPath, offset, limit }, deps): Promise<AgentToolCapabilityRequestSpec> => {
     const op = await deps.workspace.fs.operation({
       operation: "read",
       path: userPath,
@@ -42,7 +46,7 @@ export const readToolDefinition: AgentToolDefinition<typeof readParameters> = {
       require: "existingFile",
       summary: readOperationSummary(offset, limit),
     });
-    return op.approvalRequest();
+    return op.capabilityRequest();
   },
   run: async ({ path: userPath, offset, limit }, deps): Promise<string> => {
     const ctx = deps.workspace;

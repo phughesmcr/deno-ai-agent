@@ -33,6 +33,11 @@ export class ActiveTurnRegistry {
     return this._active?.actController.signal;
   }
 
+  /** Active approval/capability prompt signal, if a turn is currently running. */
+  get approvalSignal(): AbortSignal | undefined {
+    return this._active?.approvalController.signal;
+  }
+
   /** Aborts the active turn, if present. */
   abortActiveTurn(): boolean {
     const turn = this._active;

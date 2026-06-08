@@ -1,15 +1,14 @@
 import { Bot, type Context, GrammyError, HttpError } from "grammy";
 
 import { questions, type QuestionsFlavor } from "grammy-questions";
-import type { AskUserQuestionPort, TodoStore } from "../agent/mod.ts";
-import type { PermissionCallbackDispatch } from "../permission-broker/mod.ts";
-import { loadTelegramConfig, logDebug } from "../shared/mod.ts";
+import type { TodoStore, UserInteractionPort } from "../agent/mod.ts";
+import { errorMessage, loadTelegramConfig, logDebug } from "../shared/mod.ts";
 import { shouldIgnoreUnauthorizedMessage } from "./authorization.ts";
 import { installConcurrentUpdates } from "./bot-runner.ts";
+import type { TelegramCapabilityPromptPort } from "./capability-prompt.ts";
 import { type CommandCronManager, SESSION_HELP, TelegramCommandHandler } from "./commands.ts";
 import { type TelegramConversationRef, telegramConversationRef } from "./conversation.ts";
 import { showTodosForSession } from "./grammy-todo-display-adapter.ts";
-import { isPermissionCallback } from "./permission-callback.ts";
 import type { TelegramSessionCoordinator } from "./session-coordinator.ts";
 import { replyError } from "./telegram-reply.ts";
 
@@ -30,24 +29,6 @@ export type TelegramContext = QuestionsFlavor<
 
 interface TelegramManager {
   readonly bot: Bot<TelegramContext>;
-}
-
-interface TelegramApprovalPort {
-  isPending(): boolean;
-  handleCallback(ctx: TelegramContext): Promise<boolean>;
-}
-
-interface TelegramTurnAbortPort {
-  abortActiveTurn(): boolean;
-}
-
-interface TelegramPermissionPromptPort {
-  isPending(): boolean;
-  handleCallback(
-    data: string,
-    actorId: number | undefined,
-    adminId: number,
-  ): Promise<PermissionCallbackDispatch>;
 }
 
 interface TelegramCronTopicPort {
@@ -74,7 +55,7 @@ function commandRest(ctx: TelegramContext): string | undefined {
   return rest.length > 0 ? rest : undefined;
 }
 
-const PENDING_INTERACTION_HINT = "Please resolve the pending question or approval first.";
+const PENDING_INTERACTION_HINT = "Please resolve the pending question or capability prompt first.";
 
 function replyThreadId(ctx: TelegramContext): number | undefined {
   return ctx.message?.message_thread_id;
@@ -92,18 +73,14 @@ export function createTelegramManager({
   sessions,
   onAdminStart,
   userQuestions,
-  permissionPrompts,
-  approvals,
-  turnAbort,
+  capabilityPrompts,
   todoStore,
   cronForConversation,
 }: {
   sessions: TelegramSessionCoordinator;
   onAdminStart: (ctx: TelegramContext) => Promise<void>;
-  userQuestions?: AskUserQuestionPort;
-  permissionPrompts?: TelegramPermissionPromptPort;
-  approvals?: TelegramApprovalPort;
-  turnAbort?: TelegramTurnAbortPort;
+  userQuestions?: UserInteractionPort;
+  capabilityPrompts?: TelegramCapabilityPromptPort;
   todoStore?: TodoStore;
   cronForConversation?: (ref: TelegramConversationRef, topics: TelegramCronTopicPort) => CommandCronManager | undefined;
 }): TelegramManager {
@@ -162,13 +139,6 @@ export function createTelegramManager({
     await next();
   });
 
-  bot.command("q", async (ctx: TelegramContext) => {
-    const aborted = turnAbort?.abortActiveTurn() ?? false;
-    await ctx.reply(aborted ? "Aborted current turn." : "No active turn.", {
-      message_thread_id: replyThreadId(ctx),
-    });
-  });
-
   bot.use(
     questions({
       filter: (ctx) => ctx.config.isAdmin,
@@ -180,27 +150,12 @@ export function createTelegramManager({
   );
 
   bot.on("callback_query:data", async (ctx, next) => {
-    const data = ctx.callbackQuery?.data;
-    if (data && isPermissionCallback(data)) {
-      const dispatch = await permissionPrompts?.handleCallback(data, ctx.from?.id, adminId);
-      if (dispatch?.handled) {
-        await ctx.answerCallbackQuery(dispatch.answer);
-        if (dispatch.clearReplyMarkup || !permissionPrompts?.isPending()) {
-          try {
-            await ctx.editMessageReplyMarkup({ reply_markup: undefined });
-          } catch {
-            /* message may be gone */
-          }
-        }
-        return;
-      }
-    }
-    if (await approvals?.handleCallback(ctx)) return;
+    if (await capabilityPrompts?.handleCallback(ctx)) return;
     await next();
   });
 
   function blockIfInteractionPending(ctx: TelegramContext): boolean {
-    if (userQuestions?.isPending() || permissionPrompts?.isPending() || approvals?.isPending()) {
+    if (userQuestions?.isPending() || capabilityPrompts?.isPending()) {
       void replyInConversation(ctx, PENDING_INTERACTION_HINT);
       return true;
     }
@@ -251,10 +206,12 @@ export function createTelegramManager({
   bot.command("compact", async (ctx: TelegramContext) => {
     if (blockIfInteractionPending(ctx)) return;
     const commands = commandsFor(ctx);
-    await replyInConversation(
-      ctx,
-      commands ? await commands.compact(commandRest(ctx)) : "No Telegram chat found for this command.",
-    );
+    if (!commands) {
+      await replyInConversation(ctx, "No Telegram chat found for this command.");
+      return;
+    }
+    await replyInConversation(ctx, "Compacting session...");
+    await replyInConversation(ctx, await commands.compact(commandRest(ctx)));
   });
 
   bot.command("fork", async (ctx: TelegramContext) => {
@@ -343,12 +300,12 @@ export function createTelegramManager({
         { message_thread_id: topic.message_thread_id },
       );
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
+      const message = errorMessage(error);
       await replyInConversation(ctx, `Topic creation failed: ${message}`);
     }
   });
 
-  bot.command("todos", async (ctx: TelegramContext) => {
+  bot.command(["todo", "todos"], async (ctx: TelegramContext) => {
     if (blockIfInteractionPending(ctx)) return;
     if (!todoStore) {
       await replyInConversation(ctx, "Todo list is not configured.");
@@ -363,7 +320,7 @@ export function createTelegramManager({
       const status = await commands.sessionStatus();
       await showTodosForSession(ctx, status.id, todoStore);
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
+      const message = errorMessage(error);
       await replyInConversation(ctx, `Failed to show todos: ${message}`);
     }
   });

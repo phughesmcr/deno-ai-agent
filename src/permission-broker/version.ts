@@ -1,5 +1,5 @@
-/** Minimum Deno version that supports DENO_PERMISSION_BROKER_PATH. */
-export const MIN_BROKER_DENO_VERSION = { major: 2, minor: 5, patch: 0 };
+/** Minimum Deno version supported by the broker-backed Silas runtime. */
+export const MIN_BROKER_DENO_VERSION = { major: 2, minor: 8, patch: 1 };
 
 function parseVersion(version: string): { major: number; minor: number; patch: number } {
   const match = /^(\d+)\.(\d+)\.(\d+)/.exec(version.trim());
@@ -25,7 +25,7 @@ export function supportsPermissionBroker(version = Deno.version.deno): boolean {
 export function assertPermissionBrokerSupported(version = Deno.version.deno): void {
   if (!supportsPermissionBroker(version)) {
     throw new Error(
-      `Deno ${version} does not support DENO_PERMISSION_BROKER_PATH; require >= ${MIN_BROKER_DENO_VERSION.major}.${MIN_BROKER_DENO_VERSION.minor}.${MIN_BROKER_DENO_VERSION.patch}`,
+      `Deno ${version} is below the supported Silas runtime; require >= ${MIN_BROKER_DENO_VERSION.major}.${MIN_BROKER_DENO_VERSION.minor}.${MIN_BROKER_DENO_VERSION.patch}`,
     );
   }
 }

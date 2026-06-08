@@ -1,60 +1,49 @@
-import { assert, assertEquals, assertStringIncludes } from "jsr:@std/assert@1";
+import { assertEquals, assertStringIncludes } from "jsr:@std/assert@1";
 
-import type { SubagentActRequest, SubagentActResult } from "../../src/agent/model-act.ts";
 import { createSkillManager } from "../../src/agent/skills/mod.ts";
-import { createReadOnlySubagentTools, SubagentJobService, type SubagentRecord } from "../../src/agent/subagents.ts";
-import { createToolContext, type ToolContext } from "../../src/agent/tools/context.ts";
+import {
+  createReadOnlySubagentTools,
+  type SubagentPort,
+  type SubagentRecord,
+  type SubagentSpawnSpec,
+} from "../../src/agent/subagents.ts";
+import { createToolContext } from "../../src/agent/tools/context.ts";
 import { createSubagentTool, type SubagentAction } from "../../src/agent/tools/subagent.ts";
 import { runTool } from "./helpers.ts";
 
-type FakeBehavior = (request: SubagentActRequest) => Promise<SubagentActResult>;
+class FakeSubagentPort implements SubagentPort {
+  readonly spawnCalls: SubagentSpawnSpec[] = [];
+  readonly cancelledIds: string[] = [];
+  records = new Map<string, SubagentRecord>();
 
-class FakeModel {
-  readonly runCalls: SubagentActRequest[] = [];
-  readonly behaviors: FakeBehavior[] = [];
-
-  runSubagent(request: SubagentActRequest): Promise<SubagentActResult> {
-    this.runCalls.push(request);
-    const behavior = this.behaviors.shift() ?? this.reply("default result");
-    return behavior(request);
+  spawn(spec: SubagentSpawnSpec): Promise<SubagentRecord> {
+    this.spawnCalls.push(spec);
+    const record = subagentRecord({
+      id: "spawned-subagent",
+      title: spec.title ?? "Spawned",
+      task: spec.task,
+      status: "queued",
+    });
+    this.records.set(record.id, record);
+    return Promise.resolve(record);
   }
 
-  reply(text: string): FakeBehavior {
-    return () => Promise.resolve({ text });
+  status(agentId: string): Promise<SubagentRecord | undefined> {
+    return Promise.resolve(this.records.get(agentId));
   }
 
-  replies(texts: string[]): FakeBehavior {
-    return () => Promise.resolve({ text: texts.at(-1) ?? "" });
+  list(): Promise<SubagentRecord[]> {
+    return Promise.resolve([...this.records.values()]);
   }
 
-  fail(message: string): FakeBehavior {
-    return () => Promise.reject(new Error(message));
+  result(agentId: string): Promise<SubagentRecord | undefined> {
+    return Promise.resolve(this.records.get(agentId));
   }
 
-  waitUntilAbort(started: PromiseResolver<void>): FakeBehavior {
-    return (request) => {
-      started.resolve();
-      return new Promise((resolve, reject) => {
-        const abort = (): void => reject(new DOMException("Aborted", "AbortError"));
-        if (request.signal.aborted) abort();
-        request.signal.addEventListener("abort", abort, { once: true });
-        request.signal.addEventListener("abort", () => resolve({ text: "" }), { once: true });
-      });
-    };
+  cancel(agentId: string): Promise<SubagentRecord | undefined> {
+    this.cancelledIds.push(agentId);
+    return Promise.resolve(this.records.get(agentId));
   }
-}
-
-interface PromiseResolver<T> {
-  promise: Promise<T>;
-  resolve: (value: T | PromiseLike<T>) => void;
-}
-
-function deferred<T>(): PromiseResolver<T> {
-  let resolve: (value: T | PromiseLike<T>) => void = () => {};
-  const promise = new Promise<T>((res) => {
-    resolve = res;
-  });
-  return { promise, resolve };
 }
 
 type SubagentToolJson =
@@ -64,6 +53,18 @@ type SubagentToolJson =
 
 function parseJson(text: string): SubagentToolJson {
   return JSON.parse(text) as SubagentToolJson;
+}
+
+function subagentRecord(overrides: Partial<SubagentRecord>): SubagentRecord {
+  return {
+    id: "subagent-1",
+    sessionId: "session-1",
+    title: "Subagent",
+    task: "Inspect",
+    status: "queued",
+    createdAt: "2026-01-02T03:04:05.000Z",
+    ...overrides,
+  };
 }
 
 function requireSubagent(response: SubagentToolJson): SubagentRecord {
@@ -85,243 +86,80 @@ function requireError(response: SubagentToolJson): string {
   return response.error;
 }
 
-async function delay(ms: number): Promise<void> {
-  await new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-async function waitForSubagent(
-  tool: unknown,
-  subagentId: string,
-  status: SubagentRecord["status"],
-  deadline = performance.now() + 1_000,
-): Promise<SubagentRecord> {
-  const response = parseJson(await runTool(tool, { action: "status", subagent_id: subagentId }));
-  const subagent = response.ok && "subagent" in response ? response.subagent : undefined;
-  if (subagent?.status === status) return subagent;
-  if (performance.now() > deadline) {
-    throw new Error(`Timed out waiting for ${subagentId} to become ${status}; last status was ${subagent?.status}`);
-  }
-  await delay(5);
-  return await waitForSubagent(tool, subagentId, status, deadline);
-}
-
-async function waitForServiceSubagent(
-  service: SubagentJobService,
-  subagentId: string,
-  status: SubagentRecord["status"],
-  deadline = performance.now() + 1_000,
-): Promise<SubagentRecord> {
-  const subagent = await service.status(subagentId);
-  if (subagent?.status === status) return subagent;
-  if (performance.now() > deadline) {
-    throw new Error(`Timed out waiting for ${subagentId} to become ${status}; last status was ${subagent?.status}`);
-  }
-  await delay(5);
-  return await waitForServiceSubagent(service, subagentId, status, deadline);
-}
-
-async function withSubagents(
-  fn: (spec: {
-    ctx: ToolContext;
-    model: FakeModel;
-    service: SubagentJobService;
-    tool: unknown;
-    setSessionId: (id: string) => void;
-  }) => Promise<void>,
-  options: {
-    clock?: () => Date;
-    createId?: () => string;
-  } = {},
-): Promise<void> {
-  const dir = await Deno.makeTempDir({ prefix: "deno-ai-agent-subagents-" });
-  const kv = await Deno.openKv(":memory:");
-  let sessionId: string = crypto.randomUUID();
-  const model = new FakeModel();
-  try {
-    const ctx = await createToolContext(dir, {
-      sessionId: () => sessionId,
-      turnId: "subagent-test",
-    });
-    const skills = await createSkillManager({ root: dir });
-    const service = new SubagentJobService({
-      kv,
-      model,
-      workspace: ctx,
-      skills,
-      getSessionId: () => sessionId,
-      ...options,
-    });
-    try {
-      await fn({
-        ctx,
-        model,
-        service,
-        tool: createSubagentTool(service),
-        setSessionId: (id) => {
-          sessionId = id;
-        },
-      });
-    } finally {
-      await service.shutdown();
-    }
-  } finally {
-    kv.close();
-    await Deno.remove(dir, { recursive: true });
-  }
-}
-
 Deno.test("subagent tool validates required parameters and unknown ids", async () => {
-  await withSubagents(async ({ tool }) => {
+  const port = new FakeSubagentPort();
+  const tool = createSubagentTool(port);
+
+  assertEquals(
+    parseJson(await runTool(tool, { action: "spawn" })),
+    { ok: false, action: "spawn", error: 'Parameter "task" is required for spawn.' },
+  );
+
+  const requiredSubagentIdResponses = await Promise.all(
+    (["status", "result", "cancel"] as const).map(async (action) => ({
+      action,
+      response: parseJson(await runTool(tool, { action })),
+    })),
+  );
+  for (const { action, response } of requiredSubagentIdResponses) {
     assertEquals(
-      parseJson(await runTool(tool, { action: "spawn" })),
-      { ok: false, action: "spawn", error: 'Parameter "task" is required for spawn.' },
+      response,
+      { ok: false, action, error: 'Parameter "subagent_id" is required for this action.' },
     );
+  }
 
-    const requiredSubagentIdResponses = await Promise.all(
-      (["status", "result", "cancel"] as const).map(async (action) => ({
-        action,
-        response: parseJson(await runTool(tool, { action })),
-      })),
-    );
-    for (const { action, response } of requiredSubagentIdResponses) {
-      assertEquals(
-        response,
-        { ok: false, action, error: 'Parameter "subagent_id" is required for this action.' },
-      );
-    }
+  const unknown = parseJson(await runTool(tool, { action: "status", subagent_id: "missing-subagent" }));
+  assertStringIncludes(requireError(unknown), "Unknown subagent_id");
 
-    const unknown = parseJson(await runTool(tool, { action: "status", subagent_id: crypto.randomUUID() }));
-    assertStringIncludes(requireError(unknown), "Unknown subagent_id");
-
-    const unknownAction = parseJson(await runTool(tool, { action: "pause" }));
-    assertEquals(unknownAction.ok, false);
-    assertEquals(unknownAction.action, "pause");
-    assertStringIncludes(requireError(unknownAction), 'Parameter "action" must be one of');
-  });
+  const unknownAction = parseJson(await runTool(tool, { action: "pause" }));
+  assertEquals(unknownAction.ok, false);
+  assertEquals(unknownAction.action, "pause");
+  assertStringIncludes(requireError(unknownAction), 'Parameter "action" must be one of');
 });
 
-Deno.test("subagent lifecycle records completed and failed jobs", async () => {
-  await withSubagents(async ({ model, tool }) => {
-    model.behaviors.push(model.replies(["draft", "final result"]));
-    const spawned = requireSubagent(parseJson(await runTool(tool, { action: "spawn", task: "Inspect the repo" })));
-    assert(["queued", "running", "completed"].includes(spawned.status));
-    assertEquals(spawned.task, "Inspect the repo");
-
-    const completed = await waitForSubagent(tool, spawned.id, "completed");
-    assertEquals(completed.result, "final result");
-    assertEquals(completed.error, undefined);
-
-    model.behaviors.push(model.fail("model failed"));
-    const failedSpawn = requireSubagent(parseJson(await runTool(tool, { action: "spawn", task: "Fail clearly" })));
-    const failed = await waitForSubagent(tool, failedSpawn.id, "failed");
-    assertStringIncludes(failed.error ?? "", "model failed");
-
-    const resultResponse = requireSubagent(parseJson(
-      await runTool(tool, {
-        action: "result",
-        subagent_id: completed.id,
-      }),
-    ));
-    assertEquals(resultResponse.result, "final result");
+Deno.test("subagent tool delegates actions to the SubagentPort", async () => {
+  const port = new FakeSubagentPort();
+  const completed = subagentRecord({
+    id: "completed-subagent",
+    status: "completed",
+    result: "done",
   });
-});
+  port.records.set(completed.id, completed);
+  const tool = createSubagentTool(port);
 
-Deno.test("SubagentJobService runs one job at a time and leaves later jobs queued", async () => {
-  await withSubagents(async ({ model, tool }) => {
-    const releaseFirst = deferred<void>();
-    const firstStarted = deferred<void>();
-    model.behaviors.push(async () => {
-      firstStarted.resolve();
-      await releaseFirst.promise;
-      return { text: "first done" };
-    });
-    model.behaviors.push(model.reply("second done"));
+  const spawned = requireSubagent(parseJson(
+    await runTool(tool, { action: "spawn", task: "  Inspect repo  ", title: "  Repo check  " }),
+  ));
+  assertEquals(spawned.status, "queued");
+  assertEquals(port.spawnCalls, [{ task: "Inspect repo", title: "Repo check" }]);
 
-    const first = requireSubagent(parseJson(await runTool(tool, { action: "spawn", task: "First" })));
-    await firstStarted.promise;
-    const second = requireSubagent(parseJson(await runTool(tool, { action: "spawn", task: "Second" })));
+  const status = requireSubagent(parseJson(
+    await runTool(tool, { action: "status", subagent_id: completed.id }),
+  ));
+  assertEquals(status, completed);
 
-    const secondStatus = requireSubagent(parseJson(await runTool(tool, { action: "status", subagent_id: second.id })));
-    assertEquals(secondStatus.status, "queued");
+  const result = requireSubagent(parseJson(
+    await runTool(tool, { action: "result", subagent_id: completed.id }),
+  ));
+  assertEquals(result.result, "done");
 
-    releaseFirst.resolve();
-    assertEquals((await waitForSubagent(tool, first.id, "completed")).result, "first done");
-    assertEquals((await waitForSubagent(tool, second.id, "completed")).result, "second done");
-  });
-});
+  const cancelled = requireSubagent(parseJson(
+    await runTool(tool, { action: "cancel", subagent_id: completed.id }),
+  ));
+  assertEquals(cancelled, completed);
+  assertEquals(port.cancelledIds, [completed.id]);
 
-Deno.test("subagent cancel aborts active jobs and is idempotent for terminal jobs", async () => {
-  await withSubagents(async ({ model, tool }) => {
-    const started = deferred<void>();
-    model.behaviors.push(model.waitUntilAbort(started));
-    const spawned = requireSubagent(parseJson(await runTool(tool, { action: "spawn", task: "Wait" })));
-    await started.promise;
-
-    const cancelled = requireSubagent(parseJson(await runTool(tool, { action: "cancel", subagent_id: spawned.id })));
-    assertEquals(cancelled.status, "cancelled");
-    assertEquals((await waitForSubagent(tool, spawned.id, "cancelled")).status, "cancelled");
-
-    const cancelledAgain = requireSubagent(
-      parseJson(await runTool(tool, { action: "cancel", subagent_id: spawned.id })),
-    );
-    assertEquals(cancelledAgain.status, "cancelled");
-
-    model.behaviors.push(model.reply("complete"));
-    const completedSpawn = requireSubagent(parseJson(await runTool(tool, { action: "spawn", task: "Complete" })));
-    const completed = await waitForSubagent(tool, completedSpawn.id, "completed");
-    const completedCancel = requireSubagent(parseJson(
-      await runTool(tool, {
-        action: "cancel",
-        subagent_id: completed.id,
-      }),
-    ));
-    assertEquals(completedCancel.status, "completed");
-
-    model.behaviors.push(model.fail("terminal failure"));
-    const failedSpawn = requireSubagent(parseJson(await runTool(tool, { action: "spawn", task: "Fail" })));
-    const failed = await waitForSubagent(tool, failedSpawn.id, "failed");
-    const failedCancel = requireSubagent(parseJson(await runTool(tool, { action: "cancel", subagent_id: failed.id })));
-    assertEquals(failedCancel.status, "failed");
-  });
-});
-
-Deno.test("subagent list only returns jobs for the current session", async () => {
-  await withSubagents(async ({ setSessionId, tool }) => {
-    const firstSessionId = crypto.randomUUID();
-    const secondSessionId = crypto.randomUUID();
-
-    setSessionId(firstSessionId);
-    const first = requireSubagent(parseJson(await runTool(tool, { action: "spawn", task: "Session one" })));
-
-    setSessionId(secondSessionId);
-    const second = requireSubagent(parseJson(await runTool(tool, { action: "spawn", task: "Session two" })));
-    const secondList = requireSubagents(parseJson(await runTool(tool, { action: "list" })));
-    assertEquals(secondList.map((subagent) => subagent.id), [second.id]);
-
-    setSessionId(firstSessionId);
-    const firstList = requireSubagents(parseJson(await runTool(tool, { action: "list" })));
-    assertEquals(firstList.map((subagent) => subagent.id), [first.id]);
-  });
-});
-
-Deno.test("SubagentJobService passes system prompt, task, signal, and read-only tools to model act", async () => {
-  await withSubagents(async ({ model, tool }) => {
-    model.behaviors.push(model.reply("done"));
-    const spawned = requireSubagent(parseJson(await runTool(tool, { action: "spawn", task: "Inspect files" })));
-    const completed = await waitForSubagent(tool, spawned.id, "completed");
-    const call = model.runCalls[0];
-
-    assert(call);
-    assertEquals(completed.result, "done");
-    assertStringIncludes(call.systemPrompt, "read-only research subagent");
-    assertEquals(call.task, "Inspect files");
-    assertEquals(call.signal.aborted, false);
-    assertEquals(call.tools.map((item) => item.name).toSorted(), ["find", "grep", "ls", "read", "skill"]);
-  });
+  const list = requireSubagents(parseJson(await runTool(tool, { action: "list" })));
+  assertEquals(list.map((record) => record.id).toSorted(), ["completed-subagent", "spawned-subagent"]);
 });
 
 Deno.test("createReadOnlySubagentTools exposes only read-only child tools", async () => {
-  await withSubagents(async ({ ctx }) => {
+  const dir = await Deno.makeTempDir({ prefix: "deno-ai-agent-subagent-tools-" });
+  try {
+    const ctx = await createToolContext(dir, {
+      sessionId: "session-1",
+      turnId: "subagent-tool-test",
+    });
     const skills = await createSkillManager({ root: ctx.root });
     const tools = createReadOnlySubagentTools(ctx, skills) as Array<{ name: string }>;
     const names = tools.map((item) => item.name).toSorted();
@@ -338,176 +176,12 @@ Deno.test("createReadOnlySubagentTools exposes only read-only child tools", asyn
     try {
       await Deno.writeTextFile(`${outside}/secret.txt`, "secret");
       const read = tools.find((item) => item.name === "read");
-      const result = await runTool(read, { path: `${outside}/secret.txt` });
-      assertStringIncludes(result, "Error: Host paths are not available in this tool context.");
+      const output = await runTool(read, { path: `${outside}/secret.txt` });
+      assertStringIncludes(output, "Error: Host paths are not available in this tool context.");
     } finally {
       await Deno.remove(outside, { recursive: true });
     }
-  });
-});
-
-Deno.test("SubagentJobService status and result return the same stored record", async () => {
-  await withSubagents(async ({ service }) => {
-    const spawned = await service.spawn({ task: "Inspect shared read path" });
-    await waitForServiceSubagent(service, spawned.id, "completed");
-
-    const status = await service.status(spawned.id);
-    const result = await service.result(spawned.id);
-
-    assertEquals(status, result);
-  });
-});
-
-Deno.test("SubagentJobService async disposal cancels queued work and aborts active work", async () => {
-  await withSubagents(async ({ model, service }) => {
-    const started = deferred<void>();
-    model.behaviors.push(model.waitUntilAbort(started));
-    model.behaviors.push(model.reply("should not run"));
-
-    const active = await service.spawn({ task: "Active" });
-    await started.promise;
-    const queued = await service.spawn({ task: "Queued" });
-
-    await service[Symbol.asyncDispose]();
-
-    assertEquals((await service.status(active.id))?.status, "cancelled");
-    assertEquals((await service.status(queued.id))?.status, "cancelled");
-    assertEquals(model.runCalls.length, 1);
-  });
-});
-
-Deno.test("SubagentJobService uses deterministic clock and id dependencies", async () => {
-  await withSubagents(
-    async ({ service }) => {
-      const spawned = await service.spawn({ task: "Use deterministic dependencies" });
-
-      assertEquals(spawned.id, "fixed-subagent-id");
-      assertEquals(spawned.createdAt, "2026-01-02T03:04:05.000Z");
-    },
-    {
-      clock: () => new Date("2026-01-02T03:04:05.000Z"),
-      createId: () => "fixed-subagent-id",
-    },
-  );
-});
-
-Deno.test("SubagentJobService records persist across service instances", async () => {
-  const dir = await Deno.makeTempDir({ prefix: "deno-ai-agent-subagents-persist-" });
-  const kv = await Deno.openKv(":memory:");
-  const sessionId = crypto.randomUUID();
-  const model = new FakeModel();
-  try {
-    const ctx = await createToolContext(dir, {
-      sessionId: () => sessionId,
-      turnId: "subagent-test",
-    });
-    const skills = await createSkillManager({ root: dir });
-    const service = new SubagentJobService({
-      kv,
-      model,
-      workspace: ctx,
-      skills,
-      getSessionId: () => sessionId,
-    });
-    model.behaviors.push(model.reply("durable result"));
-    const spawned = await service.spawn({ task: "Persist me" });
-    await waitForServiceSubagent(service, spawned.id, "completed");
-    await service.shutdown();
-
-    const reopened = new SubagentJobService({
-      kv,
-      model,
-      workspace: ctx,
-      skills,
-      getSessionId: () => sessionId,
-    });
-    try {
-      const record = await reopened.status(spawned.id);
-      assertEquals(record?.status, "completed");
-      assertEquals(record?.result, "durable result");
-    } finally {
-      await reopened.shutdown();
-    }
   } finally {
-    kv.close();
     await Deno.remove(dir, { recursive: true });
   }
-});
-
-Deno.test("SubagentJobService startup reconciliation cancels abandoned queued and running jobs", async () => {
-  const dir = await Deno.makeTempDir({ prefix: "deno-ai-agent-subagents-reconcile-" });
-  const kv = await Deno.openKv(":memory:");
-  const sessionId = crypto.randomUUID();
-  const queued: SubagentRecord = {
-    id: "queued-agent",
-    sessionId,
-    title: "Queued",
-    task: "queued",
-    status: "queued",
-    createdAt: "2026-01-02T03:04:05.000Z",
-  };
-  const running: SubagentRecord = {
-    id: "running-agent",
-    sessionId,
-    title: "Running",
-    task: "running",
-    status: "running",
-    createdAt: "2026-01-02T03:04:05.000Z",
-    startedAt: "2026-01-02T03:04:06.000Z",
-  };
-  try {
-    await kv.set(["subagents", sessionId, queued.id], queued);
-    await kv.set(["subagents", sessionId, running.id], running);
-    const ctx = await createToolContext(dir, {
-      sessionId: () => sessionId,
-      turnId: "subagent-test",
-    });
-    const skills = await createSkillManager({ root: dir });
-    const service = new SubagentJobService({
-      kv,
-      model: new FakeModel(),
-      workspace: ctx,
-      skills,
-      getSessionId: () => sessionId,
-      clock: () => new Date("2026-01-02T03:04:07.000Z"),
-    });
-    try {
-      await service.reconcileAbandonedOnStartup();
-
-      const queuedAfter = await service.status(queued.id);
-      const runningAfter = await service.status(running.id);
-      assertEquals(queuedAfter?.status, "cancelled");
-      assertEquals(runningAfter?.status, "cancelled");
-      assertStringIncludes(queuedAfter?.error ?? "", "abandoned because Silas restarted");
-      assertEquals(runningAfter?.finishedAt, "2026-01-02T03:04:07.000Z");
-    } finally {
-      await service.shutdown();
-    }
-  } finally {
-    kv.close();
-    await Deno.remove(dir, { recursive: true });
-  }
-});
-
-Deno.test("SubagentJobService cancellation is not overwritten by late completion", async () => {
-  await withSubagents(async ({ model, service }) => {
-    const started = deferred<void>();
-    const release = deferred<void>();
-    model.behaviors.push(async () => {
-      started.resolve();
-      await release.promise;
-      return { text: "late completion" };
-    });
-
-    const spawned = await service.spawn({ task: "Race cancel and complete" });
-    await started.promise;
-    const cancelled = await service.cancel(spawned.id);
-    assertEquals(cancelled?.status, "cancelled");
-    release.resolve();
-    await delay(20);
-
-    const final = await service.status(spawned.id);
-    assertEquals(final?.status, "cancelled");
-    assertEquals(final?.result, undefined);
-  });
 });

@@ -1,6 +1,6 @@
 import { context, metrics, type Span, SpanKind, SpanStatusCode, trace } from "@opentelemetry/api";
 
-import type { ModelActObserver } from "./context/session.ts";
+import type { ModelActObserver } from "../core/mod.ts";
 import { SERVICE_NAME, SERVICE_VERSION, type TelemetryAttributes } from "../shared/otel.ts";
 
 const tracer = trace.getTracer(SERVICE_NAME, SERVICE_VERSION);

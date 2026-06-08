@@ -1,8 +1,8 @@
 /**
  * Model reasoning delimiters and persistence policy.
  *
- * Invariant: only `session.runTurn` `replyTexts` uses raw assistant text (for Telegram).
- * Session JSONL, compaction checkpoints, and subagent results use `persistedModelText` /
+ * Invariant: only `TurnRunner` `replyTexts` uses raw assistant text for adapter egress.
+ * Durable session events, compaction checkpoints, and subagent results use `persistedModelText` /
  * `chatMessageForPersistence` so `KEEP_THINKING=false` strips reasoning before save.
  *
  * `REASONING_ACT_PARSING` controls LM Studio `model.act()` `reasoningParsing` (default off).

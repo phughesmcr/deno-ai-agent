@@ -1,6 +1,6 @@
 # Permission broker
 
-Sidecar daemon that answers Deno permission checks for Silas: static policy, in-memory session grants, and Telegram prompts for everything else.
+Sidecar daemon that answers Deno permission checks for Silas: static policy, durable ledger-backed decisions mirrored into in-memory session grants, and Telegram prompts for everything else.
 
 **User-facing startup** (tasks, env, two-terminal debugging): see the root [README.md](../../README.md#permission-broker).
 
@@ -10,7 +10,7 @@ When `DENO_PERMISSION_BROKER_PATH` is set, Deno does not prompt on the TTY. Each
 
 Requirements:
 
-- Deno **≥ 2.5.0** (`version.ts`, `DENO_PERMISSION_BROKER_PATH`)
+- Deno **2.8.1** (`version.ts`, `DENO_PERMISSION_BROKER_PATH`)
 - Two processes in production: **broker daemon** (`daemon-entry.ts`) and **Silas agent** (`main.ts` + control client)
 - Package is **self-contained**: no imports from `../agent` or `../telegram` (enforced by `test/permission-broker/boundary.test.ts`)
 
@@ -69,7 +69,7 @@ sequenceDiagram
     Daemon->>Control: {"type":"prompt",...}
     Control->>Main: read line
     Main->>TG: inline keyboard
-    TG->>Main: callback pm:...
+    TG->>Main: callback cp:...
     Main->>Control: {"type":"decision",...}
     opt grant session
       Daemon->>Daemon: SessionCache.grant
@@ -156,11 +156,16 @@ Response:
 | `decision` | main → daemon | `result`, optional `grant`: `once` \| `session` on allow |
 | `grant` | main → daemon | Proactive `SessionCache` entry |
 | `abort` | main → daemon | Cancel pending prompt (`requestId` optional) |
+| `heartbeat` | main → daemon | Periodic liveness frame with `pid` and `sentAt` |
 
 Examples:
 
 ```json
 {"type":"register","pid":12345}
+```
+
+```json
+{"type":"heartbeat","pid":12345,"sentAt":"2026-06-08T09:00:00.000Z"}
 ```
 
 ```json
@@ -208,7 +213,7 @@ Executable examples: [`test/permission-broker/policy.test.ts`](../../test/permis
 
 ## Pre-grants (tool layer)
 
-Agent tools call `grantBroker*` before Deno checks, sending `grant` on the control socket to warm [`SessionCache`](session-cache.ts):
+Agent tools call `grantBroker*` after the tool layer has authorized the operation, sending `grant` on the control socket to warm [`SessionCache`](session-cache.ts):
 
 | Helper | Permission | Notes |
 |--------|------------|--------|
@@ -221,13 +226,14 @@ Agent file tools route host path pre-grants through [`ToolFilesystem`](../agent/
 
 ## Telegram integration
 
-UI is not implemented in this package. Boundaries:
+Broker UI is implemented through the shared capability authorization path. Boundaries:
 
 - [`permission-prompt-port.ts`](permission-prompt-port.ts) — `PermissionPromptPort` interface
-- [`src/telegram/grammy-permission-prompt-adapter.ts`](../telegram/grammy-permission-prompt-adapter.ts) — Telegram implementation
-- [`src/telegram/permission-callback.ts`](../telegram/permission-callback.ts) — `pm:` callback encoding
+- [`src/app/broker-capability-prompt.ts`](../app/broker-capability-prompt.ts) — broker prompt to capability adapter
+- [`src/telegram/capability-prompt.ts`](../telegram/capability-prompt.ts) — Telegram implementation
+- [`src/telegram/capability-callback.ts`](../telegram/capability-callback.ts) — `cp:` callback encoding
 
-`main.ts` starts `runPermissionControlClient` when `SILAS_PERMISSION_CONTROL_PATH` is set, then **`await waitForPermissionControlClient()`** before loading LM Studio so startup permissions are not denied before registration. Each turn calls `permissionPrompts.setTurnContext` so prompts reply in the active chat thread.
+`main.ts` starts `runPermissionControlClient` when `SILAS_PERMISSION_CONTROL_PATH` is set, then **`await waitForPermissionControlClient()`** before loading LM Studio so startup permissions are not denied before registration. Each turn calls `capabilityPrompts.setTurnContext` so prompts reply in the active chat thread.
 
 ## Module map
 

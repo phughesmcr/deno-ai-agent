@@ -97,7 +97,7 @@ async function sendOneChunk(
 export async function sendModelTextReply(
   sender: TelegramReplySender,
   raw: ModelReplyText,
-  replyToMessageId: number,
+  replyToMessageId?: number,
   messageThreadId?: number,
 ): Promise<void> {
   const markdown = formatMarkdownReply(raw);
@@ -108,7 +108,7 @@ export async function sendModelTextReply(
   for (let i = 0; i < mdChunks.length; i++) {
     const baseParams: Omit<TelegramReplyOptions, "parse_mode"> = {
       message_thread_id: messageThreadId,
-      ...(i === 0 ? { reply_parameters: { message_id: replyToMessageId } } : {}),
+      ...(i === 0 && replyToMessageId !== undefined ? { reply_parameters: { message_id: replyToMessageId } } : {}),
     };
     await sendOneChunk(sender, mdChunks[i]!, plainChunks[i] ?? plain, baseParams);
   }

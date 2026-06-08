@@ -36,6 +36,7 @@ Deno.test("DenoStdioClientTransport does not inherit stripped broker env vars", 
     const message = onceMessage(transport);
     await transport.start();
     const received = await withTestTimeout(message, 1000);
+    assert("params" in received);
     const params = received.params as { controlPath: string | null };
 
     assertEquals(params.controlPath, null);

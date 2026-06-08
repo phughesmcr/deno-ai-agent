@@ -2,10 +2,14 @@ import type { Tool } from "@lmstudio/sdk";
 import * as path from "@std/path";
 import { z } from "zod/v3";
 
-import type { ApprovalRequest } from "../../shared/approval.ts";
 import type { Skill, SkillDiagnostic, SkillManager, SkillSummary } from "../skills/mod.ts";
 import { canonicalDisplayPath, requestForOperation } from "./approval-support.ts";
-import { type AgentToolDefinition, type AgentToolDeps, toolFromDefinition } from "./definitions.ts";
+import {
+  type AgentToolCapabilityRequestSpec,
+  type AgentToolDefinition,
+  type AgentToolDeps,
+  toolFromDefinition,
+} from "./definitions.ts";
 
 const RESOURCE_DIRS = ["assets", "references", "scripts"] as const;
 const SKILL_FILE_NAME = "SKILL.md";
@@ -131,7 +135,7 @@ export const skillToolDefinition: AgentToolDefinition<typeof skillParameters> = 
   name: "skill",
   description: (deps): string => createDescription(deps.skills.manager),
   parameters: skillParameters,
-  authorize: async ({ skill: name }, deps): Promise<ApprovalRequest> => {
+  authorize: async ({ skill: name }, deps): Promise<AgentToolCapabilityRequestSpec> => {
     const skill = deps.skills.manager.get(name);
     if (!skill) throw new Error(`Unknown skill: ${name}`);
     return requestForOperation(deps.workspace, {

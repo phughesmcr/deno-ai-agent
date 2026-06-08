@@ -32,12 +32,19 @@ const controlGrantSchema = z.object({
   scope: z.enum(["once", "session"]),
 });
 
+const controlHeartbeatSchema = z.object({
+  type: z.literal("heartbeat"),
+  pid: z.number(),
+  sentAt: z.string().min(1),
+});
+
 const controlMessageSchema = z.discriminatedUnion("type", [
   controlRegisterSchema,
   controlPromptSchema,
   controlDecisionSchema,
   controlAbortSchema,
   controlGrantSchema,
+  controlHeartbeatSchema,
 ]);
 
 /** Control channel: main registers with the broker daemon. */
@@ -54,6 +61,9 @@ export type ControlAbort = z.infer<typeof controlAbortSchema>;
 
 /** Control channel: main pre-grants a permission in the broker session cache. */
 export type ControlGrant = z.infer<typeof controlGrantSchema>;
+
+/** Control channel: main reports that the control client is still connected. */
+export type ControlHeartbeat = z.infer<typeof controlHeartbeatSchema>;
 
 /** All control messages. */
 export type ControlMessage = z.infer<typeof controlMessageSchema>;

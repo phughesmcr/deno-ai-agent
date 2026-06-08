@@ -1,18 +1,6 @@
-export {
-  type ApprovalDecision,
-  ApprovalDeniedError,
-  type ApprovalGate,
-  type ApprovalOperation,
-  type ApprovalRequest,
-  type ApprovalRisk,
-  approveDecision,
-  createAutoApprovalGate,
-  createDenyApprovalGate,
-  DEFAULT_APPROVAL_TIMEOUT_MS,
-  denyDecision,
-  requireApproval,
-} from "./approval.ts";
+export { type ApprovalOperation, type ApprovalRisk, DEFAULT_APPROVAL_TIMEOUT_MS } from "./approval.ts";
 export { loadAppConfig, loadBrokerEnvConfig, loadReasoningEnvConfig, loadTelegramConfig } from "./config.ts";
+export { errorMessage } from "./error.ts";
 export type { AppConfig, BrokerEnvConfig, ReasoningEnvConfig, TelegramConfig } from "./config.ts";
 export { logDebug, logError, logInfo } from "./log.ts";
 export {

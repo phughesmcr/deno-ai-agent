@@ -1,13 +1,7 @@
 import { assertEquals } from "jsr:@std/assert@1";
 
-import {
-  createCronApprovalGate,
-  createCronPermissionPromptPort,
-  type CronPermissionProfile,
-} from "../../src/cron/permissions.ts";
-import type { PermissionPromptPort, PermissionPromptRequest } from "../../src/permission-broker/mod.ts";
-import type { ApprovalDecision, ApprovalGate, ApprovalRequest } from "../../src/shared/approval.ts";
-import { approveDecision } from "../../src/shared/approval.ts";
+import { createCronCapabilityDelegate, type CronPermissionProfile } from "../../src/cron/permissions.ts";
+import type { CapabilityDecisionDelegate, CapabilityDelegateDecision, CapabilityRequest } from "../../src/core/mod.ts";
 
 const profile: CronPermissionProfile = {
   toolRules: [
@@ -19,221 +13,203 @@ const profile: CronPermissionProfile = {
   ],
 };
 
-Deno.test("cron approval gate allows exact pre-approved tool targets", async () => {
-  const gate = createCronApprovalGate(profile, "cron-job-1");
-
-  const decision = await gate.requestApproval({
-    operation: "mcp",
-    target: "gmail/search",
-    risk: "high",
+function request(overrides: Partial<CapabilityRequest> = {}): CapabilityRequest {
+  return {
+    id: "capability-1",
     sessionId: "session",
-    turnId: "turn",
-    timeoutMs: 1_000,
-  });
-
-  assertEquals(decision, {
-    approved: true,
-    reason: "approved",
-    decidedAt: decision.decidedAt,
-    decidedBy: "cron:cron-job-1",
-  });
-});
-
-Deno.test("cron approval gate denies unknown tool targets", async () => {
-  const gate = createCronApprovalGate(profile, "cron-job-1");
-
-  const decision = await gate.requestApproval({
-    operation: "mcp",
-    target: "gmail/delete",
+    workId: "turn",
+    source: "mcp_tool",
+    capability: { kind: "mcp_tool", target: "gmail/search", action: "call" },
     risk: "high",
-    sessionId: "session",
-    turnId: "turn",
     timeoutMs: 1_000,
-  });
+    display: {
+      action: "call",
+      target: "gmail/search",
+    },
+    ...overrides,
+  };
+}
 
-  assertEquals(decision.approved, false);
-  assertEquals(decision.reason, "cron_permission_not_preapproved");
-});
-
-Deno.test("cron approval gate delegates unmatched requests to fallback approval gate", async () => {
-  const fallbackRequests: ApprovalRequest[] = [];
-  const cachedRules: { operation: string; target: string }[] = [];
-  const fallback: ApprovalGate = {
-    isPending: () => true,
-    requestApproval(request): Promise<ApprovalDecision> {
-      fallbackRequests.push(request);
-      return Promise.resolve(approveDecision("telegram"));
+function baseDelegate(decision: Partial<CapabilityDelegateDecision> = {}): CapabilityDecisionDelegate & {
+  requests: CapabilityRequest[];
+} {
+  const requests: CapabilityRequest[] = [];
+  return {
+    requests,
+    decide(capabilityRequest): Promise<CapabilityDelegateDecision> {
+      requests.push(capabilityRequest);
+      return Promise.resolve({
+        decision: "deny",
+        scope: "once",
+        reason: "cron_permission_not_preapproved",
+        decidedAt: "2026-06-08T09:00:00.000Z",
+        decidedBy: "telegram",
+        ...decision,
+      });
     },
   };
-  const gate = createCronApprovalGate(profile, "cron-job-1", fallback, (rule) => {
-    cachedRules.push(rule);
-  });
+}
 
-  const decision = await gate.requestApproval({
-    operation: "write",
-    target: "MEMORY.md",
-    risk: "low",
-    sessionId: "session",
-    turnId: "turn",
-    timeoutMs: 1_000,
-  });
+Deno.test("cron capability delegate allows exact pre-approved MCP targets", async () => {
+  const delegate = createCronCapabilityDelegate(baseDelegate());
 
-  assertEquals(decision.approved, true);
-  assertEquals(decision.decidedBy, "telegram");
-  assertEquals(gate.isPending?.(), true);
-  assertEquals(fallbackRequests.map((request) => request.target), ["MEMORY.md"]);
-  assertEquals(cachedRules, [{ operation: "write", target: "MEMORY.md" }]);
+  const decision = await delegate.withProfile(profile, "cron-job-1", () => delegate.decide(request()));
+
+  assertEquals(decision.decision, "allow");
+  assertEquals(decision.scope, "once");
+  assertEquals(decision.reason, "approved");
+  assertEquals(decision.decidedBy, "cron:cron-job-1");
+  assertEquals(decision.source, "policy");
 });
 
-Deno.test("cron approval gate treats same-target write and edit approvals as equivalent", async () => {
-  const gate = createCronApprovalGate({
-    toolRules: [{ operation: "write", target: "MEMORY.md" }],
+Deno.test("cron capability delegate delegates unknown tool targets to fallback", async () => {
+  const base = baseDelegate({ decision: "allow", reason: "approved" });
+  const cachedRules: { operation: string; target: string }[] = [];
+  const delegate = createCronCapabilityDelegate(base);
+
+  const decision = await delegate.withProfile(profile, "cron-job-1", () =>
+    delegate.decide(request({
+      capability: { kind: "mcp_tool", target: "gmail/delete", action: "call" },
+      display: { action: "call", target: "gmail/delete" },
+    })), {
+    onApprovedToolRule: (rule) => {
+      cachedRules.push(rule);
+    },
+  });
+
+  assertEquals(decision.decision, "allow");
+  assertEquals(decision.decidedBy, "telegram");
+  assertEquals(base.requests.map((item) => item.capability.target), ["gmail/delete"]);
+  assertEquals(cachedRules, [{ operation: "mcp", target: "gmail/delete" }]);
+});
+
+Deno.test("cron capability delegate treats same-target write and edit approvals as equivalent", async () => {
+  const delegate = createCronCapabilityDelegate(baseDelegate());
+  const cronProfile = {
+    toolRules: [{ operation: "write" as const, target: "MEMORY.md" }],
     brokerRules: [],
-  }, "cron-job-1");
+  };
 
-  const sameTarget = await gate.requestApproval({
-    operation: "edit",
-    target: "MEMORY.md",
-    risk: "medium",
-    sessionId: "new-session",
-    turnId: "cron:cron-job-1",
-    timeoutMs: 1_000,
-  });
-  const differentTarget = await gate.requestApproval({
-    operation: "edit",
-    target: "OTHER.md",
-    risk: "medium",
-    sessionId: "new-session",
-    turnId: "cron:cron-job-1",
-    timeoutMs: 1_000,
-  });
+  const sameTarget = await delegate.withProfile(cronProfile, "cron-job-1", () =>
+    delegate.decide(request({
+      source: "local_tool",
+      capability: { kind: "local_tool", target: "MEMORY.md", action: "edit" },
+      risk: "medium",
+      display: { action: "edit", target: "MEMORY.md" },
+    })));
+  const differentTarget = await delegate.withProfile(cronProfile, "cron-job-1", () =>
+    delegate.decide(request({
+      source: "local_tool",
+      capability: { kind: "local_tool", target: "OTHER.md", action: "edit" },
+      risk: "medium",
+      display: { action: "edit", target: "OTHER.md" },
+    })));
 
-  assertEquals(sameTarget.approved, true);
+  assertEquals(sameTarget.decision, "allow");
   assertEquals(differentTarget.reason, "cron_permission_not_preapproved");
 });
 
-Deno.test("cron approval gate allows low-risk workspace read-only local tools", async () => {
-  const gate = createCronApprovalGate({ localToolPolicy: "workspace-readonly", toolRules: [], brokerRules: [] }, "job");
+Deno.test("cron capability delegate allows low-risk workspace read-only local tools", async () => {
+  const delegate = createCronCapabilityDelegate(baseDelegate());
+  const cronProfile: CronPermissionProfile = {
+    localToolPolicy: "workspace-readonly",
+    toolRules: [],
+    brokerRules: [],
+  };
   const operations = ["read", "list", "find", "grep", "skill"] as const;
 
-  const decisions = await Promise.all(
-    operations.map((operation) =>
-      gate.requestApproval({
-        operation,
-        target: operation === "list" ? "." : "src/cron/permissions.ts",
-        risk: "low",
-        sessionId: "session",
-        turnId: "turn",
-        timeoutMs: 1_000,
-      })
-    ),
-  );
+  const decisions = await delegate.withProfile(cronProfile, "job", () =>
+    Promise.all(
+      operations.map((operation) =>
+        delegate.decide(request({
+          source: "local_tool",
+          capability: {
+            kind: "local_tool",
+            target: operation === "list" ? "." : "src/cron/permissions.ts",
+            action: operation,
+          },
+          risk: "low",
+          display: {
+            action: operation,
+            target: operation === "list" ? "." : "src/cron/permissions.ts",
+          },
+        }))
+      ),
+    ));
 
-  assertEquals(decisions.map((decision) => decision.approved), [true, true, true, true, true]);
+  assertEquals(decisions.map((decision) => decision.decision), ["allow", "allow", "allow", "allow", "allow"]);
 });
 
-Deno.test("cron approval gate denies shell and host-path requests under workspace read-only policy", async () => {
-  const gate = createCronApprovalGate({ localToolPolicy: "workspace-readonly", toolRules: [], brokerRules: [] }, "job");
+Deno.test("cron capability delegate denies shell and host-path requests under workspace read-only policy", async () => {
+  const delegate = createCronCapabilityDelegate(baseDelegate());
+  const cronProfile: CronPermissionProfile = {
+    localToolPolicy: "workspace-readonly",
+    toolRules: [],
+    brokerRules: [],
+  };
 
-  const [shell, hostRead, hostSkill] = await Promise.all([
-    gate.requestApproval({
-      operation: "shell",
-      target: "ls",
-      risk: "high",
-      sessionId: "session",
-      turnId: "turn",
-      timeoutMs: 1_000,
-    }),
-    gate.requestApproval({
-      operation: "read",
-      target: "/tmp/secret.txt",
-      risk: "high",
-      sessionId: "session",
-      turnId: "turn",
-      timeoutMs: 1_000,
-    }),
-    gate.requestApproval({
-      operation: "skill",
-      target: "/Users/peter/.agents/skills/secret/SKILL.md",
-      risk: "low",
-      sessionId: "session",
-      turnId: "turn",
-      timeoutMs: 1_000,
-    }),
-  ]);
+  const [shell, hostRead, hostSkill] = await delegate.withProfile(cronProfile, "job", () =>
+    Promise.all([
+      delegate.decide(request({
+        source: "local_tool",
+        capability: { kind: "local_tool", target: "ls", action: "shell" },
+        risk: "high",
+        display: { action: "shell", target: "ls" },
+      })),
+      delegate.decide(request({
+        source: "local_tool",
+        capability: { kind: "local_tool", target: "/tmp/secret.txt", action: "read" },
+        risk: "high",
+        display: { action: "read", target: "/tmp/secret.txt" },
+      })),
+      delegate.decide(request({
+        source: "local_tool",
+        capability: { kind: "local_tool", target: "/Users/peter/.agents/skills/secret/SKILL.md", action: "skill" },
+        risk: "low",
+        display: { action: "skill", target: "/Users/peter/.agents/skills/secret/SKILL.md" },
+      })),
+    ]));
 
   assertEquals(shell.reason, "cron_permission_not_preapproved");
   assertEquals(hostRead.reason, "cron_permission_not_preapproved");
   assertEquals(hostSkill.reason, "cron_permission_not_preapproved");
 });
 
-Deno.test("cron permission prompt port answers broker prompts from active profile", async () => {
-  const base = fakePermissionPromptPort();
-  const port = createCronPermissionPromptPort(base);
-  const request: PermissionPromptRequest = {
-    requestId: "request-1",
-    brokerId: 1,
-    permission: "net",
-    value: "gmail.googleapis.com:443",
-  };
+Deno.test("cron capability delegate answers broker prompts from active profile", async () => {
+  const base = baseDelegate();
+  const delegate = createCronCapabilityDelegate(base);
 
-  const result = await port.withProfile(profile, "cron-job-1", () => port.prompt(request));
+  const result = await delegate.withProfile(profile, "cron-job-1", () =>
+    delegate.decide(request({
+      source: "broker_permission",
+      capability: { kind: "broker_permission", target: "gmail.googleapis.com:443", action: "net" },
+      risk: "high",
+      display: { action: "net", target: "gmail.googleapis.com:443" },
+    })));
 
-  assertEquals(result, { result: "allow", grant: "once" });
-  assertEquals(base.prompts.length, 0);
+  assertEquals(result.decision, "allow");
+  assertEquals(result.source, "policy");
+  assertEquals(base.requests.length, 0);
 });
 
-Deno.test("cron permission prompt port delegates unmatched broker prompts", async () => {
-  const base = fakePermissionPromptPort({ result: "allow", grant: "once" });
-  const port = createCronPermissionPromptPort(base);
+Deno.test("cron capability delegate delegates unmatched broker prompts and caches approved rules", async () => {
+  const base = baseDelegate({ decision: "allow", reason: "approved" });
+  const delegate = createCronCapabilityDelegate(base);
   const cachedRules: { permission: string; value: string | null }[] = [];
 
-  const result = await port.withProfile(profile, "cron-job-1", () =>
-    port.prompt({
-      requestId: "request-1",
-      brokerId: 1,
-      permission: "run",
-      value: "/bin/zsh",
-    }), {
+  const result = await delegate.withProfile(profile, "cron-job-1", () =>
+    delegate.decide(request({
+      source: "broker_permission",
+      capability: { kind: "broker_permission", target: "/bin/zsh", action: "run" },
+      risk: "high",
+      display: { action: "run", target: "/bin/zsh" },
+    })), {
     onApprovedBrokerRule: (rule) => {
       cachedRules.push(rule);
     },
   });
 
-  assertEquals(result, { result: "allow", grant: "once" });
-  assertEquals(base.prompts.length, 1);
+  assertEquals(result.decision, "allow");
+  assertEquals(base.requests.length, 1);
   assertEquals(cachedRules, [{ permission: "run", value: "/bin/zsh" }]);
 });
-
-Deno.test("cron permission prompt port delegates outside cron runs", async () => {
-  const base = fakePermissionPromptPort({ result: "allow", grant: "session" });
-  const port = createCronPermissionPromptPort(base);
-
-  const result = await port.prompt({
-    requestId: "request-1",
-    brokerId: 1,
-    permission: "run",
-    value: "/bin/zsh",
-  });
-
-  assertEquals(result, { result: "allow", grant: "session" });
-  assertEquals(base.prompts.length, 1);
-});
-
-function fakePermissionPromptPort(
-  result: { result: "allow" | "deny"; grant?: "once" | "session" } = { result: "deny" },
-): PermissionPromptPort & { prompts: PermissionPromptRequest[] } {
-  const prompts: PermissionPromptRequest[] = [];
-  return {
-    prompts,
-    isPending: () => false,
-    setTurnContext: () => {},
-    clearTurnContext: () => {},
-    abortPending: () => {},
-    prompt: (request) => {
-      prompts.push(request);
-      return Promise.resolve(result);
-    },
-    handleCallback: () => Promise.resolve({ handled: false }),
-  };
-}

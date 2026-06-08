@@ -6,8 +6,8 @@ export type SessionGrantScope = "once" | "session";
  * @internal
  */
 export class SessionCache {
-  readonly #session = new Set<string>();
-  readonly #once = new Set<string>();
+  private readonly _session = new Set<string>();
+  private readonly _once = new Set<string>();
 
   private key(permission: string, value: string | null): string {
     return `${permission}\0${value ?? ""}`;
@@ -16,9 +16,9 @@ export class SessionCache {
   /** Returns true for a matching grant, consuming one-time grants atomically. */
   consume(permission: string, value: string | null): boolean {
     const key = this.key(permission, value);
-    if (this.#session.has(key)) return true;
-    if (!this.#once.has(key)) return false;
-    this.#once.delete(key);
+    if (this._session.has(key)) return true;
+    if (!this._once.has(key)) return false;
+    this._once.delete(key);
     return true;
   }
 
@@ -26,10 +26,10 @@ export class SessionCache {
   grant(permission: string, value: string | null, scope: SessionGrantScope): void {
     const key = this.key(permission, value);
     if (scope === "session") {
-      this.#session.add(key);
-      this.#once.delete(key);
+      this._session.add(key);
+      this._once.delete(key);
       return;
     }
-    this.#once.add(key);
+    this._once.add(key);
   }
 }

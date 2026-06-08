@@ -1,4 +1,5 @@
 import { debounce } from "@std/async/debounce";
+import { errorMessage } from "../shared/error.ts";
 import { logDebug } from "../shared/log.ts";
 import { preprocessSystemPrompt } from "./tools/prompt.ts";
 
@@ -12,8 +13,6 @@ export type FsSubscriber = (event: Deno.FsEvent) => void | Promise<void>;
 export interface Workspace {
   /** Absolute path to the workspace directory. */
   readonly path: string;
-  /** Directory containing `{id}.json` session files. */
-  readonly sessionsDir: string;
   /** Persistent Deno KV database path for non-log application state. */
   readonly kvPath: string;
   /** Contents of `SYSTEM.md` in the workspace. */
@@ -30,10 +29,6 @@ function getEnv(): { workspacePath: string } {
   const workspacePath = Deno.env.get("WORKSPACE_PATH");
   if (!workspacePath) throw new Error("WORKSPACE_PATH is not set");
   return { workspacePath };
-}
-
-function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
 }
 
 /**
@@ -61,10 +56,7 @@ export async function createWorkspace(rootDir: URL): Promise<Workspace> {
   await Deno.mkdir(path, { recursive: true });
 
   const systemPromptPath = `${path}/SYSTEM.md`;
-  let systemPrompt = preprocessSystemPrompt(await readSystemPrompt(systemPromptPath), path);
-
-  const sessionsDir = `${path}/sessions`;
-  await Deno.mkdir(sessionsDir, { recursive: true });
+  let rawSystemPrompt = await readSystemPrompt(systemPromptPath);
 
   const kvPath = `${path}/silas.kv`;
 
@@ -90,14 +82,13 @@ export async function createWorkspace(rootDir: URL): Promise<Workspace> {
 
   return {
     path,
-    sessionsDir,
     kvPath,
     get systemPrompt() {
-      return systemPrompt;
+      return preprocessSystemPrompt(rawSystemPrompt, path);
     },
     async reloadSystemPrompt(): Promise<string> {
-      systemPrompt = preprocessSystemPrompt(await readSystemPrompt(systemPromptPath), path);
-      return systemPrompt;
+      rawSystemPrompt = await readSystemPrompt(systemPromptPath);
+      return preprocessSystemPrompt(rawSystemPrompt, path);
     },
     subscribeToFsEvents,
     [Symbol.dispose]: () => watcher.close(),

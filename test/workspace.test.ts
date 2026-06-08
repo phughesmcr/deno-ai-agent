@@ -1,6 +1,10 @@
 import { assert } from "jsr:@std/assert@1/assert";
 import { assertEquals } from "jsr:@std/assert@1/equals";
-import { notifyWorkspaceSubscribers } from "../src/agent/workspace.ts";
+import { assertStringIncludes } from "jsr:@std/assert@1/string-includes";
+import * as path from "@std/path";
+import { createWorkspace, notifyWorkspaceSubscribers } from "../src/agent/workspace.ts";
+import { setMcpSystemPromptAppendix } from "../src/agent/tools/prompt.ts";
+import { withEnv } from "./_env.ts";
 
 function withDebugLogs(fn: () => Promise<void>): Promise<string[]> {
   const previousLevel = Deno.env.get("LOG_LEVEL");
@@ -56,3 +60,57 @@ Deno.test("notifyWorkspaceSubscribers calls all subscribers and logs failures", 
     message: "subscriber failed",
   });
 });
+
+Deno.test("createWorkspace does not create the legacy sessions directory", async () => {
+  const root = await Deno.makeTempDir();
+  try {
+    const workspacePath = path.join(root, "workspace");
+    await Deno.mkdir(workspacePath, { recursive: true });
+    await Deno.writeTextFile(path.join(workspacePath, "SYSTEM.md"), "system");
+
+    await withEnv({ WORKSPACE_PATH: workspacePath }, async () => {
+      const workspace = await createWorkspace(path.toFileUrl(`${root}/`));
+      try {
+        await assertRejectsStat(path.join(workspacePath, "sessions"));
+      } finally {
+        workspace[Symbol.dispose]();
+      }
+    });
+  } finally {
+    await Deno.remove(root, { recursive: true });
+  }
+});
+
+Deno.test("workspace systemPrompt reflects refreshed MCP appendices without rewriting SYSTEM.md", async () => {
+  const root = await Deno.makeTempDir();
+  try {
+    const workspacePath = path.join(root, "workspace");
+    await Deno.mkdir(workspacePath, { recursive: true });
+    await Deno.writeTextFile(path.join(workspacePath, "SYSTEM.md"), "system");
+    setMcpSystemPromptAppendix("");
+
+    await withEnv({ WORKSPACE_PATH: workspacePath }, async () => {
+      const workspace = await createWorkspace(path.toFileUrl(`${root}/`));
+      try {
+        assertEquals(workspace.systemPrompt.includes("MCP prompts"), false);
+        setMcpSystemPromptAppendix("\n## MCP prompts (docs)\n- docs/search: Search docs\n");
+        assertStringIncludes(workspace.systemPrompt, "## MCP prompts (docs)");
+      } finally {
+        setMcpSystemPromptAppendix("");
+        workspace[Symbol.dispose]();
+      }
+    });
+  } finally {
+    await Deno.remove(root, { recursive: true });
+  }
+});
+
+async function assertRejectsStat(filePath: string): Promise<void> {
+  try {
+    await Deno.stat(filePath);
+    throw new Error(`Expected path not to exist: ${filePath}`);
+  } catch (error) {
+    if (error instanceof Deno.errors.NotFound) return;
+    throw error;
+  }
+}

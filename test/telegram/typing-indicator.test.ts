@@ -21,10 +21,10 @@ class ManualScheduler {
   callbacks = new Map<number, () => void>();
   intervals: number[] = [];
   cleared: number[] = [];
-  #nextId = 1;
+  private _nextId = 1;
 
   setInterval(callback: () => void, intervalMs: number): number {
-    const id = this.#nextId++;
+    const id = this._nextId++;
     this.callbacks.set(id, callback);
     this.intervals.push(intervalMs);
     return id;
