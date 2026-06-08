@@ -1,10 +1,11 @@
 import { normalizeUserTurnInput, type UserTurnInput, userTurnMessageData } from "../agent/user-turn.ts";
-import type { CronJob, CronJobRunnerResult, CronJobStore } from "../cron/mod.ts";
 import type { CapabilityLedger, EgressOutbox, EventStore, WorkQueue } from "../core/mod.ts";
+import type { CronJob, CronJobRunnerResult, CronJobStore } from "../cron/mod.ts";
 import { errorMessage, logError } from "../shared/mod.ts";
-import { telegramConversationRef } from "../telegram/conversation.ts";
+import { type TelegramConversationRef, telegramConversationRef } from "../telegram/conversation.ts";
 import type { TelegramSessionCoordinator } from "../telegram/session-coordinator.ts";
 import type { TelegramContext } from "../telegram/telegram.ts";
+import { startTelegramTypingIndicator } from "../telegram/typing-indicator.ts";
 import { cronRunWorkId, cronRunWorkSubmissionForItem, submitCronRunWork } from "./cron-work.ts";
 import type { QueuedImageStore as ImageStore } from "./image-store.ts";
 import {
@@ -48,6 +49,22 @@ export interface CancelTelegramConversationRequest {
 
 type CronStore = CronJobStore;
 
+/** Telegram destination for the native typing indicator. */
+export interface TelegramTypingTarget {
+  /** Telegram chat id. */
+  chatId: number;
+  /** Telegram forum topic thread id, when the turn belongs to a topic. */
+  threadId?: number;
+}
+
+interface TelegramTypingApi {
+  sendChatAction(
+    chatId: number,
+    action: "typing",
+    options?: { message_thread_id?: number },
+  ): Promise<unknown>;
+}
+
 interface TelegramWorkIntakeOptions {
   queue: WorkQueue;
   events: EventStore;
@@ -57,6 +74,8 @@ interface TelegramWorkIntakeOptions {
   cronStore: CronStore;
   sessions: TelegramSessionCoordinator;
   telegramApi: TelegramEgressApi;
+  typingApi?: TelegramTypingApi;
+  typingSignal?: AbortSignal;
   wakeQueue(): void;
   currentSessionId(): string;
 }
@@ -83,9 +102,12 @@ export class TelegramWorkIntake {
   private readonly _capabilityLedger: Pick<CapabilityLedger, "recordDecision">;
   private readonly _sessions: TelegramSessionCoordinator;
   private readonly _telegramApi: TelegramEgressApi;
+  private readonly _typingApi: TelegramTypingApi | undefined;
+  private readonly _typingSignal: AbortSignal | undefined;
   private readonly _wakeQueue: () => void;
   private readonly _currentSessionId: () => string;
   private readonly _liveContexts = new Map<string, TelegramContext>();
+  private readonly _typingStops = new Map<string, () => void>();
 
   constructor(options: TelegramWorkIntakeOptions) {
     this._queue = options.queue;
@@ -95,6 +117,8 @@ export class TelegramWorkIntake {
     this._capabilityLedger = options.capabilityLedger;
     this._sessions = options.sessions;
     this._telegramApi = options.telegramApi;
+    this._typingApi = options.typingApi;
+    this._typingSignal = options.typingSignal;
     this._wakeQueue = options.wakeQueue;
     this._currentSessionId = options.currentSessionId;
   }
@@ -104,9 +128,16 @@ export class TelegramWorkIntake {
     return this._liveContexts.get(workId);
   }
 
+  /** Ensures the Telegram typing indicator is active for queued or running work. */
+  ensureTyping(workId: string, target: TelegramTypingTarget): void {
+    if (this._typingStops.has(workId)) return;
+    this._startTyping(workId, target);
+  }
+
   /** Removes a live Telegram context after work settles or is cancelled before leasing. */
   deleteLiveContext(workId: string): void {
     this._liveContexts.delete(workId);
+    this._stopTyping(workId);
   }
 
   /** Durably enqueues one Telegram user turn, then best-effort acknowledges and wakes the queue. */
@@ -144,6 +175,7 @@ export class TelegramWorkIntake {
         });
         submitted = true;
         this._liveContexts.set(work.id, request.ctx);
+        this._startTyping(work.id, ref);
         result = { workId: work.id, sessionId };
       } catch (error) {
         if (!submitted && durableImageRefs?.length) await this._imageStore.deleteImages(durableImageRefs);
@@ -235,7 +267,7 @@ export class TelegramWorkIntake {
       target: request.target,
       reason: request.reason,
     });
-    for (const workId of cancelled.cancelledWorkIds) this._liveContexts.delete(workId);
+    for (const workId of cancelled.cancelledWorkIds) this.deleteLiveContext(workId);
     if (cancelled.durableImages.length > 0) {
       try {
         await this._imageStore.deleteImages(cancelled.durableImages);
@@ -255,5 +287,24 @@ export class TelegramWorkIntake {
   private _selectedSessionId(fallback: string): string {
     const current = this._currentSessionId();
     return current.length > 0 ? current : fallback;
+  }
+
+  private _startTyping(workId: string, target: TelegramConversationRef | TelegramTypingTarget): void {
+    if (!this._typingApi || !this._typingSignal) return;
+    this._stopTyping(workId);
+    const stop = startTelegramTypingIndicator({
+      api: this._typingApi,
+      chatId: target.chatId,
+      threadId: target.threadId,
+      signal: this._typingSignal,
+    });
+    this._typingStops.set(workId, stop);
+  }
+
+  private _stopTyping(workId: string): void {
+    const stop = this._typingStops.get(workId);
+    if (!stop) return;
+    stop();
+    this._typingStops.delete(workId);
   }
 }

@@ -1,5 +1,5 @@
-import { assert, assertEquals, assertRejects, assertStrictEquals } from "jsr:@std/assert@1";
 import type { ChatMessageData } from "@lmstudio/sdk";
+import { assert, assertEquals, assertRejects, assertStrictEquals } from "jsr:@std/assert@1";
 
 import type { DurableUserImage } from "../../src/agent/user-turn.ts";
 import {
@@ -8,11 +8,11 @@ import {
   TelegramWorkIntake,
 } from "../../src/app/telegram-work-intake.ts";
 import { cronRunWorkPayload, type QueuedDurableImage, userTurnWorkPayload } from "../../src/app/work-payload.ts";
-import type { CronJob, CronJobRunnerResult, CronJobStore } from "../../src/cron/mod.ts";
 import { EgressOutbox, MemoryEventStore, MemoryWorkQueue, type WorkItem, type WorkQueue } from "../../src/core/mod.ts";
+import type { CronJob, CronJobRunnerResult, CronJobStore } from "../../src/cron/mod.ts";
+import type { TelegramReplyOptions } from "../../src/telegram/model-reply.ts";
 import type { TelegramSessionCoordinator } from "../../src/telegram/session-coordinator.ts";
 import type { TelegramContext } from "../../src/telegram/telegram.ts";
-import type { TelegramReplyOptions } from "../../src/telegram/model-reply.ts";
 
 interface ReplyRecord {
   text: string;
@@ -150,6 +150,25 @@ class RecordingTelegramApi {
   }
 }
 
+class RecordingTypingApi {
+  private readonly _records: string[];
+
+  constructor(records: string[]) {
+    this._records = records;
+  }
+
+  sendChatAction(
+    chatId: number,
+    action: "typing",
+    options?: { message_thread_id?: number },
+  ): Promise<unknown> {
+    this._records.push(
+      `typing:${chatId}:${action}${options?.message_thread_id === undefined ? "" : `:${options.message_thread_id}`}`,
+    );
+    return Promise.resolve({ ok: true });
+  }
+}
+
 class RecordingSessions {
   readonly refs: unknown[] = [];
   replaced: unknown[] = [];
@@ -193,12 +212,13 @@ function telegramContext(options: {
   return { ctx, replies };
 }
 
-function createHarness(): {
+function createHarness(options?: { withTyping?: boolean }): {
   events: MemoryEventStore;
   queue: RecordingQueue;
   imageStore: RecordingImageStore;
   records: string[];
   telegramApi: RecordingTelegramApi;
+  typingApi?: RecordingTypingApi;
   intake: TelegramWorkIntake;
 } {
   const records: string[] = [];
@@ -206,6 +226,8 @@ function createHarness(): {
   const queue = new RecordingQueue(new MemoryWorkQueue(events), records);
   const imageStore = new RecordingImageStore(records);
   const telegramApi = new RecordingTelegramApi(records);
+  const typingApi = options?.withTyping ? new RecordingTypingApi(records) : undefined;
+  const typingController = new AbortController();
   const intake = new TelegramWorkIntake({
     queue,
     events,
@@ -226,10 +248,11 @@ function createHarness(): {
     cronStore: {} as CronJobStore,
     sessions: new RecordingSessions() as unknown as TelegramSessionCoordinator,
     telegramApi,
+    ...(typingApi ? { typingApi, typingSignal: typingController.signal } : {}),
     wakeQueue: () => records.push("wake"),
     currentSessionId: () => "session-1",
   });
-  return { events, queue, imageStore, records, telegramApi, intake };
+  return { events, queue, imageStore, records, telegramApi, typingApi, intake };
 }
 
 function cronRequest(): SubmitTelegramCronRunRequest {
@@ -326,6 +349,25 @@ Deno.test("TelegramWorkIntake deletes durable images when queue submission fails
 
   assertEquals(records, ["putImages", "submit:user_turn", "deleteImages"]);
   assertEquals(imageStore.deleted, [imageStore.refs]);
+});
+
+Deno.test("TelegramWorkIntake starts typing on submit and stops when live context is deleted", async () => {
+  const { records, intake } = createHarness({ withTyping: true });
+  const { ctx } = telegramContext({ records, threadId: 9 });
+
+  const result = await intake.submitUserTurn({
+    ctx,
+    input: { text: "typing please" },
+    replyToMessageId: 7,
+    updateId: 33,
+    sessionId: "session-1",
+  });
+
+  assert(records.includes("typing:123:typing:9"));
+  intake.ensureTyping(result.workId, { chatId: 123, threadId: 9 });
+  assertEquals(records.filter((record) => record.startsWith("typing:")).length, 1);
+  intake.deleteLiveContext(result.workId);
+  assertEquals(intake.liveContext(result.workId), undefined);
 });
 
 Deno.test("TelegramWorkIntake stores and removes live Telegram contexts by work id", async () => {

@@ -1,7 +1,5 @@
 import type { Tool } from "@lmstudio/sdk";
 
-import { createCronCapabilityDelegate, CronCommandManager, CronDispatcher, CronJobStore } from "../cron/mod.ts";
-import { setCronDispatcher } from "../cron/runtime.ts";
 import {
   createAgent,
   createLMStudioManager,
@@ -23,13 +21,6 @@ import {
   type UserTurnInput,
 } from "../agent/mod.ts";
 import {
-  assertPermissionBrokerSupported,
-  runPermissionControlClient,
-  shouldRunPermissionControlClient,
-  waitForPermissionControlClient,
-  withBrokerGrantScope,
-} from "../permission-broker/mod.ts";
-import {
   CapabilityDecisionService,
   CapabilityLedger,
   createDurableUserInteractionPort,
@@ -41,6 +32,15 @@ import {
   QueuedTurnProcessor,
   WorkspaceGate,
 } from "../core/mod.ts";
+import { createCronCapabilityDelegate, CronCommandManager, CronDispatcher, CronJobStore } from "../cron/mod.ts";
+import { setCronDispatcher } from "../cron/runtime.ts";
+import {
+  assertPermissionBrokerSupported,
+  runPermissionControlClient,
+  shouldRunPermissionControlClient,
+  waitForPermissionControlClient,
+  withBrokerGrantScope,
+} from "../permission-broker/mod.ts";
 import { errorMessage, loadAppConfig, logDebug, logError, logInfo, traceSpan } from "../shared/mod.ts";
 import {
   ActiveTurnRegistry,
@@ -72,8 +72,8 @@ import {
   UnsupportedAudioError,
   UnsupportedImageError,
 } from "../telegram/mod.ts";
-import { completeCronRunSchedule, failCronRunSchedule } from "./cron-work.ts";
 import { createBrokerCapabilityPromptPort } from "./broker-capability-prompt.ts";
+import { completeCronRunSchedule, failCronRunSchedule } from "./cron-work.ts";
 import { QueuedImageStore } from "./image-store.ts";
 import { runQueuedMaintenanceWork } from "./maintenance-work.ts";
 import { createTelegramTurnEgressPort, runQueuedPreparedTurn } from "./queued-turn-runner.ts";
@@ -287,6 +287,10 @@ export async function runAgentHost(): Promise<void> {
     telegramApi: {
       sendMessage: (chatId, text, options) => telegram.bot.api.sendMessage(chatId, text, options),
     },
+    typingApi: {
+      sendChatAction: (chatId, action, options) => telegram.bot.api.sendChatAction(chatId, action, options),
+    },
+    typingSignal: controller.signal,
     wakeQueue: () => queuedWorker.wake(),
     currentSessionId: () => agent.sessions.current.id,
   });
@@ -341,17 +345,7 @@ export async function runAgentHost(): Promise<void> {
 
   async function submitTelegramUserTurn(request: SubmitTelegramUserTurnRequest): Promise<number> {
     if (!request.ctx.chat || !request.ctx.message) return 0;
-    const stopTyping = startTelegramTypingIndicator({
-      api: request.ctx.api,
-      chatId: request.ctx.chat.id,
-      threadId: request.ctx.message.message_thread_id,
-      signal: controller.signal,
-    });
-    try {
-      await telegramWorkIntake.submitUserTurn(request);
-    } finally {
-      stopTyping();
-    }
+    await telegramWorkIntake.submitUserTurn(request);
     return 0;
   }
 
@@ -374,12 +368,7 @@ export async function runAgentHost(): Promise<void> {
     });
 
     const runSignal = AbortSignal.any([signal, turnController.signal]);
-    const stopTyping = startTelegramTypingIndicator({
-      api: telegram.bot.api,
-      chatId: payload.telegram.chatId,
-      threadId: payload.telegram.threadId,
-      signal: runSignal,
-    });
+    telegramWorkIntake.ensureTyping(work.id, payload.telegram);
     if (liveCtx) userQuestions.setTurnContext({ ctx: liveCtx, signal: runSignal });
     capabilityPrompts.setTurnContext({ ctx, signal: approvalController.signal });
     todoDisplay.setTurnContext({ ctx, signal: runSignal });
@@ -481,7 +470,6 @@ export async function runAgentHost(): Promise<void> {
         capabilityPrompts.abortPending();
       }
       if (liveCtx) userQuestions.clearTurnContext();
-      stopTyping();
       if (terminalWork && payload.input.durableImages?.length) {
         try {
           await imageStore.deleteImages(payload.input.durableImages);
@@ -527,7 +515,7 @@ export async function runAgentHost(): Promise<void> {
       api: telegram.bot.api,
       chatId: payload.telegram.chatId,
       threadId: payload.telegram.threadId,
-      signal: runSignal,
+      signal: controller.signal,
     });
     capabilityPrompts.setTurnContext({ ctx, signal: approvalController.signal });
     const actStarted = performance.now();
