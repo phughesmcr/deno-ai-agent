@@ -5,7 +5,7 @@ import {
   queueAndSendTelegramEgress,
   type TelegramEgressApi,
 } from "../../src/app/telegram-egress.ts";
-import { EgressOutbox, MemoryEventStore } from "../../src/core/mod.ts";
+import { EgressOutbox, MemoryKernelStore } from "../../src/core/mod.ts";
 import type { TelegramReplyOptions } from "../../src/telegram/model-reply.ts";
 
 interface SentMessage {
@@ -27,7 +27,7 @@ class RecordingTelegramApi implements TelegramEgressApi {
 }
 
 Deno.test("drainTelegramEgressOutbox sends pending replies and marks them sent", async () => {
-  const events = new MemoryEventStore();
+  const events = new MemoryKernelStore();
   const outbox = new EgressOutbox(events);
   const api = new RecordingTelegramApi();
   await outbox.queue({
@@ -58,7 +58,7 @@ Deno.test("drainTelegramEgressOutbox sends pending replies and marks them sent",
 });
 
 Deno.test("queueAndSendTelegramEgress queues live replies before sending and marks them sent", async () => {
-  const events = new MemoryEventStore();
+  const events = new MemoryKernelStore();
   const outbox = new EgressOutbox(events);
   const api = new RecordingTelegramApi();
 
@@ -89,7 +89,7 @@ Deno.test("queueAndSendTelegramEgress queues live replies before sending and mar
 });
 
 Deno.test("queueAndSendTelegramEgress can send into a Telegram topic without reply parameters", async () => {
-  const events = new MemoryEventStore();
+  const events = new MemoryKernelStore();
   const outbox = new EgressOutbox(events);
   const api = new RecordingTelegramApi();
 
@@ -119,7 +119,7 @@ Deno.test("queueAndSendTelegramEgress can send into a Telegram topic without rep
 });
 
 Deno.test("queueAndSendTelegramEgress leaves failed live sends pending", async () => {
-  const events = new MemoryEventStore();
+  const events = new MemoryKernelStore();
   const outbox = new EgressOutbox(events);
   const api = new RecordingTelegramApi();
   api.fail = true;
@@ -144,7 +144,7 @@ Deno.test("queueAndSendTelegramEgress leaves failed live sends pending", async (
 });
 
 Deno.test("drainTelegramEgressOutbox sends fallback text when no replies exist", async () => {
-  const events = new MemoryEventStore();
+  const events = new MemoryKernelStore();
   const outbox = new EgressOutbox(events);
   const api = new RecordingTelegramApi();
   await outbox.queue({
@@ -168,7 +168,7 @@ Deno.test("drainTelegramEgressOutbox sends fallback text when no replies exist",
 });
 
 Deno.test("drainTelegramEgressOutbox leaves failed sends pending", async () => {
-  const events = new MemoryEventStore();
+  const events = new MemoryKernelStore();
   const outbox = new EgressOutbox(events);
   const api = new RecordingTelegramApi();
   api.fail = true;
@@ -188,7 +188,7 @@ Deno.test("drainTelegramEgressOutbox leaves failed sends pending", async () => {
 });
 
 Deno.test("queueAndSendTelegramEgress drops permanent live send failures", async () => {
-  const events = new MemoryEventStore();
+  const events = new MemoryKernelStore();
   const outbox = new EgressOutbox(events);
   const api = new RecordingTelegramApi();
   api.fail = true;
@@ -212,7 +212,7 @@ Deno.test("queueAndSendTelegramEgress drops permanent live send failures", async
 });
 
 Deno.test("drainTelegramEgressOutbox drops permanent Telegram failures", async () => {
-  const events = new MemoryEventStore();
+  const events = new MemoryKernelStore();
   const outbox = new EgressOutbox(events);
   const api = new RecordingTelegramApi();
   api.fail = true;
@@ -237,7 +237,7 @@ Deno.test("drainTelegramEgressOutbox drops permanent Telegram failures", async (
 });
 
 Deno.test("drainTelegramEgressOutbox drops invalid Telegram targets", async () => {
-  const events = new MemoryEventStore();
+  const events = new MemoryKernelStore();
   const outbox = new EgressOutbox(events);
   const api = new RecordingTelegramApi();
   await outbox.queue({

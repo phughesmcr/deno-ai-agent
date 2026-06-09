@@ -15,10 +15,10 @@ import {
 } from "../core/mod.ts";
 import { errorMessage } from "../shared/error.ts";
 
-/** Subagent lifecycle state stored in KV. */
+/** Subagent lifecycle state projected from durable work. */
 export type SubagentStatus = "queued" | "running" | "completed" | "failed" | "cancelled";
 
-/** Session-scoped subagent job record. */
+/** Session-scoped subagent job projection. */
 export interface SubagentRecord {
   /** Subagent job id. */
   id: string;
@@ -66,8 +66,6 @@ export interface SubagentPort {
 
 /** Options for {@link SubagentRuntime}. */
 export interface SubagentRuntimeOptions {
-  /** Deno KV store used for durable records. */
-  kv: Deno.Kv;
   /** Durable event store for subagent model/tool activity. */
   events: EventStore;
   /** Durable work queue for `subagent_run` lifecycle events. */
@@ -80,10 +78,8 @@ export interface SubagentRuntimeOptions {
   skills: SkillManager;
   /** Returns the current parent session id. */
   getSessionId: () => string;
-  /** Wakes the shared queue worker after new or recovered work is available. */
+  /** Wakes the shared queue worker after new work is available. */
   wakeQueue: () => void;
-  /** Deterministic clock for tests. */
-  clock?: () => Date;
   /** Deterministic id factory for tests. */
   createId?: () => string;
 }
@@ -94,34 +90,9 @@ export interface RunSubagentWorkOptions {
   signal: AbortSignal;
 }
 
-/** Result of reconciling durable subagent records with durable work on startup. */
-export interface SubagentRecoveryResult {
-  /** Pending records whose durable work is queued and ready for the shared worker. */
-  requeued: string[];
-  /** Pending records completed from a persisted model output. */
-  completedFromModelOutput: string[];
-  /** Pending records marked failed from terminal durable work. */
-  failed: string[];
-  /** Pending records marked cancelled from terminal durable work. */
-  cancelled: string[];
-  /** Pending records whose missing durable work was recreated. */
-  recreatedWork: string[];
-}
-
 interface SubagentRef {
   sessionId: string;
   agentId: string;
-}
-
-interface SubagentJobStore {
-  create(record: SubagentRecord): Promise<void>;
-  get(sessionId: string, agentId: string): Promise<SubagentRecord | undefined>;
-  list(sessionId: string): Promise<SubagentRecord[]>;
-  listPending(): Promise<SubagentRecord[]>;
-  update(
-    ref: SubagentRef,
-    update: (record: SubagentRecord) => SubagentRecord | undefined,
-  ): Promise<SubagentRecord | undefined>;
 }
 
 interface SubagentRunner {
@@ -134,6 +105,16 @@ interface SubagentRunner {
   }): Promise<{ text: string }>;
 }
 
+interface ActiveSubagentRun {
+  controller: AbortController;
+  cancellationRequested: boolean;
+}
+
+interface SubagentRunPayload {
+  task: string;
+  title: string;
+}
+
 const SUBAGENT_SYSTEM_PROMPT = [
   "You are a read-only research subagent for a parent coding agent.",
   "Inspect the workspace and report concise findings for the requested task.",
@@ -141,6 +122,7 @@ const SUBAGENT_SYSTEM_PROMPT = [
   "Do not modify files, run shell commands, ask the user questions, manage todos, or spawn other agents.",
   "Return a final answer with relevant file paths and line references where useful.",
 ].join("\n");
+
 function defaultTitle(task: string): string {
   const normalized = task.replace(/\s+/g, " ").trim();
   return normalized.slice(0, 80) || "Subagent task";
@@ -148,17 +130,6 @@ function defaultTitle(task: string): string {
 
 function isTerminal(status: SubagentStatus): boolean {
   return status === "completed" || status === "failed" || status === "cancelled";
-}
-
-function resetToQueued(record: SubagentRecord): SubagentRecord {
-  const {
-    startedAt: _startedAt,
-    finishedAt: _finishedAt,
-    result: _result,
-    error: _error,
-    ...rest
-  } = record;
-  return { ...rest, status: "queued" };
 }
 
 function subagentResultMessage(text: string): ChatMessageData {
@@ -170,6 +141,57 @@ function subagentResultMessage(text: string): ChatMessageData {
 
 function unavailable(): Promise<never> {
   return Promise.reject(new Error("Subagent job service is not configured for this process."));
+}
+
+function objectPayload(value: unknown): Record<string, unknown> | undefined {
+  if (value === null || typeof value !== "object") return undefined;
+  return value as Record<string, unknown>;
+}
+
+function subagentRunPayload(value: unknown): SubagentRunPayload {
+  const record = objectPayload(value);
+  const task = record?.["task"];
+  const title = record?.["title"];
+  if (typeof task !== "string" || typeof title !== "string") {
+    throw new Error("Invalid subagent_run work payload");
+  }
+  return { task, title };
+}
+
+function textFromModelMessagePayload(payload: unknown): string | undefined {
+  const message = objectPayload(objectPayload(payload)?.["message"]);
+  const content = message?.["content"];
+  if (!Array.isArray(content)) return undefined;
+  const text = content
+    .flatMap((part) => {
+      const partRecord = objectPayload(part);
+      return partRecord?.["type"] === "text" && typeof partRecord["text"] === "string" ? [partRecord["text"]] : [];
+    })
+    .join("");
+  return text.length > 0 ? text : undefined;
+}
+
+function isTerminalWorkEvent(category: string): boolean {
+  return category === "work.completed" || category === "work.failed" || category === "work.cancelled";
+}
+
+function abortError(message: string): DOMException {
+  return new DOMException(message, "AbortError");
+}
+
+function isAbortError(error: unknown): boolean {
+  if (error instanceof DOMException && error.name === "AbortError") return true;
+  if (!(error instanceof Error)) return false;
+  return error.name === "AbortError" || error.message.toLowerCase().includes("aborted");
+}
+
+function wasAbortedBy(signal: AbortSignal, error: unknown): boolean {
+  return signal.aborted && (error === signal.reason || isAbortError(error));
+}
+
+function statusFromWork(work: WorkItem): SubagentStatus {
+  if (work.status === "leased") return "running";
+  return work.status;
 }
 
 /** Port for tests and non-runtime tool construction where no model is available. */
@@ -186,65 +208,6 @@ export function createUnavailableSubagentPort(): SubagentPort {
 /** Builds the read-only tool set available inside subagent jobs. */
 export function createReadOnlySubagentTools(workspace: ToolContext, skills: SkillManager): Tool[] {
   return createReadOnlySubagentToolsFromDefinitions(workspace, skills);
-}
-
-/** Deno KV-backed persistence for session-scoped subagent records. */
-class DenoKvSubagentJobStore implements SubagentJobStore {
-  private readonly _kv: Deno.Kv;
-
-  constructor(kv: Deno.Kv) {
-    this._kv = kv;
-  }
-
-  async create(record: SubagentRecord): Promise<void> {
-    const key = this._key(record.sessionId, record.id);
-    const previous = await this._kv.get<SubagentRecord>(key);
-    const result = await this._kv.atomic().check(previous).set(key, record).commit();
-    if (!result.ok) throw new Error(`Subagent job already exists: ${record.id}`);
-  }
-
-  async get(sessionId: string, agentId: string): Promise<SubagentRecord | undefined> {
-    const entry = await this._kv.get<SubagentRecord>(this._key(sessionId, agentId));
-    return entry.value ?? undefined;
-  }
-
-  async list(sessionId: string): Promise<SubagentRecord[]> {
-    const records: SubagentRecord[] = [];
-    const iterator = this._kv.list<SubagentRecord>({ prefix: ["subagents", sessionId] });
-    for await (const entry of iterator) {
-      records.push(entry.value);
-    }
-    return records.toSorted((a, b) => a.createdAt.localeCompare(b.createdAt));
-  }
-
-  async listPending(): Promise<SubagentRecord[]> {
-    const records: SubagentRecord[] = [];
-    for await (const entry of this._kv.list<SubagentRecord>({ prefix: ["subagents"] })) {
-      if (entry.value.status === "queued" || entry.value.status === "running") {
-        records.push(entry.value);
-      }
-    }
-    return records.toSorted((a, b) => a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id));
-  }
-
-  async update(
-    ref: SubagentRef,
-    update: (record: SubagentRecord) => SubagentRecord | undefined,
-  ): Promise<SubagentRecord | undefined> {
-    const key = this._key(ref.sessionId, ref.agentId);
-    while (true) {
-      const entry = await this._kv.get<SubagentRecord>(key);
-      if (!entry.value) return undefined;
-      const next = update(entry.value);
-      if (!next) return entry.value;
-      const result = await this._kv.atomic().check(entry).set(key, next).commit();
-      if (result.ok) return next;
-    }
-  }
-
-  private _key(sessionId: string, agentId: string): Deno.KvKey {
-    return ["subagents", sessionId, agentId];
-  }
 }
 
 /** Runs one read-only subagent model act with the restricted child tool set. */
@@ -281,70 +244,19 @@ class ReadOnlySubagentRunner implements SubagentRunner {
   }
 }
 
-interface ActiveSubagentRun {
-  controller: AbortController;
-  cancellationRequested: boolean;
-}
-
-interface ModelOutputRecoveryCandidate {
-  hasTerminalWorkEvent: boolean;
-  text?: string;
-}
-
-function objectPayload(value: unknown): Record<string, unknown> | undefined {
-  if (value === null || typeof value !== "object") return undefined;
-  return value as Record<string, unknown>;
-}
-
-function textFromModelMessagePayload(payload: unknown): string | undefined {
-  const message = objectPayload(objectPayload(payload)?.["message"]);
-  const content = message?.["content"];
-  if (!Array.isArray(content)) return undefined;
-  const text = content
-    .flatMap((part) => {
-      const partRecord = objectPayload(part);
-      return partRecord?.["type"] === "text" && typeof partRecord["text"] === "string" ? [partRecord["text"]] : [];
-    })
-    .join("");
-  return text.length > 0 ? text : undefined;
-}
-
-function isTerminalWorkEvent(category: string): boolean {
-  return category === "work.completed" || category === "work.failed" || category === "work.cancelled";
-}
-
-function abortError(message: string): DOMException {
-  return new DOMException(message, "AbortError");
-}
-
-function isAbortError(error: unknown): boolean {
-  if (error instanceof DOMException && error.name === "AbortError") return true;
-  if (!(error instanceof Error)) return false;
-  return error.name === "AbortError" || error.message.toLowerCase().includes("aborted");
-}
-
-function wasAbortedBy(signal: AbortSignal, error: unknown): boolean {
-  return signal.aborted && (error === signal.reason || isAbortError(error));
-}
-
 /** Queue-first durable subagent runtime. */
 export class SubagentRuntime implements SubagentPort, AsyncDisposable {
-  private readonly _store: SubagentJobStore;
   private readonly _runner: SubagentRunner;
   private readonly _events: EventStore;
   private readonly _queue: WorkQueue;
   private readonly _wakeQueue: () => void;
   private readonly _getSessionId: () => string;
-  private readonly _clock: () => Date;
   private readonly _createId: () => string;
-  private readonly _recoveryOwnerId = `subagent-recovery:${crypto.randomUUID()}`;
-
   private readonly _activeRuns = new Map<string, ActiveSubagentRun>();
   private _closed = false;
 
-  /** Creates a session-scoped subagent runtime over durable records and shared queued work. */
+  /** Creates a session-scoped subagent runtime over shared queued work. */
   constructor(options: SubagentRuntimeOptions) {
-    this._store = new DenoKvSubagentJobStore(options.kv);
     this._runner = new ReadOnlySubagentRunner({
       model: options.model,
       workspace: options.workspace,
@@ -354,138 +266,61 @@ export class SubagentRuntime implements SubagentPort, AsyncDisposable {
     this._queue = options.queue;
     this._wakeQueue = options.wakeQueue;
     this._getSessionId = options.getSessionId;
-    this._clock = options.clock ?? (() => new Date());
     this._createId = options.createId ?? (() => crypto.randomUUID());
   }
 
-  /** Creates a durable queued subagent record and wakes the shared queue worker. */
+  /** Creates durable queued subagent work and wakes the shared queue worker. */
   async spawn(spec: SubagentSpawnSpec): Promise<SubagentRecord> {
     if (this._closed) throw new Error("Subagent runtime is shutting down.");
 
     const task = spec.task.trim();
     const sessionId = this._getSessionId();
-    const record: SubagentRecord = {
+    const title = spec.title?.trim() || defaultTitle(task);
+    const work = await this._queue.submit({
       id: this._createId(),
-      sessionId,
-      title: spec.title?.trim() || defaultTitle(task),
-      task,
-      status: "queued",
-      createdAt: this._nowIso(),
-    };
-
-    await this._store.create(record);
-    await this._queue.submit({
-      id: record.id,
       kind: "subagent_run",
       sessionId,
-      payload: { task, title: record.title },
+      payload: { task, title },
     });
     this._wakeQueue();
-    return record;
+    return await this._projectWorkOrThrow(work);
   }
 
   /** Returns a subagent in the current session by id. */
-  status(agentId: string): Promise<SubagentRecord | undefined> {
-    return this._getCurrentSessionRecord(agentId);
+  async status(agentId: string): Promise<SubagentRecord | undefined> {
+    return await this._getCurrentSessionRecord(agentId);
   }
 
   /** Lists subagents in the current session ordered by creation time. */
-  list(): Promise<SubagentRecord[]> {
-    return this._store.list(this._getSessionId());
+  async list(): Promise<SubagentRecord[]> {
+    const records: SubagentRecord[] = [];
+    const works = await this._queue.listWork({ kind: "subagent_run", sessionId: this._getSessionId() });
+    for (const work of works) {
+      const record = await this._projectWork(work);
+      if (record) records.push(record);
+    }
+    return records;
   }
 
   /** Returns a subagent record, including terminal result or error when present. */
-  result(agentId: string): Promise<SubagentRecord | undefined> {
-    return this._getCurrentSessionRecord(agentId);
+  async result(agentId: string): Promise<SubagentRecord | undefined> {
+    return await this._getCurrentSessionRecord(agentId);
   }
 
   /** Cancels a queued or running job; terminal jobs are returned unchanged. */
   async cancel(agentId: string): Promise<SubagentRecord | undefined> {
-    const sessionId = this._getSessionId();
-    const record = await this._store.get(sessionId, agentId);
-    if (!record) return undefined;
-    if (isTerminal(record.status)) return record;
+    const record = await this._getCurrentSessionRecord(agentId);
+    if (!record || isTerminal(record.status)) return record;
 
-    const ref = { sessionId, agentId };
+    const ref = { sessionId: record.sessionId, agentId };
     const active = this._activeRuns.get(this._refKey(ref));
     if (active) {
       active.cancellationRequested = true;
       active.controller.abort(abortError("Subagent job was cancelled."));
     }
 
-    const cancelled = await this._markCancelled(ref, record);
     await this._queue.cancel(record.id, { reason: "Subagent job was cancelled." });
-    return cancelled;
-  }
-
-  /** Reconciles pending records with durable `subagent_run` work after global startup recovery. */
-  async recoverPendingOnStartup(): Promise<SubagentRecoveryResult> {
-    const result: SubagentRecoveryResult = {
-      requeued: [],
-      completedFromModelOutput: [],
-      failed: [],
-      cancelled: [],
-      recreatedWork: [],
-    };
-
-    for (const record of await this._store.listPending()) {
-      const work = await this._queue.get(record.id);
-      if (!work) {
-        await this._queue.submit({
-          id: record.id,
-          kind: "subagent_run",
-          sessionId: record.sessionId,
-          payload: { task: record.task, title: record.title },
-        });
-        await this._resetRecordToQueued(record);
-        result.recreatedWork.push(record.id);
-        continue;
-      }
-
-      if (work.kind !== "subagent_run" || work.sessionId !== record.sessionId) {
-        await this._markFailed(
-          { sessionId: record.sessionId, agentId: record.id },
-          `Subagent durable work mismatch for ${record.id}.`,
-        );
-        result.failed.push(record.id);
-        continue;
-      }
-
-      const recovered = await this._completeFromPersistedModelOutput(record, work);
-      if (recovered) {
-        result.completedFromModelOutput.push(record.id);
-        continue;
-      }
-
-      if (work.status === "queued") {
-        await this._resetRecordToQueued(record);
-        result.requeued.push(record.id);
-        continue;
-      }
-
-      if (work.status === "failed") {
-        await this._markFailed(
-          { sessionId: record.sessionId, agentId: record.id },
-          work.failure ?? "Subagent durable work failed.",
-        );
-        result.failed.push(record.id);
-        continue;
-      }
-
-      if (work.status === "cancelled") {
-        await this._markCancelled(
-          { sessionId: record.sessionId, agentId: record.id },
-          record,
-          work.failure ?? "Subagent durable work was cancelled.",
-        );
-        result.cancelled.push(record.id);
-      }
-    }
-
-    if (result.requeued.length > 0 || result.recreatedWork.length > 0) {
-      this._wakeQueue();
-    }
-    return result;
+    return await this._getCurrentSessionRecord(agentId);
   }
 
   /** Runs one leased `subagent_run` work item and settles its durable queue state. */
@@ -494,31 +329,11 @@ export class SubagentRuntime implements SubagentPort, AsyncDisposable {
       throw new Error(`Unsupported subagent work kind: ${work.kind}`);
     }
 
+    const payload = subagentRunPayload(work.payload);
     const ref = { sessionId: work.sessionId, agentId: work.id };
-    const record = await this._store.get(ref.sessionId, ref.agentId);
-    if (!record) {
-      const reason = `Subagent record not found for leased work: ${work.id}`;
-      await this._queue.fail(work.id, { leaseId: work.lease.id, reason });
-      throw new Error(reason);
-    }
-
-    if (isTerminal(record.status)) {
-      await this._settleLeasedWorkFromTerminalRecord(work, record);
-      return;
-    }
-
-    const running = await this._store.update(ref, (current) => {
-      if (isTerminal(current.status)) return undefined;
-      if (current.status !== "queued" && current.status !== "running") return undefined;
-      return {
-        ...current,
-        status: "running",
-        startedAt: current.startedAt ?? this._nowIso(),
-      };
-    });
-    if (!running || isTerminal(running.status)) {
-      const latest = await this._store.get(ref.sessionId, ref.agentId);
-      if (latest && isTerminal(latest.status)) await this._settleLeasedWorkFromTerminalRecord(work, latest);
+    const persistedResult = await this._persistedResultWithoutTerminal(work.id);
+    if (persistedResult !== undefined) {
+      if (await this._isStillLeased(work)) await this._queue.complete(work.id, { leaseId: work.lease.id });
       return;
     }
 
@@ -535,49 +350,27 @@ export class SubagentRuntime implements SubagentPort, AsyncDisposable {
       const output = await this._runner.run({
         sessionId: ref.sessionId,
         agentId: ref.agentId,
-        task: running.task,
+        task: payload.task,
         signal,
         observer: durableObserver,
       });
       await durableObserver.flush();
 
       if (options.signal.aborted) throw options.signal.reason ?? abortError("Subagent work was aborted.");
-      if (active.cancellationRequested || active.controller.signal.aborted) {
-        await this._markCancelled(ref, running);
-        await this._queue.cancel(work.id, { reason: "Subagent job was cancelled." });
-        return;
-      }
+      if (await this._wasCancelledOrReleased(work, active)) return;
 
       await this._appendModelMessage(ref, work, output.text);
-      const completed = await this._store.update(ref, (latest) => {
-        if (latest.status !== "running") return undefined;
-        return {
-          ...latest,
-          status: "completed",
-          finishedAt: this._nowIso(),
-          result: output.text,
-        };
-      });
-      if (completed?.status === "completed") {
+      if (await this._isStillLeased(work)) {
         await this._queue.complete(work.id, { leaseId: work.lease.id });
       }
     } catch (error) {
       await durableObserver.flush();
-      if (wasAbortedBy(options.signal, error)) {
-        throw error;
-      }
-      if (active.cancellationRequested && wasAbortedBy(active.controller.signal, error)) {
-        await this._markCancelled(ref, running);
-        await this._queue.cancel(work.id, { reason: "Subagent job was cancelled." });
-        return;
-      }
-      if (isAbortError(error) && active.controller.signal.aborted && !active.cancellationRequested) {
-        throw error;
-      }
+      if (wasAbortedBy(options.signal, error)) throw error;
+      if (active.cancellationRequested && wasAbortedBy(active.controller.signal, error)) return;
+      if (isAbortError(error) && active.controller.signal.aborted && !active.cancellationRequested) throw error;
 
       const message = errorMessage(error);
-      const failed = await this._markFailed(ref, message);
-      if (failed?.status === "failed") {
+      if (await this._isStillLeased(work)) {
         await this._queue.fail(work.id, { leaseId: work.lease.id, reason: message });
       }
       throw error;
@@ -619,131 +412,67 @@ export class SubagentRuntime implements SubagentPort, AsyncDisposable {
     });
   }
 
-  private async _completeFromPersistedModelOutput(record: SubagentRecord, work: WorkItem): Promise<boolean> {
-    const candidate = await this._modelOutputRecoveryCandidate(work.id);
-    if (candidate.hasTerminalWorkEvent || candidate.text === undefined) return false;
-
-    if (work.status === "completed") {
-      await this._markCompletedFromOutput(record, candidate.text);
-      return true;
-    }
-
-    if (work.status !== "queued") return false;
-
-    const leased = await this._queue.lease(work.id, {
-      ownerId: this._recoveryOwnerId,
-      kinds: ["subagent_run"],
-      now: this._clock(),
-    });
-    if (!leased) return false;
-
-    const completed = await this._markCompletedFromOutput(record, candidate.text);
-    if (completed?.status === "completed") {
-      await this._queue.complete(leased.id, {
-        leaseId: leased.lease.id,
-        now: this._clock(),
-      });
-      return true;
-    }
-
-    await this._queue.release(leased.id, {
-      leaseId: leased.lease.id,
-      now: this._clock(),
-    });
-    return false;
+  private async _projectWork(work: WorkItem): Promise<SubagentRecord | undefined> {
+    if (work.kind !== "subagent_run") return undefined;
+    const payload = subagentRunPayload(work.payload);
+    const events = await this._events.listByWork(work.id);
+    const startedAt = events.find((event) => event.category === "work.leased")?.createdAt;
+    const terminal = events.find((event) => isTerminalWorkEvent(event.category));
+    const result = events
+      .filter((event) => event.category === "model.message")
+      .map((event) => textFromModelMessagePayload(event.payload))
+      .filter((text) => text !== undefined)
+      .at(-1);
+    const status = statusFromWork(work);
+    return {
+      id: work.id,
+      sessionId: work.sessionId,
+      title: payload.title,
+      task: payload.task,
+      status,
+      createdAt: work.createdAt,
+      ...(startedAt !== undefined ? { startedAt } : {}),
+      ...(terminal !== undefined ? { finishedAt: terminal.createdAt } : {}),
+      ...(status === "completed" && result !== undefined ? { result } : {}),
+      ...((status === "failed" || status === "cancelled") && work.failure !== undefined ? { error: work.failure } : {}),
+    };
   }
 
-  private async _modelOutputRecoveryCandidate(workId: string): Promise<ModelOutputRecoveryCandidate> {
-    const candidate: ModelOutputRecoveryCandidate = { hasTerminalWorkEvent: false };
+  private async _persistedResultWithoutTerminal(workId: string): Promise<string | undefined> {
+    let result: string | undefined;
     for (const event of await this._events.listByWork(workId)) {
-      if (isTerminalWorkEvent(event.category)) {
-        candidate.hasTerminalWorkEvent = true;
-        continue;
-      }
+      if (isTerminalWorkEvent(event.category)) return undefined;
       if (event.category === "model.message") {
         const text = textFromModelMessagePayload(event.payload);
-        if (text !== undefined) candidate.text = text;
+        if (text !== undefined) result = text;
       }
     }
-    return candidate;
+    return result;
   }
 
-  private async _resetRecordToQueued(record: SubagentRecord): Promise<SubagentRecord | undefined> {
-    return await this._store.update({ sessionId: record.sessionId, agentId: record.id }, (current) => {
-      if (isTerminal(current.status)) return undefined;
-      return resetToQueued(current);
-    });
+  private async _projectWorkOrThrow(work: WorkItem): Promise<SubagentRecord> {
+    const record = await this._projectWork(work);
+    if (!record) throw new Error(`Subagent work could not be projected: ${work.id}`);
+    return record;
   }
 
-  private async _markCompletedFromOutput(
-    record: SubagentRecord,
-    text: string,
-  ): Promise<SubagentRecord | undefined> {
-    return await this._store.update({ sessionId: record.sessionId, agentId: record.id }, (current) => {
-      if (isTerminal(current.status)) return undefined;
-      return {
-        ...current,
-        status: "completed",
-        finishedAt: current.finishedAt ?? this._nowIso(),
-        result: text,
-      };
-    });
+  private async _getCurrentSessionRecord(agentId: string): Promise<SubagentRecord | undefined> {
+    const work = await this._queue.get(agentId);
+    if (!work || work.kind !== "subagent_run" || work.sessionId !== this._getSessionId()) return undefined;
+    return await this._projectWork(work);
   }
 
-  private async _markFailed(ref: SubagentRef, reason: string): Promise<SubagentRecord | undefined> {
-    return await this._store.update(ref, (current) => {
-      if (isTerminal(current.status)) return undefined;
-      return {
-        ...current,
-        status: "failed",
-        finishedAt: current.finishedAt ?? this._nowIso(),
-        error: reason,
-      };
-    });
+  private async _isStillLeased(work: LeasedWorkItem): Promise<boolean> {
+    const current = await this._queue.get(work.id);
+    return current?.status === "leased" && current.lease?.id === work.lease.id;
   }
 
-  private async _markCancelled(
-    ref: SubagentRef,
-    fallback: SubagentRecord,
-    reason = "Subagent job was cancelled.",
-  ): Promise<SubagentRecord> {
-    return await this._store.update(ref, (current) => {
-      if (isTerminal(current.status)) return undefined;
-      return {
-        ...current,
-        status: "cancelled",
-        finishedAt: current.finishedAt ?? this._nowIso(),
-        error: current.error ?? reason,
-      };
-    }) ?? fallback;
-  }
-
-  private async _settleLeasedWorkFromTerminalRecord(work: LeasedWorkItem, record: SubagentRecord): Promise<void> {
-    if (record.status === "completed") {
-      await this._queue.complete(work.id, { leaseId: work.lease.id });
-      return;
-    }
-    if (record.status === "failed") {
-      await this._queue.fail(work.id, {
-        leaseId: work.lease.id,
-        reason: record.error ?? "Subagent job failed.",
-      });
-      return;
-    }
-    await this._queue.cancel(work.id, {
-      reason: record.error ?? "Subagent job was cancelled.",
-    });
-  }
-
-  private _getCurrentSessionRecord(agentId: string): Promise<SubagentRecord | undefined> {
-    return this._store.get(this._getSessionId(), agentId);
+  private async _wasCancelledOrReleased(work: LeasedWorkItem, active: ActiveSubagentRun): Promise<boolean> {
+    if (active.cancellationRequested || active.controller.signal.aborted) return true;
+    return !await this._isStillLeased(work);
   }
 
   private _refKey(ref: SubagentRef): string {
     return `${ref.sessionId}:${ref.agentId}`;
-  }
-
-  private _nowIso(): string {
-    return this._clock().toISOString();
   }
 }

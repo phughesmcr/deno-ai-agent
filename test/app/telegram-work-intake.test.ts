@@ -8,7 +8,7 @@ import {
   TelegramWorkIntake,
 } from "../../src/app/telegram-work-intake.ts";
 import { cronRunWorkPayload, type QueuedDurableImage, userTurnWorkPayload } from "../../src/app/work-payload.ts";
-import { EgressOutbox, MemoryEventStore, MemoryWorkQueue, type WorkItem, type WorkQueue } from "../../src/core/mod.ts";
+import { EgressOutbox, MemoryKernelStore, type WorkItem, type WorkQueue } from "../../src/core/mod.ts";
 import type { CronJob, CronJobRunnerResult, CronJobStore } from "../../src/cron/mod.ts";
 import type { TelegramReplyOptions } from "../../src/telegram/model-reply.ts";
 import type { TelegramSessionCoordinator } from "../../src/telegram/session-coordinator.ts";
@@ -61,10 +61,10 @@ function textOf(message: ChatMessageData): string {
 
 class RecordingQueue implements WorkQueue {
   failSubmit: Error | undefined;
-  private readonly _queue: MemoryWorkQueue;
+  private readonly _queue: MemoryKernelStore;
   private readonly _records: string[];
 
-  constructor(queue: MemoryWorkQueue, records: string[]) {
+  constructor(queue: MemoryKernelStore, records: string[]) {
     this._queue = queue;
     this._records = records;
   }
@@ -107,6 +107,10 @@ class RecordingQueue implements WorkQueue {
     options: Parameters<WorkQueue["recoverInterruptedWork"]>[0],
   ): ReturnType<WorkQueue["recoverInterruptedWork"]> {
     return this._queue.recoverInterruptedWork(options);
+  }
+
+  listWork(options?: Parameters<WorkQueue["listWork"]>[0]): ReturnType<WorkQueue["listWork"]> {
+    return this._queue.listWork(options);
   }
 }
 
@@ -213,7 +217,7 @@ function telegramContext(options: {
 }
 
 function createHarness(options?: { withTyping?: boolean }): {
-  events: MemoryEventStore;
+  events: MemoryKernelStore;
   queue: RecordingQueue;
   imageStore: RecordingImageStore;
   records: string[];
@@ -222,8 +226,8 @@ function createHarness(options?: { withTyping?: boolean }): {
   intake: TelegramWorkIntake;
 } {
   const records: string[] = [];
-  const events = new MemoryEventStore();
-  const queue = new RecordingQueue(new MemoryWorkQueue(events), records);
+  const events = new MemoryKernelStore();
+  const queue = new RecordingQueue(events, records);
   const imageStore = new RecordingImageStore(records);
   const telegramApi = new RecordingTelegramApi(records);
   const typingApi = options?.withTyping ? new RecordingTypingApi(records) : undefined;

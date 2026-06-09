@@ -5,8 +5,7 @@ import {
   type CapabilityDescriptor,
   EgressOutbox,
   listPendingCapabilities,
-  MemoryEventStore,
-  MemoryWorkQueue,
+  MemoryKernelStore,
 } from "../../src/core/mod.ts";
 
 const capability: CapabilityDescriptor = {
@@ -33,8 +32,8 @@ function userTurnPayload(): unknown {
 }
 
 Deno.test("recoverTelegramPendingCapabilities cancels orphaned capability work and queues Telegram notice", async () => {
-  const events = new MemoryEventStore();
-  const queue = new MemoryWorkQueue(events);
+  const events = new MemoryKernelStore();
+  const queue = events;
   const outbox = new EgressOutbox(events);
   const work = await queue.submit({
     kind: "user_turn",
@@ -86,8 +85,8 @@ Deno.test("recoverTelegramPendingCapabilities cancels orphaned capability work a
 });
 
 Deno.test("recoverTelegramPendingCapabilities skips capabilities without recoverable work", async () => {
-  const events = new MemoryEventStore();
-  const queue = new MemoryWorkQueue(events);
+  const events = new MemoryKernelStore();
+  const queue = events;
   const outbox = new EgressOutbox(events);
   await events.append({
     category: "approval.requested",

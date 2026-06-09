@@ -1,18 +1,12 @@
 import { assertEquals, assertRejects } from "jsr:@std/assert@1";
 
-import {
-  KvEventStore,
-  KvWorkQueue,
-  type LeasedWorkItem,
-  QueuedTurnProcessor,
-  WorkspaceGate,
-} from "../../src/core/mod.ts";
+import { KvKernelStore, type LeasedWorkItem, QueuedTurnProcessor, WorkspaceGate } from "../../src/core/mod.ts";
 
 class RecordingRunner {
   readonly workIds: string[] = [];
   fail = false;
 
-  constructor(private readonly _queue: KvWorkQueue) {}
+  constructor(private readonly _queue: KvKernelStore) {}
 
   async run(work: LeasedWorkItem): Promise<void> {
     this.workIds.push(work.id);
@@ -38,12 +32,12 @@ class UnsettledFailingRunner {
 }
 
 async function withKv(
-  fn: (spec: { kv: Deno.Kv; events: KvEventStore; queue: KvWorkQueue }) => Promise<void>,
+  fn: (spec: { kv: Deno.Kv; events: KvKernelStore; queue: KvKernelStore }) => Promise<void>,
 ): Promise<void> {
   const kv = await Deno.openKv(":memory:");
   try {
-    const events = new KvEventStore(kv);
-    await fn({ kv, events, queue: new KvWorkQueue({ kv, events }) });
+    const events = new KvKernelStore(kv);
+    await fn({ kv, events, queue: events });
   } finally {
     kv.close();
   }
@@ -54,7 +48,7 @@ async function delay(ms: number): Promise<void> {
 }
 
 async function waitForWorkStatus(
-  queue: KvWorkQueue,
+  queue: KvKernelStore,
   workId: string,
   status: "queued" | "leased" | "completed" | "failed" | "cancelled",
 ): Promise<void> {
@@ -66,7 +60,7 @@ async function waitForWorkStatus(
 }
 
 function createProcessor(
-  queue: KvWorkQueue,
+  queue: KvKernelStore,
   runner: RecordingRunner | UnsettledFailingRunner,
   gate = new WorkspaceGate(),
 ): QueuedTurnProcessor {

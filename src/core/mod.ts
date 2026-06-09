@@ -41,9 +41,11 @@ export {
   type EventCategory,
   type EventListOptions,
   type EventStore,
-  KvEventStore,
-  MemoryEventStore,
+  isKvEventMutationStore,
+  type KvAtomicEventMutation,
+  type KvEventMutationStore,
 } from "./events.ts";
+export { KvKernelStore, MemoryKernelStore } from "./kernel_store.ts";
 export {
   type DroppedEgressPayload,
   EgressOutbox,
@@ -83,6 +85,8 @@ export {
   type EgressPort,
   type RunTurnWorkOptions,
   TurnRunner,
+  type TurnRunnerEgress,
+  type TurnRunnerInput,
   type TurnRunnerOptions,
   type TurnRunnerResult,
 } from "./turn_runner.ts";
@@ -124,10 +128,9 @@ export {
   type CancelWorkOptions,
   type CompleteWorkOptions,
   type FailWorkOptions,
-  KvWorkQueue,
   type LeasedWorkItem,
   type LeaseWorkOptions,
-  MemoryWorkQueue,
+  type ListWorkOptions,
   type RecoverInterruptedWorkOptions,
   type RecoverInterruptedWorkResult,
   type ReleaseWorkOptions,

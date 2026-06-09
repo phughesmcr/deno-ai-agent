@@ -2,11 +2,10 @@ import { assert, assertEquals, assertRejects, assertStringIncludes } from "jsr:@
 
 import type { SubagentActRequest, SubagentActResult } from "../../src/agent/model-act.ts";
 import { createSkillManager } from "../../src/agent/skills/mod.ts";
-import { type SubagentRecord, SubagentRuntime } from "../../src/agent/subagents.ts";
+import { SubagentRuntime } from "../../src/agent/subagents.ts";
 import { createToolContext, type ToolContext } from "../../src/agent/tools/context.ts";
 import {
-  KvEventStore,
-  KvWorkQueue,
+  KvKernelStore,
   QueuedTurnProcessor,
   type QueuedTurnProcessorResult,
   WorkspaceGate,
@@ -50,8 +49,8 @@ class FakeModel {
 interface RuntimeSpec {
   kv: Deno.Kv;
   ctx: ToolContext;
-  events: KvEventStore;
-  queue: KvWorkQueue;
+  events: KvKernelStore;
+  queue: KvKernelStore;
   gate: WorkspaceGate;
   model: FakeModel;
   runtime: SubagentRuntime;
@@ -60,26 +59,9 @@ interface RuntimeSpec {
   wakeCount(): number;
 }
 
-function subagentRecord(overrides: Partial<SubagentRecord>): SubagentRecord {
-  return {
-    id: "subagent-1",
-    sessionId: "session-1",
-    title: "Subagent",
-    task: "Inspect",
-    status: "queued",
-    createdAt: "2026-01-02T03:04:05.000Z",
-    ...overrides,
-  };
-}
-
-async function putSubagent(kv: Deno.Kv, record: SubagentRecord): Promise<void> {
-  await kv.set(["subagents", record.sessionId, record.id], record);
-}
-
 async function withRuntime(
   fn: (spec: RuntimeSpec) => Promise<void>,
   options: {
-    clock?: () => Date;
     createId?: () => string;
   } = {},
 ): Promise<void> {
@@ -89,8 +71,8 @@ async function withRuntime(
   let wakeCount = 0;
   const model = new FakeModel();
   try {
-    const events = new KvEventStore(kv);
-    const queue = new KvWorkQueue({ kv, events });
+    const events = new KvKernelStore(kv);
+    const queue = events;
     const gate = new WorkspaceGate();
     const ctx = await createToolContext(dir, {
       sessionId: () => sessionId,
@@ -98,7 +80,6 @@ async function withRuntime(
     });
     const skills = await createSkillManager({ root: dir });
     const runtime = new SubagentRuntime({
-      kv,
       events,
       queue,
       model,
@@ -108,7 +89,7 @@ async function withRuntime(
       wakeQueue: () => {
         wakeCount++;
       },
-      ...options,
+      ...(options.createId !== undefined ? { createId: options.createId } : {}),
     });
     const processor = new QueuedTurnProcessor({
       queue,
@@ -155,7 +136,7 @@ async function delay(ms: number): Promise<void> {
 }
 
 async function waitForWorkStatus(
-  queue: KvWorkQueue,
+  queue: KvKernelStore,
   workId: string,
   status: "queued" | "leased" | "completed" | "failed" | "cancelled",
 ): Promise<void> {
@@ -171,14 +152,15 @@ Deno.test("SubagentRuntime spawn creates a record, submits subagent_run, and wak
     async ({ model, queue, runtime, wakeCount }) => {
       const spawned = await runtime.spawn({ task: "  Inspect repo  ", title: "  Repo check  " });
 
-      assertEquals(spawned, {
+      assertEquals({ ...spawned, createdAt: "<created>" }, {
         id: "fixed-subagent-id",
         sessionId: "session-1",
         title: "Repo check",
         task: "Inspect repo",
         status: "queued",
-        createdAt: "2026-01-02T03:04:05.000Z",
+        createdAt: "<created>",
       });
+      assertEquals(Number.isNaN(Date.parse(spawned.createdAt)), false);
       assertEquals(await runtime.status(spawned.id), spawned);
       assertEquals(model.runCalls.length, 0);
       assertEquals(wakeCount(), 1);
@@ -190,7 +172,6 @@ Deno.test("SubagentRuntime spawn creates a record, submits subagent_run, and wak
       assertEquals(work?.payload, { task: "Inspect repo", title: "Repo check" });
     },
     {
-      clock: () => new Date("2026-01-02T03:04:05.000Z"),
       createId: () => "fixed-subagent-id",
     },
   );
@@ -303,7 +284,7 @@ Deno.test("subagent work waits behind WorkspaceGate via the shared queue process
     try {
       await waitForWorkStatus(queue, spawned.id, "leased");
       assertEquals(model.runCalls.length, 0);
-      assertEquals((await runtime.status(spawned.id))?.status, "queued");
+      assertEquals((await runtime.status(spawned.id))?.status, "running");
     } finally {
       releaseGate.resolve();
       await held;
@@ -366,10 +347,6 @@ Deno.test("host abort releases subagent work instead of cancelling the record", 
 
     await assertRejects(() => processing, DOMException, "Shutdown");
     assertEquals((await queue.get(spawned.id))?.status, "queued");
-    assertEquals((await runtime.status(spawned.id))?.status, "running");
-
-    const recovery = await runtime.recoverPendingOnStartup();
-    assertEquals(recovery.requeued, [spawned.id]);
     assertEquals((await runtime.status(spawned.id))?.status, "queued");
 
     model.behaviors.push(model.reply("resumed"));
@@ -380,23 +357,15 @@ Deno.test("host abort releases subagent work instead of cancelling the record", 
 });
 
 Deno.test("SubagentRuntime marks pending records failed when durable work exhausted retries", async () => {
-  await withRuntime(async ({ kv, model, queue, runtime }) => {
-    const running = subagentRecord({
-      id: "stale-agent",
-      title: "Stale",
-      task: "stale task",
-      status: "running",
-      startedAt: "2026-01-02T03:04:06.000Z",
-    });
-    await putSubagent(kv, running);
+  await withRuntime(async ({ model, queue, runtime }) => {
     await queue.submit({
-      id: running.id,
+      id: "stale-agent",
       kind: "subagent_run",
-      sessionId: running.sessionId,
+      sessionId: "session-1",
       availableAt: new Date("2026-01-02T03:04:05.000Z"),
-      payload: { task: running.task, title: running.title },
+      payload: { task: "stale task", title: "Stale" },
     });
-    const oldLease = await queue.lease(running.id, {
+    const oldLease = await queue.lease("stale-agent", {
       ownerId: "old-host",
       kinds: ["subagent_run"],
       now: new Date("2026-01-02T03:04:06.000Z"),
@@ -407,35 +376,24 @@ Deno.test("SubagentRuntime marks pending records failed when durable work exhaus
       now: new Date("2026-01-02T03:04:07.000Z"),
     });
 
-    const recovery = await runtime.recoverPendingOnStartup();
-
-    assertEquals(recovery.failed, [running.id]);
-    const failed = await runtime.status(running.id);
+    const failed = await runtime.status("stale-agent");
     assertEquals(failed?.status, "failed");
     assertStringIncludes(failed?.error ?? "", "interrupted work attempts exhausted");
     assertEquals(model.runCalls.length, 0);
-    assertEquals((await queue.get(running.id))?.status, "failed");
+    assertEquals((await queue.get("stale-agent"))?.status, "failed");
   });
 });
 
-Deno.test("SubagentRuntime completes queued work from persisted model.message during startup recovery", async () => {
-  await withRuntime(async ({ events, kv, queue, runtime }) => {
-    const running = subagentRecord({
-      id: "output-agent",
-      title: "Output",
-      task: "output task",
-      status: "running",
-      startedAt: "2026-01-02T03:04:06.000Z",
-    });
-    await putSubagent(kv, running);
+Deno.test("SubagentRuntime completes queued work from persisted model.message when processing resumes", async () => {
+  await withRuntime(async ({ events, model, processor, queue, runtime }) => {
     await queue.submit({
-      id: running.id,
+      id: "output-agent",
       kind: "subagent_run",
-      sessionId: running.sessionId,
+      sessionId: "session-1",
       availableAt: new Date("2026-01-02T03:04:05.000Z"),
-      payload: { task: running.task, title: running.title },
+      payload: { task: "output task", title: "Output" },
     });
-    const oldLease = await queue.lease(running.id, {
+    const oldLease = await queue.lease("output-agent", {
       ownerId: "old-host",
       kinds: ["subagent_run"],
       now: new Date("2026-01-02T03:04:06.000Z"),
@@ -443,8 +401,8 @@ Deno.test("SubagentRuntime completes queued work from persisted model.message du
     assert(oldLease);
     await events.append({
       category: "model.message",
-      workId: running.id,
-      sessionId: running.sessionId,
+      workId: "output-agent",
+      sessionId: "session-1",
       payload: {
         message: {
           role: "assistant",
@@ -457,36 +415,12 @@ Deno.test("SubagentRuntime completes queued work from persisted model.message du
       now: new Date("2026-01-02T03:04:07.000Z"),
     });
 
-    const recovery = await runtime.recoverPendingOnStartup();
-
-    assertEquals(recovery.completedFromModelOutput, [running.id]);
-    const completed = await runtime.status(running.id);
+    assertEquals(await processNext(processor), { status: "completed", workId: "output-agent" });
+    const completed = await runtime.status("output-agent");
     assertEquals(completed?.status, "completed");
     assertEquals(completed?.result, "persisted result");
-    assertEquals((await queue.get(running.id))?.status, "completed");
-  });
-});
-
-Deno.test("SubagentRuntime recreates missing durable work for pending records", async () => {
-  await withRuntime(async ({ kv, queue, runtime, wakeCount }) => {
-    const queued = subagentRecord({
-      id: "missing-work-agent",
-      title: "Missing",
-      task: "missing task",
-      status: "running",
-      startedAt: "2026-01-02T03:04:06.000Z",
-    });
-    await putSubagent(kv, queued);
-
-    const recovery = await runtime.recoverPendingOnStartup();
-
-    assertEquals(recovery.recreatedWork, [queued.id]);
-    assertEquals((await runtime.status(queued.id))?.status, "queued");
-    const work = await queue.get(queued.id);
-    assertEquals(work?.status, "queued");
-    assertEquals(work?.kind, "subagent_run");
-    assertEquals(work?.payload, { task: queued.task, title: queued.title });
-    assertEquals(wakeCount(), 1);
+    assertEquals(model.runCalls.length, 0);
+    assertEquals((await queue.get("output-agent"))?.status, "completed");
   });
 });
 

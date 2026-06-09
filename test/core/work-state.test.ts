@@ -191,7 +191,12 @@ Deno.test("complete, release, and fail require a matching lease", () => {
   assertEquals(released.item.status, "queued");
   assertEquals(released.item.lease, undefined);
   assertEquals(released.item.availableAt, "2026-06-08T09:30:00.000Z");
-  assertEquals(released.event, undefined);
+  assertEquals(released.event, {
+    category: "work.released",
+    workId: "work-1",
+    sessionId: "session-1",
+    payload: { availableAt: "2026-06-08T09:30:00.000Z" },
+  });
 
   const failed = failLeasedWork(leasedWork(), { leaseId: "lease-1", now: UPDATED_AT, reason: "boom" });
   assertEquals(failed.item.status, "failed");
@@ -252,7 +257,12 @@ Deno.test("recoverInterruptedLeasedWork requeues interrupted work below max atte
   assertEquals(result.item.status, "queued");
   assertEquals(result.item.availableAt, "2026-06-08T09:10:00.000Z");
   assertEquals(result.item.lease, undefined);
-  assertEquals(result.event, undefined);
+  assertEquals(result.event, {
+    category: "work.released",
+    workId: "work-1",
+    sessionId: "session-1",
+    payload: { availableAt: "2026-06-08T09:10:00.000Z" },
+  });
 });
 
 Deno.test("recoverInterruptedLeasedWork fails interrupted work at max attempts", () => {

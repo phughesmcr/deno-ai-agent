@@ -16,6 +16,7 @@ import {
   type TelegramEgressApi,
   type TelegramEgressTarget,
 } from "./telegram-egress.ts";
+import { telegramTargetForWork } from "./work-payload.ts";
 
 /** Options for running prepared queued work through the durable core turn runner. */
 export interface RunQueuedPreparedTurnOptions {
@@ -55,6 +56,19 @@ interface TurnEgressPayload {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object";
+}
+
+function textFromMessage(message: ChatMessageData): string {
+  return message.content.flatMap((part) => {
+    if (!isRecord(part) || part["type"] !== "text") return [];
+    const text = part["text"];
+    return typeof text === "string" ? [text] : [];
+  }).join("");
+}
+
+function imageCountFromMessage(message: ChatMessageData): number {
+  return message.content.filter((part) => isRecord(part) && part["type"] === "file" && part["fileType"] === "image")
+    .length;
 }
 
 function turnEgressPayload(value: unknown): TurnEgressPayload {
@@ -97,17 +111,21 @@ export async function runQueuedPreparedTurn(
     baseSystemPrompt: () => options.baseSystemPrompt,
     guardToolCall: () => options.guardToolCall,
     observer: () => options.observer,
-    fallbackText: () => options.fallbackText,
   });
-  const preparedWork: LeasedWorkItem = {
-    ...options.work,
-    payload: {
-      ...(isRecord(options.work.payload) ? options.work.payload : {}),
-      input: { message: options.userMessage },
-    },
-  };
-  return await runner.run(preparedWork, {
+  const target = telegramTargetForWork(options.work);
+  if (!target) throw new Error("Queued turn work does not contain a Telegram egress target");
+  const imageCount = imageCountFromMessage(options.userMessage);
+  return await runner.run(options.work, {
     signal: options.signal,
+    input: {
+      message: options.userMessage,
+      audit: {
+        text: textFromMessage(options.userMessage),
+        ...(imageCount > 0 ? { imageCount } : {}),
+      },
+    },
+    egress: { target },
     abortDisposition: options.abortDisposition,
+    ...(options.fallbackText !== undefined ? { fallbackText: options.fallbackText } : {}),
   });
 }

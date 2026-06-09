@@ -4,8 +4,7 @@ import { assert, assertEquals } from "jsr:@std/assert@1";
 import { createTelegramTurnEgressPort, runQueuedPreparedTurn } from "../../src/app/queued-turn-runner.ts";
 import {
   type ContextSummaryPort,
-  KvEventStore,
-  KvWorkQueue,
+  KvKernelStore,
   type ModelTurnOutput,
   type ModelTurnPort,
   type ModelTurnRequest,
@@ -76,8 +75,8 @@ async function withKv(fn: (kv: Deno.Kv) => Promise<void>): Promise<void> {
 
 Deno.test("runQueuedPreparedTurn drives queued Telegram work through TurnRunner", async () => {
   await withKv(async (kv) => {
-    const events = new KvEventStore(kv);
-    const queue = new KvWorkQueue({ kv, events });
+    const events = new KvKernelStore(kv);
+    const queue = events;
     const model = new FakeModelTurnPort();
     const api = new RecordingTelegramApi();
     const work = await queue.submit({
@@ -136,8 +135,8 @@ Deno.test("runQueuedPreparedTurn drives queued Telegram work through TurnRunner"
 
 Deno.test("runQueuedPreparedTurn sends fallback Telegram egress when there are no replies", async () => {
   await withKv(async (kv) => {
-    const events = new KvEventStore(kv);
-    const queue = new KvWorkQueue({ kv, events });
+    const events = new KvKernelStore(kv);
+    const queue = events;
     const model = new FakeModelTurnPort();
     model.output = {
       persistedMessages: [],

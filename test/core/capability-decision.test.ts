@@ -5,9 +5,9 @@ import {
   CapabilityLedger,
   type CapabilityPromptDecision,
   type CapabilityRequest,
-  KvEventStore,
+  KvKernelStore,
   listPendingCapabilities,
-  MemoryEventStore,
+  MemoryKernelStore,
 } from "../../src/core/mod.ts";
 
 const BASE_REQUEST: CapabilityRequest = {
@@ -40,11 +40,11 @@ function promptDecision(
 }
 
 async function withLedger(
-  fn: (ledger: CapabilityLedger, events: KvEventStore, service: CapabilityDecisionService) => Promise<void>,
+  fn: (ledger: CapabilityLedger, events: KvKernelStore, service: CapabilityDecisionService) => Promise<void>,
 ): Promise<void> {
   const kv = await Deno.openKv(":memory:");
   try {
-    const events = new KvEventStore(kv);
+    const events = new KvKernelStore(kv);
     const ledger = new CapabilityLedger({ kv, events });
     const service = new CapabilityDecisionService({ ledger, events });
     await fn(ledger, events, service);
@@ -202,7 +202,7 @@ Deno.test("CapabilityDecisionService consumes active once grants exactly once", 
 });
 
 Deno.test("listPendingCapabilities replays unresolved capability requests", async () => {
-  const events = new MemoryEventStore();
+  const events = new MemoryKernelStore();
   await events.append({
     category: "approval.requested",
     workId: "work-1",

@@ -1,11 +1,11 @@
 import { assertEquals, assertRejects } from "jsr:@std/assert@1";
 
 import { runQueuedMaintenanceWork } from "../../src/app/maintenance-work.ts";
-import { MemoryEventStore, MemoryWorkQueue } from "../../src/core/mod.ts";
+import { MemoryKernelStore } from "../../src/core/mod.ts";
 
 Deno.test("runQueuedMaintenanceWork completes leased maintenance work", async () => {
-  const events = new MemoryEventStore();
-  const queue = new MemoryWorkQueue(events);
+  const events = new MemoryKernelStore();
+  const queue = events;
   const work = await queue.submit({
     id: "maintenance-1",
     kind: "maintenance",
@@ -34,8 +34,8 @@ Deno.test("runQueuedMaintenanceWork completes leased maintenance work", async ()
 });
 
 Deno.test("runQueuedMaintenanceWork rejects non-maintenance work", async () => {
-  const events = new MemoryEventStore();
-  const queue = new MemoryWorkQueue(events);
+  const events = new MemoryKernelStore();
+  const queue = events;
   const work = await queue.submit({
     id: "user-turn-1",
     kind: "user_turn",

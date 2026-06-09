@@ -4,7 +4,7 @@ import {
   createDurableUserInteractionPort,
   type DurableUserInteractionPort,
   listPendingInteractions,
-  MemoryEventStore,
+  MemoryKernelStore,
 } from "../../src/core/mod.ts";
 
 interface TestRequest {
@@ -28,7 +28,7 @@ function testPort(result: TestResult): DurableUserInteractionPort<unknown, TestR
 }
 
 Deno.test("durable user interaction port records requested and completed events", async () => {
-  const events = new MemoryEventStore();
+  const events = new MemoryKernelStore();
   const port = createDurableUserInteractionPort({
     events,
     delegate: testPort({ action: "accept", content: { "0": "Yes" } }),
@@ -49,7 +49,7 @@ Deno.test("durable user interaction port records requested and completed events"
 });
 
 Deno.test("durable user interaction port records failed completion before rethrowing", async () => {
-  const events = new MemoryEventStore();
+  const events = new MemoryKernelStore();
   const port = createDurableUserInteractionPort({
     events,
     delegate: {
@@ -80,7 +80,7 @@ Deno.test("durable user interaction port records failed completion before rethro
 });
 
 Deno.test("listPendingInteractions replays unmatched interaction requests", async () => {
-  const events = new MemoryEventStore();
+  const events = new MemoryKernelStore();
   await events.append({
     category: "interaction.requested",
     workId: "work-1",

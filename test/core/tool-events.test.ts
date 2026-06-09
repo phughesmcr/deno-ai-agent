@@ -3,12 +3,12 @@ import { assertEquals } from "jsr:@std/assert@1";
 import {
   composeToolLifecycleObservers,
   createDurableToolEventObserver,
-  MemoryEventStore,
+  MemoryKernelStore,
   type ToolLifecycleObserver,
 } from "../../src/core/mod.ts";
 
 Deno.test("durable tool observer records requested and completed events", async () => {
-  const events = new MemoryEventStore();
+  const events = new MemoryKernelStore();
   const observer = createDurableToolEventObserver({
     events,
     sessionId: "session-1",
@@ -46,7 +46,7 @@ Deno.test("durable tool observer records requested and completed events", async 
 });
 
 Deno.test("durable tool observer records failed tool calls", async () => {
-  const events = new MemoryEventStore();
+  const events = new MemoryKernelStore();
   const observer = createDurableToolEventObserver({
     events,
     sessionId: "session-1",
@@ -73,7 +73,7 @@ Deno.test("durable tool observer records failed tool calls", async () => {
 });
 
 Deno.test("durable tool observer records one model round start per round index", async () => {
-  const events = new MemoryEventStore();
+  const events = new MemoryKernelStore();
   const observer = createDurableToolEventObserver({
     events,
     sessionId: "session-1",

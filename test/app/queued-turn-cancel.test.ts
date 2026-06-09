@@ -2,7 +2,7 @@ import { assertEquals } from "jsr:@std/assert@1";
 import type { ChatMessageData } from "@lmstudio/sdk";
 
 import { cancelQueuedTelegramUserTurns } from "../../src/app/queued-turn-cancel.ts";
-import { MemoryEventStore, MemoryWorkQueue } from "../../src/core/mod.ts";
+import { MemoryKernelStore } from "../../src/core/mod.ts";
 
 const message = {
   role: "user",
@@ -24,8 +24,8 @@ function payload(chatId: number, threadId?: number): unknown {
 }
 
 Deno.test("cancelQueuedTelegramUserTurns cancels queued user turns for the target Telegram topic", async () => {
-  const events = new MemoryEventStore();
-  const queue = new MemoryWorkQueue(events);
+  const events = new MemoryKernelStore();
+  const queue = events;
   const matching = await queue.submit({
     id: "matching-work",
     kind: "user_turn",
@@ -68,8 +68,8 @@ Deno.test("cancelQueuedTelegramUserTurns cancels queued user turns for the targe
 });
 
 Deno.test("cancelQueuedTelegramUserTurns does not cancel leased active work", async () => {
-  const events = new MemoryEventStore();
-  const queue = new MemoryWorkQueue(events);
+  const events = new MemoryKernelStore();
+  const queue = events;
   const work = await queue.submit({
     id: "leased-work",
     kind: "user_turn",
@@ -102,8 +102,8 @@ Deno.test("cancelQueuedTelegramUserTurns does not cancel leased active work", as
 });
 
 Deno.test("cancelQueuedTelegramUserTurns keeps main chat and topic queues separate", async () => {
-  const events = new MemoryEventStore();
-  const queue = new MemoryWorkQueue(events);
+  const events = new MemoryKernelStore();
+  const queue = events;
   const mainChat = await queue.submit({
     id: "main-chat-work",
     kind: "user_turn",

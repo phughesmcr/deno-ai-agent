@@ -3,7 +3,7 @@ import { assertEquals } from "jsr:@std/assert@1";
 import { completeCronRunSchedule, failCronRunSchedule, submitCronRunWork } from "../../src/app/cron-work.ts";
 import { cronRunWorkPayload } from "../../src/app/work-payload.ts";
 import { type CronJob, CronJobStore } from "../../src/cron/mod.ts";
-import { CapabilityLedger, KvEventStore, KvWorkQueue, MemoryEventStore, MemoryWorkQueue } from "../../src/core/mod.ts";
+import { CapabilityLedger, KvKernelStore, MemoryKernelStore } from "../../src/core/mod.ts";
 
 const job: CronJob = {
   id: "cron-a",
@@ -26,8 +26,8 @@ const job: CronJob = {
   topicName: "Cron: daily",
 };
 
-function createQueue(): MemoryWorkQueue {
-  return new MemoryWorkQueue(new MemoryEventStore());
+function createQueue(): MemoryKernelStore {
+  return new MemoryKernelStore();
 }
 
 async function withCronStore(fn: (store: CronJobStore) => Promise<void>): Promise<void> {
@@ -75,8 +75,8 @@ Deno.test("submitCronRunWork creates deterministic durable cron work with serial
 Deno.test("submitCronRunWork records the cron profile decision in the capability ledger", async () => {
   const kv = await Deno.openKv(":memory:");
   try {
-    const events = new KvEventStore(kv);
-    const queue = new KvWorkQueue({ kv, events });
+    const events = new KvKernelStore(kv);
+    const queue = events;
     const capabilityLedger = new CapabilityLedger({ kv, events });
 
     const result = await submitCronRunWork({

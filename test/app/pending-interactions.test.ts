@@ -1,7 +1,7 @@
 import { assertEquals } from "jsr:@std/assert@1";
 
 import { recoverTelegramPendingInteractions } from "../../src/app/pending-interactions.ts";
-import { EgressOutbox, listPendingInteractions, MemoryEventStore, MemoryWorkQueue } from "../../src/core/mod.ts";
+import { EgressOutbox, listPendingInteractions, MemoryKernelStore } from "../../src/core/mod.ts";
 
 function userTurnPayload(): unknown {
   return {
@@ -25,8 +25,8 @@ function dueAvailableAt(): Date {
 }
 
 Deno.test("recoverTelegramPendingInteractions keeps orphaned work queued and queues Telegram notice", async () => {
-  const events = new MemoryEventStore();
-  const queue = new MemoryWorkQueue(events);
+  const events = new MemoryKernelStore();
+  const queue = events;
   const outbox = new EgressOutbox(events);
   const work = await queue.submit({
     kind: "user_turn",
@@ -84,8 +84,8 @@ Deno.test("recoverTelegramPendingInteractions keeps orphaned work queued and que
 });
 
 Deno.test("recoverTelegramPendingInteractions requeues still-leased orphaned work", async () => {
-  const events = new MemoryEventStore();
-  const queue = new MemoryWorkQueue(events);
+  const events = new MemoryKernelStore();
+  const queue = events;
   const outbox = new EgressOutbox(events);
   const work = await queue.submit({
     kind: "user_turn",
@@ -133,8 +133,8 @@ Deno.test("recoverTelegramPendingInteractions requeues still-leased orphaned wor
 });
 
 Deno.test("recoverTelegramPendingInteractions skips pending interactions without recoverable work", async () => {
-  const events = new MemoryEventStore();
-  const queue = new MemoryWorkQueue(events);
+  const events = new MemoryKernelStore();
+  const queue = events;
   const outbox = new EgressOutbox(events);
   await events.append({
     category: "interaction.requested",

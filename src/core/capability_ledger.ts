@@ -1,4 +1,4 @@
-import type { EventStore } from "./events.ts";
+import { type EventStore, isKvEventMutationStore, type KvEventMutationStore } from "./events.ts";
 
 /** Capability families recorded in the authorization ledger. */
 export type CapabilityRequestSource =
@@ -122,10 +122,13 @@ function isExpired(record: CapabilityDecisionRecord, now: Date): boolean {
 /** Durable capability ledger backed by Deno KV. */
 export class CapabilityLedger {
   private readonly _kv: Deno.Kv;
-  private readonly _events: EventStore;
+  private readonly _events: KvEventMutationStore;
 
   /** Creates a capability ledger. */
   constructor(options: { kv: Deno.Kv; events: EventStore }) {
+    if (!isKvEventMutationStore(options.events)) {
+      throw new Error("CapabilityLedger requires a KV kernel event store");
+    }
     this._kv = options.kv;
     this._events = options.events;
   }
@@ -145,26 +148,27 @@ export class CapabilityLedger {
       ...(input.consumeImmediately ? { consumedAt: iso(now) } : {}),
       ...(input.decidedBy !== undefined ? { decidedBy: input.decidedBy } : {}),
     };
-    let atomic = this._kv.atomic()
-      .set(decisionKey(record.id), record);
-    if (!input.consumeImmediately) {
-      atomic = atomic.set(activeKey(record), record);
-    }
-    await atomic.commit();
-    await this._events.append({
-      category: "approval.decided",
-      workId: input.workId,
-      sessionId: input.sessionId,
-      payload: {
-        capability: input.capability,
-        decision: input.decision,
-        scope: input.scope,
-        reason: input.reason,
-        source: input.source ?? "prompt",
-        ...(input.consumeImmediately ? { consumed: true } : {}),
-        ...(input.decidedBy !== undefined ? { decidedBy: input.decidedBy } : {}),
+    await this._events.commitKvMutationWithEvents(
+      (atomic) => {
+        let next = atomic.set(decisionKey(record.id), record);
+        if (!input.consumeImmediately) next = next.set(activeKey(record), record);
+        return next;
       },
-    });
+      [{
+        category: "approval.decided",
+        workId: input.workId,
+        sessionId: input.sessionId,
+        payload: {
+          capability: input.capability,
+          decision: input.decision,
+          scope: input.scope,
+          reason: input.reason,
+          source: input.source ?? "prompt",
+          ...(input.consumeImmediately ? { consumed: true } : {}),
+          ...(input.decidedBy !== undefined ? { decidedBy: input.decidedBy } : {}),
+        },
+      }],
+    );
     return record;
   }
 

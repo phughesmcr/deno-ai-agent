@@ -33,14 +33,37 @@ export interface TurnRunnerOptions {
   ) => ModelTurnRequest["guardToolCall"] | Promise<ModelTurnRequest["guardToolCall"]>;
   /** Optional telemetry/model-act observer for a work item. */
   observer?: (work: LeasedWorkItem) => ModelTurnRequest["observer"] | Promise<ModelTurnRequest["observer"]>;
-  /** Optional fallback text to send when a completed model turn produced no reply chunks. */
-  fallbackText?: (work: LeasedWorkItem) => string | undefined | Promise<string | undefined>;
+}
+
+/** Typed model input supplied by the app adapter. */
+export interface TurnRunnerInput {
+  /** User message to append to projected session context. */
+  message: ChatMessageData;
+  /** Auditable summary stored with the durable input event. */
+  audit: {
+    /** User-visible text extracted by the adapter. */
+    text: string;
+    /** Number of attached images, when any. */
+    imageCount?: number;
+  };
+}
+
+/** Typed egress target supplied by the app adapter. */
+export interface TurnRunnerEgress {
+  /** Adapter-owned reply target. */
+  target: unknown;
 }
 
 /** Options for running one leased turn. */
 export interface RunTurnWorkOptions {
   /** Abort signal for the active turn. */
   signal: AbortSignal;
+  /** Prepared typed input. */
+  input: TurnRunnerInput;
+  /** Prepared egress target. */
+  egress: TurnRunnerEgress;
+  /** Fallback text to send when a completed model turn produced no reply chunks. */
+  fallbackText?: string;
   /** How to settle work when model execution aborts. Defaults to cancellation. */
   abortDisposition?: "cancel" | "release" | ((work: LeasedWorkItem, error: unknown) => "cancel" | "release");
 }
@@ -51,15 +74,6 @@ export interface TurnRunnerResult extends ModelTurnOutput {
   finalization?: FinalizeSessionTurnResult;
   /** Non-terminal finalizer failure, when model output and egress still completed. */
   finalizationError?: string;
-}
-
-interface UserTurnPayload {
-  input: {
-    text: string;
-    imageCount?: number;
-  };
-  message?: ChatMessageData;
-  egress?: unknown;
 }
 
 interface EgressPayload {
@@ -76,76 +90,10 @@ function isAbortError(error: unknown): boolean {
   return error.name === "AbortError" || error.message.toLowerCase().includes("aborted");
 }
 
-function objectPayload(payload: unknown): Record<string, unknown> | null {
-  if (payload === null || typeof payload !== "object") return null;
-  return payload as Record<string, unknown>;
-}
-
-function isChatMessageData(value: unknown): value is ChatMessageData {
-  const record = objectPayload(value);
-  return typeof record?.["role"] === "string" && Array.isArray(record["content"]);
-}
-
-function textFromMessage(message: ChatMessageData): string {
-  return message.content.flatMap((part) => {
-    const record = objectPayload(part);
-    if (record?.["type"] !== "text") return [];
-    const text = record["text"];
-    return typeof text === "string" ? [text] : [];
-  }).join("");
-}
-
-function imageCountFromMessage(message: ChatMessageData): number {
-  return message.content.filter((part) => {
-    const record = objectPayload(part);
-    return record?.["type"] === "file" && record["fileType"] === "image";
-  }).length;
-}
-
-function inputFromMessage(message: ChatMessageData): UserTurnPayload["input"] {
-  const imageCount = imageCountFromMessage(message);
+function turnInputPayload(input: TurnRunnerInput): unknown {
   return {
-    text: textFromMessage(message),
-    ...(imageCount > 0 ? { imageCount } : {}),
-  };
-}
-
-function preparedMessage(payload: unknown): ChatMessageData | null {
-  const record = objectPayload(payload);
-  const input = objectPayload(record?.["input"]);
-  const message = input?.["message"];
-  return isChatMessageData(message) ? message : null;
-}
-
-function workText(payload: unknown): string {
-  const record = objectPayload(payload);
-  const input = objectPayload(record?.["input"]);
-  const inputText = input?.["text"];
-  if (typeof inputText === "string") return inputText;
-  const prompt = record?.["prompt"];
-  if (typeof prompt === "string") return prompt;
-  const text = record?.["text"];
-  if (typeof text === "string") return text;
-  throw new Error("Work payload does not contain text input");
-}
-
-function egressTarget(payload: unknown): unknown {
-  const record = objectPayload(payload);
-  return record?.["egress"] ?? record?.["telegram"] ?? null;
-}
-
-function asTurnInputPayload(work: LeasedWorkItem): UserTurnPayload {
-  const message = preparedMessage(work.payload);
-  if (message) {
-    return {
-      input: inputFromMessage(message),
-      message,
-      ...(egressTarget(work.payload) !== null ? { egress: egressTarget(work.payload) } : {}),
-    };
-  }
-  return {
-    input: { text: workText(work.payload) },
-    ...(egressTarget(work.payload) !== null ? { egress: egressTarget(work.payload) } : {}),
+    input: input.audit,
+    message: input.message,
   };
 }
 
@@ -159,7 +107,6 @@ export class TurnRunner {
   private readonly _baseSystemPrompt: TurnRunnerOptions["baseSystemPrompt"];
   private readonly _guardToolCall: TurnRunnerOptions["guardToolCall"];
   private readonly _observer: TurnRunnerOptions["observer"];
-  private readonly _fallbackText: TurnRunnerOptions["fallbackText"];
 
   /** Creates a turn runner. */
   constructor(options: TurnRunnerOptions) {
@@ -171,7 +118,6 @@ export class TurnRunner {
     this._baseSystemPrompt = options.baseSystemPrompt;
     this._guardToolCall = options.guardToolCall;
     this._observer = options.observer;
-    this._fallbackText = options.fallbackText;
   }
 
   /** Runs one leased work item through projection, model execution, egress, and completion. */
@@ -181,7 +127,7 @@ export class TurnRunner {
       const output = await this._context.runModelTurn({
         sessionId: work.sessionId,
         workId: work.id,
-        inputPayload: asTurnInputPayload(work),
+        inputPayload: turnInputPayload(options.input),
         inputPolicy: "ensure",
         baseSystemPrompt,
         tools: [...await this._tools(work)] as Tool[],
@@ -200,9 +146,9 @@ export class TurnRunner {
         finalizationError = errorMessage(error);
       }
 
-      const fallbackText = output.replyTexts.length === 0 ? await this._fallbackText?.(work) : undefined;
+      const fallbackText = output.replyTexts.length === 0 ? options.fallbackText : undefined;
       if (output.replyTexts.length > 0 || fallbackText !== undefined) {
-        await this._sendEgress(work, output.replyTexts, fallbackText);
+        await this._sendEgress(work, options.egress, output.replyTexts, fallbackText);
       }
       await this._queue.complete(work.id, {
         leaseId: work.lease.id,
@@ -237,11 +183,16 @@ export class TurnRunner {
   }
 
   /** Sends assistant replies through the egress port with queued/sent events around the side effect. */
-  private async _sendEgress(work: LeasedWorkItem, replies: string[], fallbackText?: string): Promise<void> {
+  private async _sendEgress(
+    work: LeasedWorkItem,
+    egress: TurnRunnerEgress,
+    replies: string[],
+    fallbackText?: string,
+  ): Promise<void> {
     const payload: EgressPayload = {
       workId: work.id,
       sessionId: work.sessionId,
-      target: egressTarget(work.payload),
+      target: egress.target,
       replies,
       ...(fallbackText !== undefined ? { fallbackText } : {}),
     };

@@ -88,8 +88,8 @@ export interface ReleaseLeasedWorkResult {
   outcome: "released";
   /** Updated queued work item. */
   item: WorkItem;
-  /** No durable event is emitted for release. */
-  event?: undefined;
+  /** Durable event to append. */
+  event: AppendEventInput;
 }
 
 /** Options for failing leased work. */
@@ -150,8 +150,8 @@ export type RecoverInterruptedLeasedWorkResult =
     outcome: "requeued";
     /** Updated queued work item. */
     item: WorkItem;
-    /** No durable event is emitted for successful requeue recovery. */
-    event?: undefined;
+    /** Durable event to append. */
+    event: AppendEventInput;
   }
   | {
     /** Transition outcome. */
@@ -231,6 +231,15 @@ function cancelledEvent(item: WorkItem, reason: string): AppendEventInput {
     workId: item.id,
     sessionId: item.sessionId,
     payload: { reason },
+  };
+}
+
+function releasedEvent(item: WorkItem): AppendEventInput {
+  return {
+    category: "work.released",
+    workId: item.id,
+    sessionId: item.sessionId,
+    payload: { availableAt: item.availableAt },
   };
 }
 
@@ -352,6 +361,7 @@ export function releaseLeasedWork(
   return {
     outcome: "released",
     item: queued,
+    event: releasedEvent(queued),
   };
 }
 
@@ -430,5 +440,6 @@ export function recoverInterruptedLeasedWork(
   return {
     outcome: "requeued",
     item: queued,
+    event: releasedEvent(queued),
   };
 }

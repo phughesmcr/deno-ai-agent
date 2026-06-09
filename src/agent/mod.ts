@@ -46,7 +46,6 @@ export {
   type RunSubagentWorkOptions,
   type SubagentPort,
   type SubagentRecord,
-  type SubagentRecoveryResult,
   SubagentRuntime,
   type SubagentRuntimeOptions,
   type SubagentSpawnSpec,

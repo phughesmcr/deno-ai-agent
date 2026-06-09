@@ -2,7 +2,7 @@ import { ChatMessage, type ChatMessageData } from "@lmstudio/sdk";
 import { assertEquals } from "jsr:@std/assert@1";
 
 import {
-  KvEventStore,
+  KvKernelStore,
   KvSessionCatalog,
   type ModelTurnOutput,
   type ModelTurnPort,
@@ -67,7 +67,7 @@ async function withDurableSession(
   fn: (
     spec: {
       session: DurableAgentSessions;
-      events: KvEventStore;
+      events: KvKernelStore;
       catalog: KvSessionCatalog;
       context: SessionContextEngine;
       model: FakeModelTurnPort;
@@ -78,7 +78,7 @@ async function withDurableSession(
 ): Promise<void> {
   const kv = await Deno.openKv(":memory:");
   try {
-    const events = new KvEventStore(kv);
+    const events = new KvKernelStore(kv);
     const catalog = new KvSessionCatalog(kv);
     const model = new FakeModelTurnPort();
     const summary = new FakeSummaryPort();

@@ -1,6 +1,6 @@
 import * as path from "@std/path";
 
-import { type EventStore, KvEventStore, KvSessionCatalog, SessionContextEngine } from "../core/mod.ts";
+import { type EventStore, KvKernelStore, KvSessionCatalog, SessionContextEngine } from "../core/mod.ts";
 import { type AgentSessions, DurableAgentSessions } from "./context/session.ts";
 import type { LMStudioManager } from "./lmstudio.ts";
 import { type AgentModelActPort, LmStudioAgentModelAct } from "./model-act.ts";
@@ -43,7 +43,7 @@ export interface CreateAgentOptions {
 export async function createAgent(spec: CreateAgentOptions): Promise<Agent> {
   const { workspace, kv, lmstudio, maxContextLength, signal } = spec;
 
-  const events = spec.events ?? new KvEventStore(kv);
+  const events = spec.events ?? new KvKernelStore(kv);
   const catalog = new KvSessionCatalog(kv);
   const modelAct = new LmStudioAgentModelAct({
     client: lmstudio.client,

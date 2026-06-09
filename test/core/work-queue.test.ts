@@ -1,14 +1,14 @@
 import { assert, assertEquals, assertRejects } from "jsr:@std/assert@1";
 
-import { MemoryEventStore, MemoryWorkQueue } from "../../src/core/mod.ts";
+import { MemoryKernelStore } from "../../src/core/mod.ts";
 
-function categories(events: MemoryEventStore, workId: string): Promise<string[]> {
+function categories(events: MemoryKernelStore, workId: string): Promise<string[]> {
   return events.listByWork(workId).then((items) => items.map((event) => event.category));
 }
 
-Deno.test("MemoryWorkQueue uses shared lifecycle behavior for lease, release, fail, cancel, and recovery", async () => {
-  const events = new MemoryEventStore();
-  const queue = new MemoryWorkQueue(events);
+Deno.test("MemoryKernelStore uses shared lifecycle behavior for lease, release, fail, cancel, and recovery", async () => {
+  const events = new MemoryKernelStore();
+  const queue = events;
 
   const work = await queue.submit({
     id: "work-release-fail",
@@ -84,6 +84,7 @@ Deno.test("MemoryWorkQueue uses shared lifecycle behavior for lease, release, fa
   assertEquals(await categories(events, work.id), [
     "work.created",
     "work.leased",
+    "work.released",
     "work.leased",
     "work.failed",
   ]);
@@ -125,7 +126,7 @@ Deno.test("MemoryWorkQueue uses shared lifecycle behavior for lease, release, fa
     { requeued: [recovered.id], failed: [] },
   );
   assertEquals((await queue.get(recovered.id))?.status, "queued");
-  assertEquals(await categories(events, recovered.id), ["work.created", "work.leased"]);
+  assertEquals(await categories(events, recovered.id), ["work.created", "work.leased", "work.released"]);
 
   const exhausted = await queue.submit({
     id: "work-recover-fail",

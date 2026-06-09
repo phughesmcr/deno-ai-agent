@@ -3,7 +3,7 @@ import { assertEquals } from "jsr:@std/assert@1";
 import { completeCronRunSchedule } from "../../src/app/cron-work.ts";
 import { recoverInterruptedModelOutputs } from "../../src/app/model-output-recovery.ts";
 import { cronRunWorkPayload } from "../../src/app/work-payload.ts";
-import { EgressOutbox, MemoryEventStore, MemoryWorkQueue } from "../../src/core/mod.ts";
+import { EgressOutbox, MemoryKernelStore } from "../../src/core/mod.ts";
 import { CronJobStore } from "../../src/cron/mod.ts";
 
 function userTurnPayload(): unknown {
@@ -35,8 +35,8 @@ function dueAvailableAt(): Date {
 }
 
 Deno.test("recoverInterruptedModelOutputs queues egress from persisted model messages and completes work", async () => {
-  const events = new MemoryEventStore();
-  const queue = new MemoryWorkQueue(events);
+  const events = new MemoryKernelStore();
+  const queue = events;
   const outbox = new EgressOutbox(events);
   const work = await queue.submit({
     kind: "user_turn",
@@ -79,8 +79,8 @@ Deno.test("recoverInterruptedModelOutputs queues egress from persisted model mes
 });
 
 Deno.test("recoverInterruptedModelOutputs completes queued work that already has pending egress", async () => {
-  const events = new MemoryEventStore();
-  const queue = new MemoryWorkQueue(events);
+  const events = new MemoryKernelStore();
+  const queue = events;
   const outbox = new EgressOutbox(events);
   const work = await queue.submit({
     kind: "user_turn",
@@ -117,8 +117,8 @@ Deno.test("recoverInterruptedModelOutputs completes queued work that already has
 });
 
 Deno.test("recoverInterruptedModelOutputs skips active leased work", async () => {
-  const events = new MemoryEventStore();
-  const queue = new MemoryWorkQueue(events);
+  const events = new MemoryKernelStore();
+  const queue = events;
   const outbox = new EgressOutbox(events);
   const work = await queue.submit({
     kind: "user_turn",
@@ -176,8 +176,8 @@ Deno.test("recoverInterruptedModelOutputs advances cron schedules before complet
       permissionProfile: { toolRules: [], brokerRules: [] },
       topicName: "Cron: daily",
     });
-    const events = new MemoryEventStore();
-    const queue = new MemoryWorkQueue(events);
+    const events = new MemoryKernelStore();
+    const queue = events;
     const outbox = new EgressOutbox(events);
     const work = await queue.submit({
       kind: "cron_run",

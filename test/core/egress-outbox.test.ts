@@ -1,9 +1,9 @@
 import { assertEquals } from "jsr:@std/assert@1";
 
-import { EgressOutbox, MemoryEventStore } from "../../src/core/mod.ts";
+import { EgressOutbox, MemoryKernelStore } from "../../src/core/mod.ts";
 
 Deno.test("EgressOutbox queues egress and hides it after sent", async () => {
-  const events = new MemoryEventStore();
+  const events = new MemoryKernelStore();
   const outbox = new EgressOutbox(events);
 
   const queued = await outbox.queue({
@@ -32,7 +32,7 @@ Deno.test("EgressOutbox queues egress and hides it after sent", async () => {
 });
 
 Deno.test("EgressOutbox hides permanently dropped egress", async () => {
-  const events = new MemoryEventStore();
+  const events = new MemoryKernelStore();
   const outbox = new EgressOutbox(events);
 
   const queued = await outbox.queue({
@@ -57,7 +57,7 @@ Deno.test("EgressOutbox hides permanently dropped egress", async () => {
 });
 
 Deno.test("EgressOutbox replays pending egress by session and work", async () => {
-  const events = new MemoryEventStore();
+  const events = new MemoryKernelStore();
   const outbox = new EgressOutbox(events);
   const first = await outbox.queue({
     workId: "work-1",
@@ -87,7 +87,7 @@ Deno.test("EgressOutbox replays pending egress by session and work", async () =>
 });
 
 Deno.test("EgressOutbox scopes sent matching by work and session as well as egress id", async () => {
-  const events = new MemoryEventStore();
+  const events = new MemoryKernelStore();
   const outbox = new EgressOutbox(events);
   const first = await outbox.queue({
     workId: "work-1",
