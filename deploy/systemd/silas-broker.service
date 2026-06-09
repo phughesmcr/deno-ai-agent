@@ -1,0 +1,23 @@
+[Unit]
+Description=Silas permission broker
+Documentation=https://github.com/phughesmcr/deno-ai-agent
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=silas
+Group=silas
+WorkingDirectory=/opt/silas
+Environment=HOME=/home/silas
+Environment=USER=silas
+Environment=PATH=/home/silas/.deno/bin:/usr/local/bin:/usr/bin:/bin
+EnvironmentFile=/opt/silas/.env
+ExecStart=/opt/silas/scripts/start-broker.sh
+Restart=always
+RestartSec=5
+TimeoutStopSec=30
+KillSignal=SIGTERM
+
+[Install]
+WantedBy=multi-user.target

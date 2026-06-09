@@ -148,6 +148,48 @@ The broker daemon applies workspace-aware auto-policy and sends ambiguous reques
 - Tune policy with `DENO_AUDIT_PERMISSIONS` before relying on production prompts.
 - Integration tests: `deno task test:broker`
 
+### Ubuntu systemd service
+
+For 24h+ operation on Ubuntu, run broker and agent as separate `systemd` services. The units in
+[`deploy/systemd`](deploy/systemd) assume:
+
+- repo path: `/opt/silas`
+- service user/group: `silas`
+- Deno binary: `/home/silas/.deno/bin/deno`
+- environment file: `/opt/silas/.env`
+- workspace state: `/opt/silas/.silas`
+
+Install once after cloning/copying the repo to `/opt/silas`, creating `.env`, and installing Deno for the `silas` user:
+
+```sh
+sudo /opt/silas/scripts/install-systemd.sh
+```
+
+Start or restart both services:
+
+```sh
+sudo systemctl start silas-broker.service silas-agent.service
+sudo systemctl restart silas-agent.service
+```
+
+Check status and logs:
+
+```sh
+systemctl status silas-broker.service silas-agent.service
+journalctl -u silas-agent -f
+journalctl -u silas-broker -f
+```
+
+Enable/disable boot startup:
+
+```sh
+sudo systemctl enable silas-broker.service silas-agent.service
+sudo systemctl disable silas-agent.service silas-broker.service
+```
+
+The one-terminal `deno task start` wrapper is still useful for local development, but production should use the systemd
+units so broker and agent restart independently and logs are captured by journald.
+
 ## How it works
 
 ```mermaid

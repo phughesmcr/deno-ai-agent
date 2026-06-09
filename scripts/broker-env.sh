@@ -63,7 +63,7 @@ SILAS_PROJECT_ROOT="$(broker_env_or_default "SILAS_PROJECT_ROOT" "$ROOT")"
 wait_for_socket() {
   local sock="$1"
   local label="$2"
-  local attempts="${3:-50}"
+  local attempts="${3:-${SILAS_SOCKET_WAIT_ATTEMPTS:-300}}"
   for _ in $(seq 1 "$attempts"); do
     if [[ -S "$sock" ]]; then
       return 0

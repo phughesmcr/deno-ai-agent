@@ -1,0 +1,27 @@
+[Unit]
+Description=Silas Telegram agent
+Documentation=https://github.com/phughesmcr/deno-ai-agent
+After=network-online.target silas-broker.service
+Wants=network-online.target
+Requires=silas-broker.service
+
+[Service]
+Type=simple
+User=silas
+Group=silas
+WorkingDirectory=/opt/silas
+Environment=HOME=/home/silas
+Environment=USER=silas
+Environment=PATH=/home/silas/.deno/bin:/usr/local/bin:/usr/bin:/bin
+Environment=SHELL=/bin/bash
+Environment=TERM=dumb
+EnvironmentFile=/opt/silas/.env
+ExecStart=/opt/silas/scripts/start-agent-with-broker.sh
+Restart=always
+RestartSec=5
+TimeoutStartSec=90
+TimeoutStopSec=45
+KillSignal=SIGTERM
+
+[Install]
+WantedBy=multi-user.target
