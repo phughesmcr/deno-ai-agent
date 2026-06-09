@@ -1,8 +1,10 @@
 import type { ChatMessageData, FileHandle } from "@lmstudio/sdk";
+import { z } from "zod";
 
 import { type DurableUserImage, userTurnMessageData } from "../agent/user-turn.ts";
 import type { WorkItem } from "../core/mod.ts";
-import { parseTelegramEgressTarget, type TelegramEgressTarget } from "./telegram-egress.ts";
+import { textFromMessage } from "../shared/message.ts";
+import type { TelegramEgressTarget } from "./telegram-egress.ts";
 
 /** Durable queued image reference stored in the work payload. */
 export interface QueuedDurableImage {
@@ -49,62 +51,51 @@ export interface CronRunWorkPayload extends UserTurnWorkPayload {
   };
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return value !== null && typeof value === "object";
-}
+const userChatMessageDataSchema = z.custom<ChatMessageData>((value) => {
+  if (typeof value !== "object" || value === null) return false;
+  const record = value as Record<string, unknown>;
+  return record["role"] === "user" && Array.isArray(record["content"]);
+});
 
-function numberValue(record: Record<string, unknown>, key: string): number | undefined {
-  const value = record[key];
-  return typeof value === "number" ? value : undefined;
-}
+const queuedDurableImageSchema = z.object({
+  imageId: z.string(),
+  fileName: z.string(),
+  chunkCount: z.number().int().positive(),
+}) satisfies z.ZodType<QueuedDurableImage>;
 
-function stringValue(record: Record<string, unknown>, key: string): string | undefined {
-  const value = record[key];
-  return typeof value === "string" ? value : undefined;
-}
+const queuedModelInputSchema = z.object({
+  message: userChatMessageDataSchema,
+  durableImages: z.array(queuedDurableImageSchema).optional(),
+}) satisfies z.ZodType<QueuedModelInput>;
 
-function chatMessageData(value: unknown): ChatMessageData | undefined {
-  if (!isRecord(value)) return undefined;
-  if (value["role"] !== "user") return undefined;
-  if (!Array.isArray(value["content"])) return undefined;
-  return value as unknown as ChatMessageData;
-}
+const telegramEgressTargetSchema = z.object({
+  chatId: z.number(),
+  threadId: z.number().optional(),
+  replyToMessageId: z.number().optional(),
+  updateId: z.number().optional(),
+  cronJobId: z.string().optional(),
+}) satisfies z.ZodType<TelegramEgressTarget>;
 
-function durableImage(value: unknown): QueuedDurableImage | undefined {
-  if (!isRecord(value)) return undefined;
-  const imageId = stringValue(value, "imageId");
-  const fileName = stringValue(value, "fileName");
-  const chunkCount = numberValue(value, "chunkCount");
-  if (!imageId || !fileName || chunkCount === undefined) return undefined;
-  if (!Number.isSafeInteger(chunkCount) || chunkCount <= 0) return undefined;
-  return { imageId, fileName, chunkCount };
-}
+const userTurnWorkPayloadSchema = z.object({
+  input: queuedModelInputSchema,
+  telegram: telegramEgressTargetSchema.refine(
+    (target) => target.replyToMessageId !== undefined,
+    { message: "replyToMessageId is required for user turns" },
+  ),
+}) satisfies z.ZodType<UserTurnWorkPayload>;
 
-function durableImages(value: unknown): QueuedDurableImage[] | undefined {
-  if (value === undefined) return undefined;
-  if (!Array.isArray(value)) return undefined;
-  const images = value.map((item) => durableImage(item));
-  return images.every((item) => item !== undefined) ? images as QueuedDurableImage[] : undefined;
-}
-
-function queuedModelInput(value: unknown): QueuedModelInput | undefined {
-  if (!isRecord(value)) return undefined;
-  const message = chatMessageData(value["message"]);
-  const images = durableImages(value["durableImages"]);
-  if (!message || (value["durableImages"] !== undefined && !images)) return undefined;
-  return {
-    message,
-    ...(images && images.length > 0 ? { durableImages: images } : {}),
-  };
-}
-
-function textFromMessage(message: ChatMessageData): string {
-  return message.content.flatMap((part) => {
-    if (!isRecord(part) || part["type"] !== "text") return [];
-    const text = part["text"];
-    return typeof text === "string" ? [text] : [];
-  }).join("");
-}
+const cronRunWorkPayloadSchema = z.object({
+  input: queuedModelInputSchema,
+  telegram: telegramEgressTargetSchema,
+  prompt: z.string(),
+  cron: z.object({
+    jobId: z.string(),
+    topicName: z.string().optional(),
+    sessionMode: z.enum(["fresh", "persistent"]),
+    dueAt: z.string(),
+    dispatchedAt: z.string(),
+  }),
+}) satisfies z.ZodType<CronRunWorkPayload>;
 
 /** Rebuilds queued model input with fresh image handles when durable image bytes are available. */
 export async function prepareQueuedModelMessage(
@@ -120,48 +111,20 @@ export async function prepareQueuedModelMessage(
 
 /** Parses and validates a durable user turn work payload. */
 export function userTurnWorkPayload(value: unknown): UserTurnWorkPayload {
-  if (!isRecord(value)) throw new Error("Invalid user turn payload");
-  const input = queuedModelInput(value["input"]);
-  const telegram = parseTelegramEgressTarget(value["telegram"], { requireReplyToMessageId: true });
-  if (!input || !telegram) throw new Error("Invalid user turn payload");
-  return { input, telegram };
+  try {
+    return userTurnWorkPayloadSchema.parse(value);
+  } catch {
+    throw new Error("Invalid user turn payload");
+  }
 }
 
 /** Parses and validates a durable cron run work payload. */
 export function cronRunWorkPayload(value: unknown): CronRunWorkPayload {
-  if (!isRecord(value)) throw new Error("Invalid cron run payload");
-  const input = queuedModelInput(value["input"]);
-  const telegram = parseTelegramEgressTarget(value["telegram"]);
-  const prompt = stringValue(value, "prompt");
-  const cron = isRecord(value["cron"]) ? value["cron"] : undefined;
-  const jobId = cron ? stringValue(cron, "jobId") : undefined;
-  const sessionMode = cron?.["sessionMode"];
-  const dueAt = cron ? stringValue(cron, "dueAt") : undefined;
-  const dispatchedAt = cron ? stringValue(cron, "dispatchedAt") : undefined;
-  if (
-    !prompt ||
-    !input ||
-    !telegram ||
-    !cron ||
-    !jobId ||
-    (sessionMode !== "fresh" && sessionMode !== "persistent") ||
-    !dueAt ||
-    !dispatchedAt
-  ) {
+  try {
+    return cronRunWorkPayloadSchema.parse(value);
+  } catch {
     throw new Error("Invalid cron run payload");
   }
-  return {
-    input,
-    telegram,
-    prompt,
-    cron: {
-      jobId,
-      ...(stringValue(cron, "topicName") !== undefined ? { topicName: stringValue(cron, "topicName") } : {}),
-      sessionMode,
-      dueAt,
-      dispatchedAt,
-    },
-  };
 }
 
 /** Extracts the Telegram egress target from work payloads that can notify Telegram on recovery. */

@@ -1,4 +1,4 @@
-import { runAgentHost } from "./src/app/agent-host.ts";
+import { runAgentHost } from "./src/app/agent-host-runtime.ts";
 
 export { runAgentHost };
 

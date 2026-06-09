@@ -7,7 +7,7 @@ import type {
   CapabilityRequestSource,
   CapabilityRisk,
 } from "../../core/mod.ts";
-import type { RuntimeToolDefinition, ToolDescriptor } from "../../core/tool_runtime.ts";
+import type { RuntimeToolDefinition, ToolDescriptor } from "../../core/tool-runtime.ts";
 import type { SkillManager } from "../skills/mod.ts";
 import type { SubagentPort } from "../subagents.ts";
 import type { ToolContext } from "./context.ts";

@@ -3,7 +3,7 @@
 import type { Message } from "grammy/types";
 import { assertEquals } from "jsr:@std/assert@1";
 
-import { extractImageFileId, inferImageFileName, prepareTelegramImages } from "../../src/telegram/telegram-image.ts";
+import { extractImageFileId, inferImageFileName, prepareTelegramImages } from "../../src/telegram/image.ts";
 
 function expectedBase64(bytes: Uint8Array): string {
   return btoa(Array.from(bytes, (byte) => String.fromCharCode(byte)).join(""));

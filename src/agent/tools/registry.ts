@@ -1,17 +1,18 @@
 import type { Tool } from "@lmstudio/sdk";
 
-import { isMcpToolName, parseMcpToolName } from "../../mcp/naming.ts";
 import type { CapabilityDecisionResult, CapabilityRequest } from "../../core/mod.ts";
-import { ToolRuntime } from "../../core/tool_runtime.ts";
+import { ToolRuntime } from "../../core/tool-runtime.ts";
+import { isMcpToolName, parseMcpToolName } from "../../mcp/naming.ts";
 import { DEFAULT_APPROVAL_TIMEOUT_MS } from "../../shared/approval.ts";
 import { errorMessage } from "../../shared/error.ts";
 import { logDebug } from "../../shared/log.ts";
-import type { SubagentPort } from "../subagents.ts";
+import { createSkillManager } from "../skills/mod.ts";
+import { createUnavailableSubagentPort } from "../subagents.ts";
 import { askUserQuestionToolDefinition } from "./ask-user-question.ts";
 import type { GuardedToolCallRequest, ToolCallGuard, ToolCallGuardController } from "./authorization.ts";
 import { bashToolDefinition } from "./bash.ts";
+import { createToolContext, type ToolContext } from "./context.ts";
 import {
-  type AgentRuntimeToolDefinition,
   type AgentToolCapabilityRequestSpec,
   type AgentToolDefinition,
   type AgentToolDeps,
@@ -26,13 +27,12 @@ import { readToolDefinition } from "./read.ts";
 import { skillToolDefinition } from "./skill.ts";
 import { subagentToolDefinition } from "./subagent.ts";
 import { createNoopTodoDisplayPort } from "./todo-display-port.ts";
-import { type TodoStore, todoWriteToolDefinition } from "./todo-write.ts";
+import type { TodoStore } from "./todo-store.ts";
+import { todoWriteToolDefinition } from "./todo-write.ts";
 import { typescriptReplToolDefinition } from "./typescript-repl.ts";
 import { createUnavailableUserInteractionPort } from "./user-question-port.ts";
 import { webFetchToolDefinition } from "./web-fetch.ts";
 import { writeToolDefinition } from "./write.ts";
-import { createSkillManager } from "../skills/mod.ts";
-import { createToolContext, type ToolContext } from "./context.ts";
 
 export interface ModelToolSet {
   tools: Tool[];
@@ -77,56 +77,15 @@ export const readOnlySubagentToolDefinitions: readonly AgentToolDefinition[] = [
 const localRuntimeTools = localToolDefinitions.map(runtimeToolFromDefinition);
 const readOnlySubagentRuntimeTools = readOnlySubagentToolDefinitions.map(runtimeToolFromDefinition);
 
-function toolName(tool: Tool): string | undefined {
+const localToolRuntime = new ToolRuntime<AgentToolDeps, AgentToolCapabilityRequestSpec, string>(localRuntimeTools);
+
+function exposedModelToolName(tool: Tool): string | undefined {
   const name = (tool as { name?: unknown }).name;
   return typeof name === "string" ? name : undefined;
 }
 
-function mcpRuntimeTool(name: string): AgentRuntimeToolDefinition {
-  return {
-    name,
-    describe(): ReturnType<AgentRuntimeToolDefinition["describe"]> {
-      return {
-        name,
-        description: "MCP remote tool",
-        parameters: {},
-      };
-    },
-    parse(raw: Record<string, unknown> | undefined): Record<string, unknown> {
-      return raw ?? {};
-    },
-    authorize(): AgentToolCapabilityRequestSpec {
-      return mcpCapabilityRequestSpec(name);
-    },
-    execute(): string {
-      throw new Error("MCP tools execute through the MCP registry adapter.");
-    },
-  };
-}
-
-function exposedMcpRuntimeTools(deps: AgentToolDeps): AgentRuntimeToolDefinition[] {
-  return (deps.mcp?.getTools() ?? [])
-    .map(toolName)
-    .filter((name): name is string => name !== undefined && isMcpToolName(name))
-    .map(mcpRuntimeTool);
-}
-
-function toolRuntimeForDeps(deps: AgentToolDeps): ToolRuntime<AgentToolDeps, AgentToolCapabilityRequestSpec, string> {
-  return new ToolRuntime<AgentToolDeps, AgentToolCapabilityRequestSpec, string>([
-    ...localRuntimeTools,
-    ...exposedMcpRuntimeTools(deps),
-  ]);
-}
-
-function unavailableSubagentPort(): SubagentPort {
-  const unavailable = (): Promise<never> => Promise.reject(new Error("Subagent job service is not configured."));
-  return {
-    spawn: unavailable,
-    status: unavailable,
-    list: unavailable,
-    result: unavailable,
-    cancel: unavailable,
-  };
+function isExposedMcpTool(deps: AgentToolDeps, name: string): boolean {
+  return (deps.mcp?.getTools() ?? []).some((tool) => exposedModelToolName(tool) === name);
 }
 
 function unavailableTodoStore(): TodoStore {
@@ -170,10 +129,10 @@ async function resolveToolCallAuthorization(
   | { kind: "local"; request: CapabilityRequest | null; params: Record<string, unknown> }
   | { kind: "mcp"; request: CapabilityRequest }
 > {
-  const definition = toolRuntimeForDeps(deps).get(toolCallRequest.name);
-  if (definition) {
-    const params = definition.parse(toolCallRequest.arguments);
-    const spec = await definition.authorize(params, deps);
+  const localDefinition = localToolRuntime.get(toolCallRequest.name);
+  if (localDefinition) {
+    const params = localDefinition.parse(toolCallRequest.arguments);
+    const spec = await localDefinition.authorize(params, deps);
     const request = spec ?
       {
         id: createRequestId(),
@@ -182,11 +141,23 @@ async function resolveToolCallAuthorization(
         ...spec,
       } satisfies CapabilityRequest :
       null;
-    if (isMcpToolName(toolCallRequest.name)) {
-      if (!request) throw new Error(`MCP tool did not produce an authorization request: ${toolCallRequest.name}`);
-      return { kind: "mcp", request };
-    }
     return { kind: "local", request, params: { ...(params as Record<string, unknown>) } };
+  }
+
+  if (isMcpToolName(toolCallRequest.name)) {
+    if (!isExposedMcpTool(deps, toolCallRequest.name)) {
+      throw new Error(`No authorization policy for tool: ${toolCallRequest.name}`);
+    }
+    const spec = mcpCapabilityRequestSpec(toolCallRequest.name);
+    return {
+      kind: "mcp",
+      request: {
+        id: createRequestId(),
+        sessionId: deps.workspace.getSessionId(),
+        workId: deps.workspace.getTurnId(),
+        ...spec,
+      },
+    };
   }
 
   throw new Error(`No authorization policy for tool: ${toolCallRequest.name}`);
@@ -346,7 +317,7 @@ export function createReadOnlySubagentToolsFromDefinitions(
       manager: skills,
       getSessionId: workspace.getSessionId,
     },
-    subagents: unavailableSubagentPort(),
+    subagents: createUnavailableSubagentPort(),
   } satisfies AgentToolDeps;
   return readOnlySubagentRuntimeTools.map((definition) => toolFromRuntimeDefinition(definition, deps));
 }
@@ -367,6 +338,6 @@ export async function getModelToolsForRoot(root: string): Promise<Tool[]> {
       manager: skills,
       getSessionId: () => "00000000-0000-4000-8000-000000000000",
     },
-    subagents: unavailableSubagentPort(),
+    subagents: createUnavailableSubagentPort(),
   });
 }

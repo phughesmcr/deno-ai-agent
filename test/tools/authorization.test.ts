@@ -8,10 +8,10 @@ import {
   authorizeToolCall,
   createToolCallGuard,
   type ToolCallGuardController,
-} from "../../src/agent/tools/index.ts";
+} from "../../src/agent/tools/mod.ts";
 import { createToolContext } from "../../src/agent/tools/context.ts";
 import { createNoopTodoDisplayPort } from "../../src/agent/tools/todo-display-port.ts";
-import type { TodoStore } from "../../src/agent/tools/todo-write.ts";
+import type { TodoStore } from "../../src/agent/tools/todo-store.ts";
 import { createUnavailableUserInteractionPort } from "../../src/agent/tools/user-question-port.ts";
 import type { CapabilityDecisionResult, CapabilityRequest } from "../../src/core/mod.ts";
 

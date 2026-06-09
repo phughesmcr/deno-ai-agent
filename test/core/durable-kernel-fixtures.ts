@@ -7,10 +7,10 @@ import {
   type ModelTurnOutput,
   type ModelTurnPort,
   type ModelTurnRequest,
-  type RunTurnWorkOptions,
   SessionContextEngine,
   type SummaryCompactionInput,
 } from "../../src/core/mod.ts";
+import type { RunTurnWorkOptions } from "../../src/core/turn-runner.ts";
 
 export type { ChatMessageData, Tool };
 

@@ -1,12 +1,8 @@
 import { assertEquals } from "jsr:@std/assert@1";
 
 import { recoverTelegramPendingCapabilities } from "../../src/app/pending-approvals.ts";
-import {
-  type CapabilityDescriptor,
-  EgressOutbox,
-  listPendingCapabilities,
-  MemoryKernelStore,
-} from "../../src/core/mod.ts";
+import { type CapabilityDescriptor, EgressOutbox, listPendingCapabilities } from "../../src/core/mod.ts";
+import { MemoryKernelStore } from "../support/memory-kernel-store.ts";
 
 const capability: CapabilityDescriptor = {
   kind: "local_tool",

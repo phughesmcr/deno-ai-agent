@@ -141,7 +141,6 @@ Deno.test("SessionContextEngine compacts sessions from durable projection and re
         systemPrompt: input.systemPrompt,
         previousSummary: input.previousSummary,
         messages: input.messages.map((message) => [message.role, textOf(message)]),
-        details: input.details,
       })),
       [{
         systemPrompt: "system",
@@ -150,7 +149,6 @@ Deno.test("SessionContextEngine compacts sessions from durable projection and re
           ["user", "remember this"],
           ["assistant", "reply"],
         ],
-        details: { readFiles: [], modifiedFiles: [] },
       }],
     );
     assertEquals((await events.listBySession("session-1")).map((event) => event.category), [

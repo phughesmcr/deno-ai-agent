@@ -4,8 +4,8 @@ import type { Message } from "grammy/types";
 import { assertEquals } from "jsr:@std/assert@1";
 
 import { parseTelegramUserTurn } from "../../src/telegram/parse-user-turn.ts";
-import type { AudioTranscriber } from "../../src/telegram/telegram-audio.ts";
-import { DEFAULT_IMAGE_PROMPT } from "../../src/telegram/telegram-image.ts";
+import type { AudioTranscriber } from "../../src/telegram/audio.ts";
+import { DEFAULT_IMAGE_PROMPT } from "../../src/telegram/image.ts";
 import type { TelegramContext } from "../../src/telegram/telegram.ts";
 
 const TINY_PNG_BASE64 =

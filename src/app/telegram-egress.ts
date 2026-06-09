@@ -1,5 +1,6 @@
 import type { EgressOutbox, PendingEgress, QueuedEgressPayload } from "../core/mod.ts";
 import { errorMessage, logError } from "../shared/mod.ts";
+import { isRecord } from "../shared/record.ts";
 import { sendModelTextReply, type TelegramReplyOptions } from "../telegram/model-reply.ts";
 
 /** Telegram destination persisted in durable egress events. */
@@ -76,10 +77,6 @@ export interface TelegramEgressPayload {
   replies: readonly string[];
   /** Fallback text when no assistant reply chunks exist. */
   fallbackText?: string;
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return value !== null && typeof value === "object";
 }
 
 function optionalNumber(record: Record<string, unknown>, key: string): number | undefined {

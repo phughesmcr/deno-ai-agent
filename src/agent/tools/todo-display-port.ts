@@ -1,4 +1,4 @@
-import type { TodoChanges, TodoItem, TodoTelegramMeta } from "./todo-write.ts";
+import type { TodoChanges, TodoItem, TodoTelegramMeta } from "./todo-store.ts";
 
 /**
  * Payload passed to the display port after todos are persisted.

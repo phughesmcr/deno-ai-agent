@@ -112,7 +112,7 @@
     "start:otel": "bash scripts/start-with-broker-otel.sh",
     "start:otel:console": "OTEL_EXPORTER_OTLP_PROTOCOL=console bash scripts/start-with-broker-otel.sh",
 
-    "check:docs": "deno doc --unstable-kv --lint main.ts src/core/mod.ts src/agent/lmstudio.ts src/agent/workspace.ts src/agent/context/compactor.ts src/agent/context/persisted-message.ts src/agent/context/session.ts src/shared/approval.ts src/shared/log.ts src/shared/otel.ts src/telegram/commands.ts src/telegram/telegram.ts src/telegram/telegram-reply.ts src/telegram/todo-list-format.ts src/permission-broker/version.ts",
+    "check:docs": "deno doc --unstable-kv --lint main.ts src/core/mod.ts src/agent/lmstudio.ts src/agent/workspace.ts src/agent/context/compactor.ts src/agent/context/persisted-message.ts src/agent/context/session.ts src/shared/approval.ts src/shared/log.ts src/shared/otel.ts src/telegram/commands.ts src/telegram/telegram.ts src/telegram/reply.ts src/telegram/todo-list-format.ts src/permission-broker/version.ts",
     "check:fmt": "deno fmt --check",
     "check:lint": "deno lint",
     "check:types": "deno check --unstable-kv --allow-import main.ts src/**/*.ts test/**/*.test.ts bench/**/*.ts",

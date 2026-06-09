@@ -1,4 +1,5 @@
 import type { DurableEvent, EventStore } from "./events.ts";
+import { objectPayload } from "../shared/record.ts";
 
 /** Payload persisted for queued adapter egress. */
 export interface QueuedEgressPayload<TTarget = unknown> {
@@ -78,11 +79,6 @@ export interface PendingEgressOptions {
   workId?: string;
   /** Restrict to one session. */
   sessionId?: string;
-}
-
-function objectPayload(payload: unknown): Record<string, unknown> | undefined {
-  if (payload === null || typeof payload !== "object") return undefined;
-  return payload as Record<string, unknown>;
 }
 
 function egressId(payload: unknown): string | undefined {

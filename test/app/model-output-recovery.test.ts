@@ -3,8 +3,9 @@ import { assertEquals } from "jsr:@std/assert@1";
 import { completeCronRunSchedule } from "../../src/app/cron-work.ts";
 import { recoverInterruptedModelOutputs } from "../../src/app/model-output-recovery.ts";
 import { cronRunWorkPayload } from "../../src/app/work-payload.ts";
-import { EgressOutbox, MemoryKernelStore } from "../../src/core/mod.ts";
+import { EgressOutbox } from "../../src/core/mod.ts";
 import { CronJobStore } from "../../src/cron/mod.ts";
+import { MemoryKernelStore } from "../support/memory-kernel-store.ts";
 
 function userTurnPayload(): unknown {
   return {

@@ -4,8 +4,8 @@ import {
   createDurableUserInteractionPort,
   type DurableUserInteractionPort,
   listPendingInteractions,
-  MemoryKernelStore,
 } from "../../src/core/mod.ts";
+import { MemoryKernelStore } from "../support/memory-kernel-store.ts";
 
 interface TestRequest {
   mode: "cursor_questions";

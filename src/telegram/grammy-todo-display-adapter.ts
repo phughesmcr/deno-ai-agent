@@ -1,5 +1,5 @@
 // deno-lint-ignore-file camelcase -- Telegram API field names are snake_case.
-import { readTodoFile, type TodoDisplayPort, type TodoStore, type TodoUpdatePayload } from "../agent/mod.ts";
+import type { TodoDisplayPort, TodoStore, TodoUpdatePayload } from "../agent/mod.ts";
 import { logDebug } from "../shared/mod.ts";
 import { formatTodoListMarkdown, formatTodoListPlain } from "./todo-list-format.ts";
 
@@ -108,7 +108,7 @@ export async function showTodosForSession(
   sessionId: string,
   store: TodoStore,
 ): Promise<void> {
-  const file = await readTodoFile(store, sessionId);
+  const file = await store.read(sessionId);
   const markdown = formatTodoListMarkdown(file.todos);
   const plain = formatTodoListPlain(file.todos);
   const threadId = ctx.message?.message_thread_id;

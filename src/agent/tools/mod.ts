@@ -53,24 +53,21 @@ export type { SubagentAction, SubagentToolParams, SubagentToolResponse } from ".
 export { createNoopTodoDisplayPort } from "./todo-display-port.ts";
 export type { TodoDisplayPort, TodoUpdatePayload } from "./todo-display-port.ts";
 export {
-  copyTodosForSession,
-  createTodoWriteTool,
   DenoKvTodoStore,
   detectTodoChanges,
-  formatTodoWriteResult,
-  readTodoFile,
-  readTodosForSession,
   type TodoChanges,
   type TodoFile,
   type TodoItem,
   type TodoStatus,
   type TodoStore,
   type TodoTelegramMeta,
+} from "./todo-store.ts";
+export {
+  createTodoWriteTool,
+  formatTodoWriteResult,
   type TodoWriteDeps,
   type TodoWriteParams,
-  updateTelegramMeta,
   validateTodoWriteParams,
-  writeTodoFile,
 } from "./todo-write.ts";
 export { createTypeScriptReplTool } from "./typescript-repl.ts";
 export {

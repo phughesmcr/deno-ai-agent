@@ -11,8 +11,8 @@ import {
   leaseQueuedWork,
   recoverInterruptedLeasedWork,
   releaseLeasedWork,
-} from "../../src/core/work_state.ts";
-import type { LeasedWorkItem, WorkItem } from "../../src/core/work_queue.ts";
+} from "../../src/core/work-state.ts";
+import type { LeasedWorkItem, WorkItem } from "../../src/core/work-queue.ts";
 
 const CREATED_AT = new Date("2026-06-08T09:00:00.000Z");
 const LEASED_AT = new Date("2026-06-08T09:05:00.000Z");

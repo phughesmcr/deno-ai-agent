@@ -1,7 +1,7 @@
 import { assertEquals, assertRejects } from "jsr:@std/assert@1";
 
 import { runQueuedMaintenanceWork } from "../../src/app/maintenance-work.ts";
-import { MemoryKernelStore } from "../../src/core/mod.ts";
+import { MemoryKernelStore } from "../support/memory-kernel-store.ts";
 
 Deno.test("runQueuedMaintenanceWork completes leased maintenance work", async () => {
   const events = new MemoryKernelStore();

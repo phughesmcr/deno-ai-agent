@@ -1,7 +1,8 @@
 import { assertEquals } from "jsr:@std/assert@1";
 
 import { recoverTelegramPendingInteractions } from "../../src/app/pending-interactions.ts";
-import { EgressOutbox, listPendingInteractions, MemoryKernelStore } from "../../src/core/mod.ts";
+import { EgressOutbox, listPendingInteractions } from "../../src/core/mod.ts";
+import { MemoryKernelStore } from "../support/memory-kernel-store.ts";
 
 function userTurnPayload(): unknown {
   return {

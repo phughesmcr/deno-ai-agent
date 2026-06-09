@@ -1,9 +1,5 @@
 import type { ChatMessageData, Tool } from "@lmstudio/sdk";
 
-import type { AgentModelActPort } from "./model-act.ts";
-import type { SkillManager } from "./skills/mod.ts";
-import type { ToolContext } from "./tools/context.ts";
-import { createReadOnlySubagentToolsFromDefinitions } from "./tools/registry.ts";
 import {
   createDurableToolEventObserver,
   type DurableToolEventObserver,
@@ -13,7 +9,13 @@ import {
   type WorkItem,
   type WorkQueue,
 } from "../core/mod.ts";
+import { isAbortError } from "../shared/abort.ts";
 import { errorMessage } from "../shared/error.ts";
+import { objectPayload } from "../shared/record.ts";
+import type { AgentModelActPort } from "./model-act.ts";
+import type { SkillManager } from "./skills/mod.ts";
+import type { ToolContext } from "./tools/context.ts";
+import { createReadOnlySubagentToolsFromDefinitions } from "./tools/registry.ts";
 
 /** Subagent lifecycle state projected from durable work. */
 export type SubagentStatus = "queued" | "running" | "completed" | "failed" | "cancelled";
@@ -143,11 +145,6 @@ function unavailable(): Promise<never> {
   return Promise.reject(new Error("Subagent job service is not configured for this process."));
 }
 
-function objectPayload(value: unknown): Record<string, unknown> | undefined {
-  if (value === null || typeof value !== "object") return undefined;
-  return value as Record<string, unknown>;
-}
-
 function subagentRunPayload(value: unknown): SubagentRunPayload {
   const record = objectPayload(value);
   const task = record?.["task"];
@@ -177,12 +174,6 @@ function isTerminalWorkEvent(category: string): boolean {
 
 function abortError(message: string): DOMException {
   return new DOMException(message, "AbortError");
-}
-
-function isAbortError(error: unknown): boolean {
-  if (error instanceof DOMException && error.name === "AbortError") return true;
-  if (!(error instanceof Error)) return false;
-  return error.name === "AbortError" || error.message.toLowerCase().includes("aborted");
 }
 
 function wasAbortedBy(signal: AbortSignal, error: unknown): boolean {

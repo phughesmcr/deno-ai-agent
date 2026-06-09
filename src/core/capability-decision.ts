@@ -4,8 +4,9 @@ import type {
   CapabilityLedger,
   CapabilityRequestSource,
   CapabilityScope,
-} from "./capability_ledger.ts";
+} from "./capability-ledger.ts";
 import type { DurableEvent, EventStore } from "./events.ts";
+import { objectPayload } from "../shared/record.ts";
 
 /** Coarse risk label shown to the approving user. */
 export type CapabilityRisk = "low" | "medium" | "high";
@@ -112,11 +113,6 @@ export interface CapabilityDecisionServiceOptions {
   ledger: CapabilityLedger;
   /** Durable event store. */
   events: EventStore;
-}
-
-function objectPayload(payload: unknown): Record<string, unknown> | undefined {
-  if (payload === null || typeof payload !== "object") return undefined;
-  return payload as Record<string, unknown>;
 }
 
 function capabilityFromPayload(payload: unknown): CapabilityDescriptor | undefined {

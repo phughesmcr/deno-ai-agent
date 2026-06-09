@@ -1,6 +1,7 @@
 import { assertEquals } from "jsr:@std/assert@1";
 
-import { EgressOutbox, MemoryKernelStore } from "../../src/core/mod.ts";
+import { EgressOutbox } from "../../src/core/mod.ts";
+import { MemoryKernelStore } from "../support/memory-kernel-store.ts";
 
 Deno.test("EgressOutbox queues egress and hides it after sent", async () => {
   const events = new MemoryKernelStore();

@@ -7,8 +7,8 @@ import {
   type CapabilityRequest,
   KvKernelStore,
   listPendingCapabilities,
-  MemoryKernelStore,
 } from "../../src/core/mod.ts";
+import { MemoryKernelStore } from "../support/memory-kernel-store.ts";
 
 const BASE_REQUEST: CapabilityRequest = {
   id: "capability-1",

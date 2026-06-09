@@ -1,8 +1,8 @@
 import { type Chat, ChatMessage, type ChatMessageData, type LLM, type LMStudioClient, type Tool } from "@lmstudio/sdk";
 import { assert, assertEquals, assertRejects, assertStringIncludes } from "jsr:@std/assert@1";
 
-import type { ModelActObserver } from "../src/core/mod.ts";
 import { LmStudioAgentModelAct } from "../src/agent/model-act.ts";
+import type { ModelActObserver } from "../src/core/mod.ts";
 import { withEnv } from "./_env.ts";
 
 type ChatMessageWithRaw = ChatMessage & {
@@ -261,7 +261,6 @@ Deno.test("LmStudioAgentModelAct summarize uses truncateMiddle, no tools, and pr
         imageMessage("see this"),
       ],
       instructions: "focus on files",
-      details: { readFiles: ["src/a.ts"], modifiedFiles: ["src/b.ts"] },
     });
 
     const call = sdkModel.actCalls[0];
@@ -279,8 +278,6 @@ Deno.test("LmStudioAgentModelAct summarize uses truncateMiddle, no tools, and pr
     assertStringIncludes(prompt, "attachments: 1 image(s): photo.jpg");
     assertStringIncludes(summary, "Goal\n- keep going");
     assertStringIncludes(summary, '<skill_content name="docs">');
-    assertStringIncludes(summary, "<read-files>\nsrc/a.ts\n</read-files>");
-    assertStringIncludes(summary, "<modified-files>\nsrc/b.ts\n</modified-files>");
     assertEquals(summary.includes("<think>"), false);
   });
 });

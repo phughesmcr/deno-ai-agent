@@ -11,18 +11,7 @@ export {
   listPendingCapabilities,
   type PendingCapability,
   type PendingCapabilityListOptions,
-} from "./capability_decision.ts";
-export {
-  createDurableUserInteractionPort,
-  type DurableInteractionPortOptions,
-  type DurableInteractionTurnTarget,
-  type DurableUserInteractionPort,
-  type InteractionCompletedPayload,
-  type InteractionRequestedPayload,
-  listPendingInteractions,
-  type PendingInteraction,
-  type PendingInteractionListOptions,
-} from "./user_interaction.ts";
+} from "./capability-decision.ts";
 export {
   type CapabilityAuthorizationRequest,
   type CapabilityAuthorizationResult,
@@ -34,18 +23,7 @@ export {
   type CapabilityRequestSource,
   type CapabilityScope,
   type RecordCapabilityDecisionInput,
-} from "./capability_ledger.ts";
-export {
-  type AppendEventInput,
-  type DurableEvent,
-  type EventCategory,
-  type EventListOptions,
-  type EventStore,
-  isKvEventMutationStore,
-  type KvAtomicEventMutation,
-  type KvEventMutationStore,
-} from "./events.ts";
-export { KvKernelStore, MemoryKernelStore } from "./kernel_store.ts";
+} from "./capability-ledger.ts";
 export {
   type DroppedEgressPayload,
   EgressOutbox,
@@ -56,7 +34,18 @@ export {
   type QueuedEgressPayload,
   type QueueEgressInput,
   type SentEgressPayload,
-} from "./egress_outbox.ts";
+} from "./egress-outbox.ts";
+export {
+  type AppendEventInput,
+  type DurableEvent,
+  type EventCategory,
+  type EventListOptions,
+  type EventStore,
+  isKvEventMutationStore,
+  type KvAtomicEventMutation,
+  type KvEventMutationStore,
+} from "./events.ts";
+export { KvKernelStore } from "./kernel-store.ts";
 export {
   type GuardedToolCallRequest,
   type ModelActObserver,
@@ -65,14 +54,14 @@ export {
   type ModelTurnRequest,
   type ToolCallGuard,
   type ToolCallGuardController,
-} from "./model_turn.ts";
+} from "./model-turn.ts";
 export {
   createQueueWorker,
   type QueueWorker,
   type QueueWorkerErrorHandler,
   type QueueWorkerOptions,
   type QueueWorkerResultHandler,
-} from "./queue_worker.ts";
+} from "./queue-worker.ts";
 export {
   type ProcessQueuedTurnOptions,
   QueuedTurnProcessor,
@@ -80,27 +69,15 @@ export {
   type QueuedTurnProcessorResult,
   type QueuedWorkRunner,
   type QueuedWorkRunnerOptions,
-} from "./queued_turn_processor.ts";
+} from "./queued-turn-processor.ts";
 export {
-  type EgressPort,
-  type RunTurnWorkOptions,
-  TurnRunner,
-  type TurnRunnerEgress,
-  type TurnRunnerInput,
-  type TurnRunnerOptions,
-  type TurnRunnerResult,
-} from "./turn_runner.ts";
-export { type RuntimeToolDefinition, type ToolDescriptor, ToolRuntime } from "./tool_runtime.ts";
-export {
-  composeToolLifecycleObservers,
-  createDurableToolEventObserver,
-  type DurableToolEventObserver,
-  type DurableToolEventObserverOptions,
-  type ModelRoundStartedPayload,
-  type ToolCompletedPayload,
-  type ToolLifecycleObserver,
-  type ToolRequestedPayload,
-} from "./tool_events.ts";
+  type CreateSessionInput,
+  type ForkSessionOptions,
+  KvSessionCatalog,
+  type RenameSessionOptions,
+  SESSION_VERSION,
+  type SessionRecord,
+} from "./session-catalog.ts";
 export {
   type ContextSummaryPort,
   type FinalizeSessionTurnResult,
@@ -112,18 +89,31 @@ export {
   type SessionContextEngineOptions,
   type SessionContextProjection,
   type SessionContextRunModelTurnRequest,
-  type SessionFileDetails,
   type SummaryCompactionInput,
-} from "./session_context.ts";
+} from "./session-context.ts";
 export {
-  type CreateSessionInput,
-  type ForkSessionOptions,
-  KvSessionCatalog,
-  type RenameSessionOptions,
-  SESSION_VERSION,
-  type SessionRecord,
-} from "./session_catalog.ts";
-export { WorkspaceGate } from "./workspace_gate.ts";
+  composeToolLifecycleObservers,
+  createDurableToolEventObserver,
+  type DurableToolEventObserver,
+  type DurableToolEventObserverOptions,
+  type ModelRoundStartedPayload,
+  type ToolCompletedPayload,
+  type ToolLifecycleObserver,
+  type ToolRequestedPayload,
+} from "./tool-events.ts";
+export { type RuntimeToolDefinition, type ToolDescriptor, ToolRuntime } from "./tool-runtime.ts";
+export { type EgressPort } from "./turn-runner.ts";
+export {
+  createDurableUserInteractionPort,
+  type DurableInteractionPortOptions,
+  type DurableInteractionTurnTarget,
+  type DurableUserInteractionPort,
+  type InteractionCompletedPayload,
+  type InteractionRequestedPayload,
+  listPendingInteractions,
+  type PendingInteraction,
+  type PendingInteractionListOptions,
+} from "./user-interaction.ts";
 export {
   type CancelWorkOptions,
   type CompleteWorkOptions,
@@ -140,4 +130,5 @@ export {
   type WorkLease,
   type WorkQueue,
   type WorkStatus,
-} from "./work_queue.ts";
+} from "./work-queue.ts";
+export { WorkspaceGate } from "./workspace-gate.ts";

@@ -2,7 +2,7 @@ import { assertEquals } from "jsr:@std/assert@1";
 import type { ChatMessageData } from "@lmstudio/sdk";
 
 import { cancelQueuedTelegramUserTurns } from "../../src/app/queued-turn-cancel.ts";
-import { MemoryKernelStore } from "../../src/core/mod.ts";
+import { MemoryKernelStore } from "../support/memory-kernel-store.ts";
 
 const message = {
   role: "user",

@@ -3,9 +3,9 @@ import { assertEquals } from "jsr:@std/assert@1";
 import {
   composeToolLifecycleObservers,
   createDurableToolEventObserver,
-  MemoryKernelStore,
   type ToolLifecycleObserver,
 } from "../../src/core/mod.ts";
+import { MemoryKernelStore } from "../support/memory-kernel-store.ts";
 
 Deno.test("durable tool observer records requested and completed events", async () => {
   const events = new MemoryKernelStore();

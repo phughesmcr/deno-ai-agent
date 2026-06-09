@@ -2,7 +2,7 @@
 
 import { logDebug } from "../shared/log.ts";
 import { telegramConversationKey, type TelegramConversationRef } from "./conversation.ts";
-import type { TelegramImageItem } from "./telegram-image.ts";
+import type { TelegramImageItem } from "./image.ts";
 import type { TelegramContext } from "./telegram.ts";
 
 const ALBUM_DEBOUNCE_MS = 600;

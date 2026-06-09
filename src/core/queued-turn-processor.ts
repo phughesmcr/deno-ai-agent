@@ -1,6 +1,7 @@
 import { errorMessage } from "../shared/error.ts";
-import type { LeasedWorkItem, WorkKind, WorkQueue } from "./work_queue.ts";
-import type { WorkspaceGate } from "./workspace_gate.ts";
+import { isAbortError } from "../shared/abort.ts";
+import type { LeasedWorkItem, WorkKind, WorkQueue } from "./work-queue.ts";
+import type { WorkspaceGate } from "./workspace-gate.ts";
 
 /** Result of one queue-processing attempt. */
 export type QueuedTurnProcessorResult =
@@ -42,13 +43,6 @@ export interface ProcessQueuedTurnOptions {
 }
 
 const DEFAULT_KINDS: readonly WorkKind[] = ["user_turn", "cron_run", "subagent_run", "maintenance"];
-
-function isAbortError(error: unknown, signal: AbortSignal): boolean {
-  if (signal.aborted && error === signal.reason) return true;
-  if (error instanceof DOMException && error.name === "AbortError") return true;
-  if (!(error instanceof Error)) return false;
-  return error.name === "AbortError" || error.message.toLowerCase().includes("aborted");
-}
 
 /** Leases queued work and runs it through a runner under the workspace gate. */
 export class QueuedTurnProcessor {

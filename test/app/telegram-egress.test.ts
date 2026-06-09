@@ -5,8 +5,9 @@ import {
   queueAndSendTelegramEgress,
   type TelegramEgressApi,
 } from "../../src/app/telegram-egress.ts";
-import { EgressOutbox, MemoryKernelStore } from "../../src/core/mod.ts";
+import { EgressOutbox } from "../../src/core/mod.ts";
 import type { TelegramReplyOptions } from "../../src/telegram/model-reply.ts";
+import { MemoryKernelStore } from "../support/memory-kernel-store.ts";
 
 interface SentMessage {
   chatId: number;

@@ -1,4 +1,5 @@
-import type { QueuedTurnProcessor, QueuedTurnProcessorResult } from "./queued_turn_processor.ts";
+import type { QueuedTurnProcessor, QueuedTurnProcessorResult } from "./queued-turn-processor.ts";
+import { isAbortError } from "../shared/abort.ts";
 
 /** Callback fired after one processor attempt. */
 export type QueueWorkerResultHandler = (result: QueuedTurnProcessorResult) => void | Promise<void>;
@@ -50,10 +51,6 @@ function delay(ms: number, signal: AbortSignal, waiters: Set<WakeWaiter>): Promi
     signal.removeEventListener("abort", onAbort);
     waiters.delete(waiter);
   });
-}
-
-function isAbortError(error: unknown, signal: AbortSignal): boolean {
-  return signal.aborted && (error === signal.reason || error instanceof DOMException && error.name === "AbortError");
 }
 
 /** Creates a durable queue worker loop around a {@link QueuedTurnProcessor}. */

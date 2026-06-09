@@ -1,9 +1,10 @@
 import type { ChatMessageData, Tool } from "@lmstudio/sdk";
 
 import type { DurableEvent, EventStore } from "./events.ts";
-import type { ModelActObserver, ModelTurnOutput, ModelTurnPort, ToolCallGuard } from "./model_turn.ts";
-import { composeToolLifecycleObservers, createDurableToolEventObserver } from "./tool_events.ts";
+import type { ModelActObserver, ModelTurnOutput, ModelTurnPort, ToolCallGuard } from "./model-turn.ts";
+import { composeToolLifecycleObservers, createDurableToolEventObserver } from "./tool-events.ts";
 import { logDebug } from "../shared/log.ts";
+import { objectPayload } from "../shared/record.ts";
 import { traceSpan } from "../shared/otel.ts";
 
 /**
@@ -50,14 +51,6 @@ export interface SessionContextRunModelTurnRequest {
   onModelMessage?: (message: ChatMessageData) => void | Promise<void>;
 }
 
-/** Cumulative file context included in a compaction checkpoint. */
-export interface SessionFileDetails {
-  /** Files read during the session, when recoverable from tool calls. */
-  readFiles: string[];
-  /** Files modified during the session, when recoverable from tool calls. */
-  modifiedFiles: string[];
-}
-
 /**
  * Input for generating an updated structured context checkpoint.
  * @internal
@@ -71,8 +64,6 @@ export interface SummaryCompactionInput {
   messages: ChatMessageData[];
   /** Optional user-supplied manual compaction instructions. */
   instructions?: string;
-  /** Cumulative file context to include in the checkpoint. */
-  details: SessionFileDetails;
 }
 
 /** Port for generating structured context checkpoints. */
@@ -156,11 +147,6 @@ function textMessageData(role: "assistant" | "system" | "user", text: string): C
   return { role, content: [{ type: "text", text }] } as ChatMessageData;
 }
 
-function objectPayload(payload: unknown): Record<string, unknown> | null {
-  if (payload === null || typeof payload !== "object") return null;
-  return payload as Record<string, unknown>;
-}
-
 function textFromInputPayload(payload: unknown): string | null {
   const record = objectPayload(payload);
   if (!record) return null;
@@ -199,10 +185,6 @@ function latestCompaction(events: DurableEvent[]): DurableEvent | null {
     if (event?.category === "session.compacted") return event;
   }
   return null;
-}
-
-function emptyDetails(): SessionFileDetails {
-  return { readFiles: [], modifiedFiles: [] };
 }
 
 /** Event-sourced session context engine for projection, durable turns, token counts, and compaction. */
@@ -359,7 +341,6 @@ export class SessionContextEngine {
         previousSummary: projection.compactionSummary,
         messages: projection.messages,
         instructions: request.instructions,
-        details: emptyDetails(),
       });
       await this._events.append({
         category: "session.compacted",

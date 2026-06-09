@@ -1,6 +1,6 @@
 import { assert, assertEquals, assertRejects } from "jsr:@std/assert@1";
 
-import { MemoryKernelStore } from "../../src/core/mod.ts";
+import { MemoryKernelStore } from "../support/memory-kernel-store.ts";
 
 function categories(events: MemoryKernelStore, workId: string): Promise<string[]> {
   return events.listByWork(workId).then((items) => items.map((event) => event.category));

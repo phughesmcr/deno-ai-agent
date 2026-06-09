@@ -36,7 +36,6 @@ Deno.test("prepareSummaryCompaction uses structured prompt input and preserves l
     previousSummary: "previous checkpoint",
     messages,
     instructions: "focus on files",
-    details: { readFiles: ["src/a.ts"], modifiedFiles: ["src/b.ts"] },
   });
   const summary = prepared.finish("short summary");
 
@@ -45,8 +44,6 @@ Deno.test("prepareSummaryCompaction uses structured prompt input and preserves l
   assertStringIncludes(summary, '<skill_content name="docs">');
   assertStringIncludes(summary, "new docs instructions");
   assertEquals(summary.includes("old docs instructions"), false);
-  assertStringIncludes(summary, "<read-files>\nsrc/a.ts\n</read-files>");
-  assertStringIncludes(summary, "<modified-files>\nsrc/b.ts\n</modified-files>");
   assertStringIncludes(prepared.prompt, "Goal");
   assertStringIncludes(prepared.prompt, "Previous checkpoint summary:");
   assertStringIncludes(prepared.prompt, "Additional user compaction instructions:");
@@ -56,7 +53,6 @@ Deno.test("prepareSummaryCompaction truncates large tool output in summary input
   const prepared = prepareSummaryCompaction({
     systemPrompt: "system prompt",
     messages: [rawToolMessage("abcdefghijklmnopqrstuvwxyz")],
-    details: { readFiles: [], modifiedFiles: [] },
   }, 12);
 
   assertStringIncludes(prepared.prompt, "abcdefghijkl");
@@ -76,7 +72,6 @@ Deno.test("prepareSummaryCompaction serializes image attachment metadata", () =>
   const prepared = prepareSummaryCompaction({
     systemPrompt: "system prompt",
     messages: [{ role: "user", content: [{ type: "text", text: "see this" }, imagePart] }],
-    details: { readFiles: [], modifiedFiles: [] },
   });
 
   assertStringIncludes(prepared.prompt, "attachments: 1 image(s): photo.jpg");
@@ -87,7 +82,6 @@ Deno.test("prepareSummaryCompaction strips reasoning from summary when KEEP_THIN
     const prepared = prepareSummaryCompaction({
       systemPrompt: "system prompt",
       messages: [rawMessage("user", "fold me")],
-      details: { readFiles: [], modifiedFiles: [] },
     });
     const summary = prepared.finish("<think>x</think>Goal\n- item");
 
@@ -102,7 +96,6 @@ Deno.test("prepareSummaryCompaction keeps reasoning in summary when KEEP_THINKIN
     const prepared = prepareSummaryCompaction({
       systemPrompt: "system prompt",
       messages: [rawMessage("user", "fold me")],
-      details: { readFiles: [], modifiedFiles: [] },
     });
     const summary = prepared.finish("<think>x</think>Goal\n- item");
 

@@ -3,7 +3,7 @@ import type { RunnerHandle, RunOptions } from "@grammyjs/runner";
 import type { Bot } from "grammy";
 
 import type { TelegramContext } from "./telegram.ts";
-import { telegramUpdateKey } from "./telegram-update-key.ts";
+import { telegramUpdateKey } from "./update-key.ts";
 
 const TELEGRAM_RUNNER_CONCURRENCY = 8;
 const TELEGRAM_ALLOWED_UPDATES = ["message", "callback_query"] as const;

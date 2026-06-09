@@ -1,11 +1,12 @@
 import type { ChatMessageData, Tool } from "@lmstudio/sdk";
 
+import { isAbortError } from "../shared/abort.ts";
 import { errorMessage } from "../shared/error.ts";
-import { EgressOutbox } from "./egress_outbox.ts";
+import { EgressOutbox } from "./egress-outbox.ts";
 import type { EventStore } from "./events.ts";
-import type { ModelTurnOutput, ModelTurnRequest } from "./model_turn.ts";
-import type { FinalizeSessionTurnResult, SessionContextEngine } from "./session_context.ts";
-import type { LeasedWorkItem, WorkQueue } from "./work_queue.ts";
+import type { ModelTurnOutput, ModelTurnRequest } from "./model-turn.ts";
+import type { FinalizeSessionTurnResult, SessionContextEngine } from "./session-context.ts";
+import type { LeasedWorkItem, WorkQueue } from "./work-queue.ts";
 
 /** Egress side-effect port for adapter rendering. */
 export interface EgressPort {
@@ -13,7 +14,7 @@ export interface EgressPort {
   send(payload: unknown): Promise<void>;
 }
 
-/** Turn runner construction options. */
+/** Turn runner construction options. @internal */
 export interface TurnRunnerOptions {
   /** Durable event store. */
   events: EventStore;
@@ -24,7 +25,7 @@ export interface TurnRunnerOptions {
   /** Adapter egress port. */
   egress: EgressPort;
   /** Tools available for a work item. */
-  tools: (work: LeasedWorkItem) => readonly unknown[] | Promise<readonly unknown[]>;
+  tools: (work: LeasedWorkItem) => readonly Tool[] | Promise<readonly Tool[]>;
   /** Current system prompt. */
   baseSystemPrompt: (work: LeasedWorkItem) => string | Promise<string>;
   /** Optional model tool-call guard. */
@@ -35,7 +36,7 @@ export interface TurnRunnerOptions {
   observer?: (work: LeasedWorkItem) => ModelTurnRequest["observer"] | Promise<ModelTurnRequest["observer"]>;
 }
 
-/** Typed model input supplied by the app adapter. */
+/** Typed model input supplied by the app adapter. @internal */
 export interface TurnRunnerInput {
   /** User message to append to projected session context. */
   message: ChatMessageData;
@@ -54,7 +55,7 @@ export interface TurnRunnerEgress {
   target: unknown;
 }
 
-/** Options for running one leased turn. */
+/** Options for running one leased turn. @internal */
 export interface RunTurnWorkOptions {
   /** Abort signal for the active turn. */
   signal: AbortSignal;
@@ -68,7 +69,7 @@ export interface RunTurnWorkOptions {
   abortDisposition?: "cancel" | "release" | ((work: LeasedWorkItem, error: unknown) => "cancel" | "release");
 }
 
-/** Result of running one leased work item through the durable turn boundary. */
+/** Result of running one leased work item through the durable turn boundary. @internal */
 export interface TurnRunnerResult extends ModelTurnOutput {
   /** Token accounting and compaction result, when finalization succeeds. */
   finalization?: FinalizeSessionTurnResult;
@@ -84,12 +85,6 @@ interface EgressPayload {
   fallbackText?: string;
 }
 
-function isAbortError(error: unknown): boolean {
-  if (error instanceof DOMException && error.name === "AbortError") return true;
-  if (!(error instanceof Error)) return false;
-  return error.name === "AbortError" || error.message.toLowerCase().includes("aborted");
-}
-
 function turnInputPayload(input: TurnRunnerInput): unknown {
   return {
     input: input.audit,
@@ -97,7 +92,7 @@ function turnInputPayload(input: TurnRunnerInput): unknown {
   };
 }
 
-/** Durable orchestration boundary for a single leased work item. */
+/** Durable orchestration boundary for a single leased work item. @internal */
 export class TurnRunner {
   private readonly _egressOutbox: EgressOutbox;
   private readonly _queue: WorkQueue;
@@ -130,7 +125,7 @@ export class TurnRunner {
         inputPayload: turnInputPayload(options.input),
         inputPolicy: "ensure",
         baseSystemPrompt,
-        tools: [...await this._tools(work)] as Tool[],
+        tools: [...await this._tools(work)],
         guardToolCall: await this._guardToolCall?.(work),
         signal: options.signal,
         observer: await this._observer?.(work),

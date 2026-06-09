@@ -6,7 +6,7 @@ import {
   listPendingInteractions,
   type WorkQueue,
 } from "../core/mod.ts";
-import { isTerminalWorkStatus } from "../core/work_state.ts";
+import { isTerminalWorkStatus } from "../core/work-state.ts";
 import { telegramTargetForWork } from "./work-payload.ts";
 
 /** Result of recovering durable interaction requests left pending across restart. */

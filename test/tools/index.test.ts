@@ -1,9 +1,9 @@
 import { assertEquals } from "jsr:@std/assert@1";
 
 import { createSkillManager } from "../../src/agent/skills/mod.ts";
-import { allToolNames, getModelTools } from "../../src/agent/tools/index.ts";
+import { allToolNames, getModelTools } from "../../src/agent/tools/mod.ts";
 import { createNoopTodoDisplayPort } from "../../src/agent/tools/todo-display-port.ts";
-import type { TodoStore } from "../../src/agent/tools/todo-write.ts";
+import type { TodoStore } from "../../src/agent/tools/todo-store.ts";
 import { createUnavailableUserInteractionPort } from "../../src/agent/tools/user-question-port.ts";
 import { createUnavailableSubagentPort } from "../../src/agent/subagents.ts";
 import { createTestWorkspace } from "./helpers.ts";

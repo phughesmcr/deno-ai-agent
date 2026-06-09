@@ -1,15 +1,16 @@
 import type { ChatMessageData, Tool } from "@lmstudio/sdk";
 
-import {
-  type EgressPort,
-  type EventStore,
-  type LeasedWorkItem,
-  type ModelTurnRequest,
-  type SessionContextEngine,
-  TurnRunner,
-  type TurnRunnerResult,
-  type WorkQueue,
+import type {
+  EgressPort,
+  EventStore,
+  LeasedWorkItem,
+  ModelTurnRequest,
+  SessionContextEngine,
+  WorkQueue,
 } from "../core/mod.ts";
+import type { TurnRunnerResult } from "../core/turn-runner.ts";
+import { TurnRunner } from "../core/turn-runner.ts";
+import { isRecord, textFromMessage } from "../shared/mod.ts";
 import {
   parseTelegramEgressTarget,
   sendTelegramEgressPayload,
@@ -52,18 +53,6 @@ interface TurnEgressPayload {
   target: TelegramEgressTarget;
   replies: string[];
   fallbackText?: string;
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return value !== null && typeof value === "object";
-}
-
-function textFromMessage(message: ChatMessageData): string {
-  return message.content.flatMap((part) => {
-    if (!isRecord(part) || part["type"] !== "text") return [];
-    const text = part["text"];
-    return typeof text === "string" ? [text] : [];
-  }).join("");
 }
 
 function imageCountFromMessage(message: ChatMessageData): number {

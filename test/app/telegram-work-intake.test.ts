@@ -8,11 +8,12 @@ import {
   TelegramWorkIntake,
 } from "../../src/app/telegram-work-intake.ts";
 import { cronRunWorkPayload, type QueuedDurableImage, userTurnWorkPayload } from "../../src/app/work-payload.ts";
-import { EgressOutbox, MemoryKernelStore, type WorkItem, type WorkQueue } from "../../src/core/mod.ts";
+import { EgressOutbox, type WorkItem, type WorkQueue } from "../../src/core/mod.ts";
 import type { CronJob, CronJobRunnerResult, CronJobStore } from "../../src/cron/mod.ts";
 import type { TelegramReplyOptions } from "../../src/telegram/model-reply.ts";
 import type { TelegramSessionCoordinator } from "../../src/telegram/session-coordinator.ts";
 import type { TelegramContext } from "../../src/telegram/telegram.ts";
+import { MemoryKernelStore } from "../support/memory-kernel-store.ts";
 
 interface ReplyRecord {
   text: string;

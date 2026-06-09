@@ -1,4 +1,5 @@
 import type { EgressOutbox, EventStore, WorkItem, WorkQueue } from "../core/mod.ts";
+import { objectPayload, textFromUnknownMessage } from "../shared/mod.ts";
 import type { TelegramEgressTarget } from "./telegram-egress.ts";
 import { cronRunWorkPayload, userTurnWorkPayload } from "./work-payload.ts";
 
@@ -39,23 +40,6 @@ interface ModelOutputCandidate {
   hasQueuedEgress: boolean;
 }
 
-function objectPayload(payload: unknown): Record<string, unknown> | undefined {
-  if (payload === null || typeof payload !== "object") return undefined;
-  return payload as Record<string, unknown>;
-}
-
-function textFromMessage(message: unknown): string {
-  const record = objectPayload(message);
-  const content = record?.["content"];
-  if (!Array.isArray(content)) return "";
-  return content
-    .flatMap((part) => {
-      const partRecord = objectPayload(part);
-      return partRecord?.["type"] === "text" && typeof partRecord["text"] === "string" ? [partRecord["text"]] : [];
-    })
-    .join("");
-}
-
 function telegramTargetForWork(work: WorkItem): TelegramEgressTarget | undefined {
   try {
     if (work.kind === "user_turn") return userTurnWorkPayload(work.payload).telegram;
@@ -77,7 +61,7 @@ async function interruptedModelOutputCandidates(events: EventStore): Promise<Mod
       continue;
     }
     if (event.category === "model.message") {
-      const text = textFromMessage(objectPayload(event.payload)?.["message"]);
+      const text = textFromUnknownMessage(objectPayload(event.payload)?.["message"]);
       if (text.length === 0) continue;
       const existing = candidates.get(event.workId);
       if (existing) {

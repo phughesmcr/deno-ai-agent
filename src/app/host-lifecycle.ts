@@ -1,4 +1,6 @@
-import { errorMessage, logError } from "../shared/mod.ts";
+import { errorMessage, isAbortError, logError } from "../shared/mod.ts";
+
+export { isAbortError };
 
 /** Registers SIGINT/SIGTERM shutdown hooks. */
 export function registerShutdown(runShutdown: () => Promise<void>): void {
@@ -7,13 +9,6 @@ export function registerShutdown(runShutdown: () => Promise<void>): void {
   };
   Deno.addSignalListener("SIGINT", onShutdownSignal);
   Deno.addSignalListener("SIGTERM", onShutdownSignal);
-}
-
-/** Returns true for abort-like errors produced by DOM, Deno, or model adapters. */
-export function isAbortError(error: unknown): boolean {
-  if (error instanceof DOMException && error.name === "AbortError") return true;
-  if (!(error instanceof Error)) return false;
-  return error.name === "AbortError" || error.message.toLowerCase().includes("aborted");
 }
 
 /** Runs one shutdown cleanup step and records failures without interrupting later steps. */

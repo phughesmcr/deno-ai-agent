@@ -2,14 +2,14 @@
 
 import type { LMStudioClient } from "@lmstudio/sdk";
 import type { UserTurnInput } from "../agent/user-turn.ts";
-import { type AudioTranscriber, downloadTelegramMessageAudio, extractAudioFileId } from "./telegram-audio.ts";
+import { type AudioTranscriber, downloadTelegramMessageAudio, extractAudioFileId } from "./audio.ts";
 import {
   DEFAULT_IMAGE_PROMPT,
   downloadTelegramMessageImage,
   durableTelegramImages,
   extractImageFileId,
   prepareDurableUserImages,
-} from "./telegram-image.ts";
+} from "./image.ts";
 import type { TelegramContext } from "./telegram.ts";
 
 /**

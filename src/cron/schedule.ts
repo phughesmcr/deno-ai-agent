@@ -1,4 +1,4 @@
-import { z } from "zod/v3";
+import { z } from "zod";
 
 export type Weekday = "monday" | "tuesday" | "wednesday" | "thursday" | "friday" | "saturday" | "sunday";
 
@@ -128,6 +128,36 @@ const rawScheduleSchema = z.discriminatedUnion("status", [
     message: z.string().min(1),
   }),
 ]);
+
+/** JSON schema for LM Studio structured cron extraction output. */
+export const cronScheduleJsonSchema = z.toJSONSchema(rawScheduleSchema);
+
+/** Builds the cron extraction prompt for structured model output. */
+export function cronExtractionPrompt(request: CronScheduleExtractionRequest): string {
+  return [
+    "Extract schedule intent for a Silas /cron new command.",
+    "Return JSON only. Do not include Markdown.",
+    "",
+    "Output shape:",
+    '{"status":"ok","prompt":"...","scheduleText":"...","schedule":{"kind":"recurring","timezone":"Europe/London","recurrence":{"kind":"interval","every":1,"unit":"minute"}}}',
+    '{"status":"ok","prompt":"...","scheduleText":"...","schedule":{"kind":"once","timezone":"Europe/London","date":{"kind":"next_weekday","weekday":"tuesday"},"time":"10:00"}}',
+    '{"status":"needs_clarification","prompt":"...","scheduleText":"...","question":"What time should I remind you?"}',
+    '{"status":"unsupported","message":"..."}',
+    "",
+    "Rules:",
+    "- Split the command into scheduleText and prompt.",
+    "- For recurring schedules, use interval, daily, weekly, or weekdays recurrence.",
+    "- For one-shot schedules, include date and 24-hour HH:mm time.",
+    "- If a one-shot schedule has no explicit time and no clarification supplies one, return needs_clarification.",
+    "- Use the default timezone unless the user explicitly names another timezone.",
+    "- Do not compute exact instants or nextRunAt.",
+    "",
+    `Now: ${request.now.toISOString()}`,
+    `Default timezone: ${request.defaultTimezone}`,
+    `Command: ${request.input}`,
+    request.clarification ? `Clarification answer: ${request.clarification}` : "",
+  ].filter((line) => line.length > 0).join("\n");
+}
 
 const weekdayNumber: Record<Weekday, number> = {
   monday: 1,

@@ -1,20 +1,13 @@
 import { assertEquals, assertRejects, assertStringIncludes } from "jsr:@std/assert@1";
 
-import { formatTodoListMarkdown, formatTodoListPlain } from "../../src/telegram/todo-list-format.ts";
 import { createNoopTodoDisplayPort } from "../../src/agent/tools/todo-display-port.ts";
+import { DenoKvTodoStore, detectTodoChanges, type TodoItem, type TodoStore } from "../../src/agent/tools/todo-store.ts";
 import {
-  copyTodosForSession,
   createTodoWriteTool,
-  DenoKvTodoStore,
-  detectTodoChanges,
   formatTodoWriteResult,
-  readTodoFile,
-  readTodosForSession,
-  type TodoItem,
-  type TodoStore,
-  updateTelegramMeta,
   validateTodoWriteParams,
 } from "../../src/agent/tools/todo-write.ts";
+import { formatTodoListMarkdown, formatTodoListPlain } from "../../src/telegram/todo-list-format.ts";
 import { runTool } from "./helpers.ts";
 
 const SESSION_ID = "00000000-0000-4000-8000-000000000001";
@@ -90,15 +83,15 @@ Deno.test("todo persistence round-trip via Deno KV", async () => {
     });
     const result = await runTool(tool, { todos });
     assertStringIncludes(result, "system-reminder");
-    assertEquals(await readTodosForSession(store, SESSION_ID), todos);
+    assertEquals((await store.read(SESSION_ID)).todos, todos);
   });
 });
 
-Deno.test("readTodoFile rejects corrupt todo state clearly", async () => {
+Deno.test("store.read rejects corrupt todo state clearly", async () => {
   await withTodoStore(async (store, kv) => {
     await kv.set(["todos", SESSION_ID], { sessionId: SESSION_ID, todos: "bad" });
     await assertRejects(
-      () => readTodoFile(store, SESSION_ID),
+      () => store.read(SESSION_ID),
       Error,
       `Invalid todo state for session ${SESSION_ID}`,
     );
@@ -125,7 +118,7 @@ Deno.test("createTodoWriteTool succeeds when display throws", async () => {
     });
     const result = await runTool(tool, { todos: sampleTodos() });
     assertStringIncludes(result, "modified successfully");
-    assertEquals(await readTodosForSession(store, SESSION_ID), sampleTodos());
+    assertEquals((await store.read(SESSION_ID)).todos, sampleTodos());
   });
 });
 
@@ -159,8 +152,8 @@ Deno.test("updateTelegramMeta merges without clobbering todos", async () => {
       display: createNoopTodoDisplayPort(),
     });
     await runTool(tool, { todos: sampleTodos() });
-    await updateTelegramMeta(store, SESSION_ID, { chatId: 1, threadId: 0, messageId: 99 });
-    const file = await readTodoFile(store, SESSION_ID);
+    await store.updateTelegramMeta(SESSION_ID, { chatId: 1, threadId: 0, messageId: 99 });
+    const file = await store.read(SESSION_ID);
     assertEquals(file.todos, sampleTodos());
     assertEquals(file.telegram, { chatId: 1, threadId: 0, messageId: 99 });
   });
@@ -168,7 +161,7 @@ Deno.test("updateTelegramMeta merges without clobbering todos", async () => {
 
 Deno.test("createTodoWriteTool preserves concurrent telegram metadata updates", async () => {
   await withTodoStore(async (store) => {
-    await updateTelegramMeta(store, SESSION_ID, { chatId: 1, messageId: 1 });
+    await store.updateTelegramMeta(SESSION_ID, { chatId: 1, messageId: 1 });
     const tool = createTodoWriteTool({
       getSessionId: () => SESSION_ID,
       store,
@@ -177,17 +170,17 @@ Deno.test("createTodoWriteTool preserves concurrent telegram metadata updates", 
 
     await Promise.all([
       runTool(tool, { todos: sampleTodos() }),
-      updateTelegramMeta(store, SESSION_ID, { chatId: 2, messageId: 2 }),
+      store.updateTelegramMeta(SESSION_ID, { chatId: 2, messageId: 2 }),
     ]);
 
-    const file = await readTodoFile(store, SESSION_ID);
+    const file = await store.read(SESSION_ID);
     assertEquals(file.todos, sampleTodos());
     assertEquals(file.telegram?.chatId, 2);
     assertEquals(file.telegram?.messageId, 2);
   });
 });
 
-Deno.test("copyTodosForSession copies todos without telegram meta", async () => {
+Deno.test("store.copy copies todos without telegram meta", async () => {
   await withTodoStore(async (store) => {
     const tool = createTodoWriteTool({
       getSessionId: () => SESSION_ID,
@@ -195,18 +188,18 @@ Deno.test("copyTodosForSession copies todos without telegram meta", async () => 
       display: createNoopTodoDisplayPort(),
     });
     await runTool(tool, { todos: sampleTodos() });
-    await updateTelegramMeta(store, SESSION_ID, { chatId: 1, messageId: 42 });
-    await copyTodosForSession(store, SESSION_ID, SESSION_ID_2);
-    const copied = await readTodoFile(store, SESSION_ID_2);
+    await store.updateTelegramMeta(SESSION_ID, { chatId: 1, messageId: 42 });
+    await store.copy(SESSION_ID, SESSION_ID_2);
+    const copied = await store.read(SESSION_ID_2);
     assertEquals(copied.todos, sampleTodos());
     assertEquals(copied.telegram, undefined);
   });
 });
 
-Deno.test("copyTodosForSession is a no-op when the source is missing", async () => {
+Deno.test("store.copy is a no-op when the source is missing", async () => {
   await withTodoStore(async (store) => {
-    await copyTodosForSession(store, SESSION_ID, SESSION_ID_2);
-    assertEquals(await readTodoFile(store, SESSION_ID_2), { sessionId: SESSION_ID_2, todos: [] });
+    await store.copy(SESSION_ID, SESSION_ID_2);
+    assertEquals(await store.read(SESSION_ID_2), { sessionId: SESSION_ID_2, todos: [] });
   });
 });
 

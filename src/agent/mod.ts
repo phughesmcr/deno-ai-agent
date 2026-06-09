@@ -1,4 +1,3 @@
-export { McpRegistry, type McpRegistryOptions } from "../mcp/mod.ts";
 export {
   type GuardedToolCallRequest,
   type ModelActObserver,
@@ -8,11 +7,11 @@ export {
   type ToolCallGuard,
   type ToolCallGuardController,
 } from "../core/mod.ts";
+export { McpRegistry, type McpRegistryOptions } from "../mcp/mod.ts";
 export { createModelActObserver, recordActDuration, tokenBucket } from "./act-telemetry.ts";
 export {
   type PreparedSummaryCompaction,
   prepareSummaryCompaction,
-  type SessionFileDetails,
   type SummaryCompactionInput,
   type SummaryCompactor,
 } from "./context/compactor.ts";
@@ -55,7 +54,6 @@ export {
   type AgentToolDeps,
   allToolNames,
   type AskUserQuestionParams,
-  copyTodosForSession,
   createAskUserQuestionTool,
   createNoopTodoDisplayPort,
   createSubagentTool,
@@ -77,8 +75,6 @@ export {
   preprocessSystemPrompt,
   type Question,
   type QuestionOption,
-  readTodoFile,
-  readTodosForSession,
   setMcpSystemPromptAppendix,
   type SubagentAction,
   type SubagentToolParams,
@@ -97,7 +93,6 @@ export {
   type ToolContextOptions,
   type ToolName,
   type TurnTarget,
-  updateTelegramMeta,
   type UserInteractionPort,
   type UserInteractionRequest,
   type UserInteractionResult,
@@ -105,8 +100,7 @@ export {
   UserQuestionDeclinedError,
   validateAskUserQuestionParams,
   validateTodoWriteParams,
-  writeTodoFile,
-} from "./tools/index.ts";
+} from "./tools/mod.ts";
 export {
   type DurableUserImage,
   normalizeUserTurnInput,

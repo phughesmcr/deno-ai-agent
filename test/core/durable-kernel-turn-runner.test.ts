@@ -1,6 +1,7 @@
 import { assert, assertEquals, assertRejects } from "jsr:@std/assert@1";
 
-import { KvKernelStore, TurnRunner } from "../../src/core/mod.ts";
+import { KvKernelStore } from "../../src/core/mod.ts";
+import { TurnRunner } from "../../src/core/turn-runner.ts";
 import {
   type ChatMessageData,
   contextEngine,

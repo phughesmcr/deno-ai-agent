@@ -3,7 +3,7 @@ import type { RunOptions } from "@grammyjs/runner";
 import type { Bot } from "grammy";
 
 import { startTelegramBot } from "../../src/telegram/bot-runner.ts";
-import { telegramUpdateKey } from "../../src/telegram/telegram-update-key.ts";
+import { telegramUpdateKey } from "../../src/telegram/update-key.ts";
 import type { TelegramContext } from "../../src/telegram/telegram.ts";
 
 function messageContext(text: string, threadId?: number): TelegramContext {

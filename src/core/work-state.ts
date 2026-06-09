@@ -1,5 +1,5 @@
 import type { AppendEventInput } from "./events.ts";
-import type { LeasedWorkItem, SubmitWorkInput, WorkItem, WorkKind, WorkStatus } from "./work_queue.ts";
+import type { LeasedWorkItem, SubmitWorkInput, WorkItem, WorkKind, WorkStatus } from "./work-queue.ts";
 
 /** Reason a work item cannot be leased. */
 export type WorkLeaseIneligibilityReason = "missing" | "not_queued" | "not_due" | "wrong_kind";

@@ -10,7 +10,7 @@ import {
   extractAudioFileId,
   inferAudioFileName,
   UnsupportedAudioError,
-} from "../../src/telegram/telegram-audio.ts";
+} from "../../src/telegram/audio.ts";
 
 Deno.test("extractAudioFileId accepts voice messages", () => {
   const message = {

@@ -1,10 +1,10 @@
 import type { ChatMessageData, ToolCallRequest } from "@lmstudio/sdk";
 
-import type { SessionFileDetails, SummaryCompactionInput } from "../../core/mod.ts";
+import type { SummaryCompactionInput } from "../../core/mod.ts";
 import { persistedModelText } from "../../shared/reasoning.ts";
 import { imageFileParts } from "./message-materialize.ts";
 
-export type { SessionFileDetails, SummaryCompactionInput } from "../../core/mod.ts";
+export type { SummaryCompactionInput } from "../../core/mod.ts";
 
 const SKILL_CONTENT_PATTERN = /<skill_content name="([^"]+)">[\s\S]*?<\/skill_content>/g;
 const DEFAULT_TOOL_RESULT_LIMIT = 2_000;
@@ -127,16 +127,10 @@ function serializeMessage(message: ChatMessageData, index: number, toolResultLim
   return sections.join("\n");
 }
 
-function appendPracticalSections(summary: string, details: SessionFileDetails, skillBlocks: string[]): string {
+function appendPracticalSections(summary: string, skillBlocks: string[]): string {
   const sections = [summary.trim()];
   if (skillBlocks.length > 0) {
     sections.push(`<skill-content>\n${skillBlocks.join("\n\n")}\n</skill-content>`);
-  }
-  if (details.readFiles.length > 0) {
-    sections.push(`<read-files>\n${details.readFiles.join("\n")}\n</read-files>`);
-  }
-  if (details.modifiedFiles.length > 0) {
-    sections.push(`<modified-files>\n${details.modifiedFiles.join("\n")}\n</modified-files>`);
   }
   return sections.filter((section) => section.length > 0).join("\n\n");
 }
@@ -160,9 +154,6 @@ export function prepareSummaryCompaction(
     SUMMARY_PROMPT,
     instructions ? `\nAdditional user compaction instructions:\n${instructions}` : "",
     previous ? `\nPrevious checkpoint summary:\n${previous}` : "",
-    `\nCurrent file details:\nreadFiles=${JSON.stringify(input.details.readFiles)}\nmodifiedFiles=${
-      JSON.stringify(input.details.modifiedFiles)
-    }`,
     `\nConversation messages to fold into the checkpoint:\n${transcript}`,
   ].join("\n");
 
@@ -170,7 +161,7 @@ export function prepareSummaryCompaction(
     systemPrompt: input.systemPrompt,
     prompt,
     finish(summaryText: string): string {
-      return appendPracticalSections(persistedModelText(summaryText), input.details, skillBlocks);
+      return appendPracticalSections(persistedModelText(summaryText), skillBlocks);
     },
   };
 }

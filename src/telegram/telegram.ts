@@ -10,7 +10,7 @@ import { type CommandCronManager, SESSION_HELP, TelegramCommandHandler } from ".
 import { type TelegramConversationRef, telegramConversationRef } from "./conversation.ts";
 import { showTodosForSession } from "./grammy-todo-display-adapter.ts";
 import type { TelegramSessionCoordinator } from "./session-coordinator.ts";
-import { replyError } from "./telegram-reply.ts";
+import { replyError } from "./reply.ts";
 
 interface BotConfig {
   adminId: number;
@@ -162,6 +162,19 @@ export function createTelegramManager({
     return false;
   }
 
+  const NO_CHAT_MESSAGE = "No Telegram chat found for this command.";
+
+  function registerCommand(
+    name: string | string[],
+    run: (commands: TelegramCommandHandler, ctx: TelegramContext) => Promise<string>,
+  ): void {
+    bot.command(name, async (ctx: TelegramContext) => {
+      if (blockIfInteractionPending(ctx)) return;
+      const commands = commandsFor(ctx);
+      await replyInConversation(ctx, commands ? await run(commands, ctx) : NO_CHAT_MESSAGE);
+    });
+  }
+
   bot.command("start", async (ctx) => {
     if (ctx.config.isAdmin) {
       if (blockIfInteractionPending(ctx)) return;
@@ -185,23 +198,9 @@ export function createTelegramManager({
     await replyInConversation(ctx, commands?.help() ?? SESSION_HELP);
   });
 
-  bot.command("new", async (ctx: TelegramContext) => {
-    if (blockIfInteractionPending(ctx)) return;
-    const commands = commandsFor(ctx);
-    await replyInConversation(ctx, commands ? await commands.newSession() : "No Telegram chat found for this command.");
-  });
-
-  bot.command("session", async (ctx: TelegramContext) => {
-    if (blockIfInteractionPending(ctx)) return;
-    const commands = commandsFor(ctx);
-    await replyInConversation(ctx, commands ? await commands.session() : "No Telegram chat found for this command.");
-  });
-
-  bot.command("stats", async (ctx: TelegramContext) => {
-    if (blockIfInteractionPending(ctx)) return;
-    const commands = commandsFor(ctx);
-    await replyInConversation(ctx, commands ? await commands.stats() : "No Telegram chat found for this command.");
-  });
+  registerCommand("new", async (commands) => await commands.newSession());
+  registerCommand("session", async (commands) => await commands.session());
+  registerCommand("stats", async (commands) => await commands.stats());
 
   bot.command("compact", async (ctx: TelegramContext) => {
     if (blockIfInteractionPending(ctx)) return;
@@ -214,53 +213,15 @@ export function createTelegramManager({
     await replyInConversation(ctx, await commands.compact(commandRest(ctx)));
   });
 
-  bot.command("fork", async (ctx: TelegramContext) => {
-    if (blockIfInteractionPending(ctx)) return;
-    const commands = commandsFor(ctx);
-    await replyInConversation(ctx, commands ? await commands.fork() : "No Telegram chat found for this command.");
-  });
-
-  async function handleLoad(ctx: TelegramContext): Promise<void> {
-    if (blockIfInteractionPending(ctx)) return;
-    const commands = commandsFor(ctx);
-    await replyInConversation(
-      ctx,
-      commands ? await commands.load(sessionArg(ctx)) : "No Telegram chat found for this command.",
-    );
-  }
-
-  bot.command("load", handleLoad);
-  bot.command("resume", handleLoad);
-
-  bot.command("rename", async (ctx: TelegramContext) => {
-    if (blockIfInteractionPending(ctx)) return;
+  registerCommand("fork", async (commands) => await commands.fork());
+  registerCommand(["load", "resume"], async (commands, ctx) => await commands.load(sessionArg(ctx)));
+  registerCommand("rename", async (commands, ctx) => {
     const name = commandRest(ctx)?.trim();
-    const commands = commandsFor(ctx);
-    await replyInConversation(
-      ctx,
-      commands ?
-        await commands.rename(name && name.length > 0 ? name : undefined) :
-        "No Telegram chat found for this command.",
-    );
+    return await commands.rename(name && name.length > 0 ? name : undefined);
   });
-
-  bot.command("save", async (ctx: TelegramContext) => {
-    if (blockIfInteractionPending(ctx)) return;
-    const commands = commandsFor(ctx);
-    await replyInConversation(ctx, commands ? await commands.save() : "No Telegram chat found for this command.");
-  });
-
-  bot.command("list", async (ctx: TelegramContext) => {
-    if (blockIfInteractionPending(ctx)) return;
-    const commands = commandsFor(ctx);
-    await replyInConversation(ctx, commands ? await commands.list() : "No Telegram chat found for this command.");
-  });
-
-  bot.command("topics", async (ctx: TelegramContext) => {
-    if (blockIfInteractionPending(ctx)) return;
-    const commands = commandsFor(ctx);
-    await replyInConversation(ctx, commands ? await commands.topics() : "No Telegram chat found for this command.");
-  });
+  registerCommand("save", async (commands) => await commands.save());
+  registerCommand("list", async (commands) => await commands.list());
+  registerCommand("topics", async (commands) => await commands.topics());
 
   bot.command("cron", async (ctx: TelegramContext) => {
     if (blockIfInteractionPending(ctx)) return;
@@ -271,7 +232,7 @@ export function createTelegramManager({
     try {
       await replyInConversation(
         ctx,
-        commands ? await commands.cron(commandRest(ctx)) : "No Telegram chat found for this command.",
+        commands ? await commands.cron(commandRest(ctx)) : NO_CHAT_MESSAGE,
       );
     } finally {
       commandController.abort();
@@ -287,7 +248,7 @@ export function createTelegramManager({
       return;
     }
     if (!ctx.chat) {
-      await replyInConversation(ctx, "No Telegram chat found for this command.");
+      await replyInConversation(ctx, NO_CHAT_MESSAGE);
       return;
     }
     try {
@@ -313,7 +274,7 @@ export function createTelegramManager({
     }
     const commands = commandsFor(ctx);
     if (!commands) {
-      await replyInConversation(ctx, "No Telegram chat found for this command.");
+      await replyInConversation(ctx, NO_CHAT_MESSAGE);
       return;
     }
     try {

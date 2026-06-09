@@ -2,8 +2,9 @@ import { assertEquals } from "jsr:@std/assert@1";
 
 import { completeCronRunSchedule, failCronRunSchedule, submitCronRunWork } from "../../src/app/cron-work.ts";
 import { cronRunWorkPayload } from "../../src/app/work-payload.ts";
+import { CapabilityLedger, KvKernelStore } from "../../src/core/mod.ts";
 import { type CronJob, CronJobStore } from "../../src/cron/mod.ts";
-import { CapabilityLedger, KvKernelStore, MemoryKernelStore } from "../../src/core/mod.ts";
+import { MemoryKernelStore } from "../support/memory-kernel-store.ts";
 
 const job: CronJob = {
   id: "cron-a",

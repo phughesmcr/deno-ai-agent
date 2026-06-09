@@ -43,7 +43,7 @@ export {
   prepareDurableUserImages,
   prepareTelegramImages,
   UnsupportedImageError,
-} from "./telegram-image.ts";
+} from "./image.ts";
 export {
   AudioTooLargeError,
   type AudioTranscriber,
@@ -53,9 +53,9 @@ export {
   telegramAudioDuration,
   telegramAudioKind,
   UnsupportedAudioError,
-} from "./telegram-audio.ts";
-export { replyError, replyWithModelText } from "./telegram-reply.ts";
+} from "./audio.ts";
+export { replyError, replyWithModelText } from "./reply.ts";
 export { createTelegramManager, getTelegramBotToken, type TelegramContext } from "./telegram.ts";
-export { createTelegramUserInteractionPort } from "./telegram-user-interaction.ts";
+export { createTelegramUserInteractionPort } from "./user-interaction.ts";
 export { ActiveTurnRegistry } from "./turn-gate.ts";
 export { startTelegramTypingIndicator } from "./typing-indicator.ts";

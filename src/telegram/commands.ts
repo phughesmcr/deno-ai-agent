@@ -1,4 +1,4 @@
-import { copyTodosForSession, type SavedSessionSummary, type SessionStatus, type TodoStore } from "../agent/mod.ts";
+import type { SavedSessionSummary, SessionStatus, TodoStore } from "../agent/mod.ts";
 import { errorMessage } from "../shared/error.ts";
 
 /** One-line help text for supported session commands. */
@@ -187,7 +187,7 @@ export class TelegramCommandHandler {
     try {
       const { from, to } = await this._session.fork();
       if (this._todoStore) {
-        await copyTodosForSession(this._todoStore, from.id, to.id);
+        await this._todoStore.copy(from.id, to.id);
       }
       return `Forked and rebound this Telegram conversation.\nFrom: ${from.id}\nTo: ${to.id}`;
     } catch (error) {
