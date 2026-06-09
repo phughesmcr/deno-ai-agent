@@ -4,27 +4,31 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 SERVICE_DIR="${SERVICE_DIR:-/etc/systemd/system}"
-SILAS_USER="${SILAS_USER:-silas}"
-SILAS_GROUP="${SILAS_GROUP:-$SILAS_USER}"
-SILAS_HOME="${SILAS_HOME:-/home/$SILAS_USER}"
-SILAS_ROOT="${SILAS_ROOT:-/opt/silas}"
+SILAS_USER="${SILAS_USER:-${SUDO_USER:-$(logname 2>/dev/null || id -un)}}"
+SILAS_HOME="${SILAS_HOME:-$(getent passwd "$SILAS_USER" | cut -d: -f6)}"
+SILAS_GROUP="${SILAS_GROUP:-$(id -gn "$SILAS_USER" 2>/dev/null || echo "$SILAS_USER")}"
+SILAS_ROOT="${SILAS_ROOT:-$ROOT}"
 
 if [[ "$(id -u)" -ne 0 ]]; then
-  echo "Run as root, for example: sudo SILAS_ROOT=$SILAS_ROOT $0" >&2
+  echo "Run as root, for example: sudo $0" >&2
+  exit 1
+fi
+
+if [[ -z "$SILAS_HOME" ]]; then
+  echo "Unknown user: $SILAS_USER" >&2
   exit 1
 fi
 
 if [[ "$ROOT" != "$SILAS_ROOT" ]]; then
-  echo "This installer only installs units. Copy or clone the repo to $SILAS_ROOT before enabling services." >&2
-  echo "Current repo: $ROOT" >&2
+  echo "Repo path mismatch: script is in $ROOT but SILAS_ROOT=$SILAS_ROOT" >&2
+  echo "Set SILAS_ROOT to the repo root, or run the installer from that checkout." >&2
   exit 1
 fi
 
-if ! getent group "$SILAS_GROUP" >/dev/null 2>&1; then
-  groupadd --system "$SILAS_GROUP"
-fi
-
 if ! id "$SILAS_USER" >/dev/null 2>&1; then
+  if ! getent group "$SILAS_GROUP" >/dev/null 2>&1; then
+    groupadd --system "$SILAS_GROUP"
+  fi
   useradd --system --create-home --home-dir "$SILAS_HOME" --shell /bin/bash --gid "$SILAS_GROUP" "$SILAS_USER"
 fi
 
